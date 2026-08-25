@@ -772,8 +772,12 @@ export function App() {
             className={pane === 'preview' ? 'active' : ''}
             aria-pressed={pane === 'preview'}
             onClick={() => setPane('preview')}
-            disabled={!activeEntry || !isPreviewable(activeEntry.file)}
-            title={activeEntry && isPreviewable(activeEntry.file) ? undefined : 'This file has no preview'}
+            disabled={!activeEntry || !isPreviewable(activeEntry.file, !client.isStatic)}
+            title={
+              activeEntry && isPreviewable(activeEntry.file, !client.isStatic)
+                ? undefined
+                : 'This file has no preview'
+            }
           >
             Preview
           </button>

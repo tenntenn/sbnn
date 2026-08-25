@@ -21,7 +21,11 @@ export function CommentThread({ group, comments, onChanged }: ThreadProps) {
   )
 }
 
+/** rangeLabel names what a comment is on. A comment that names no lines is
+ * about the file as a whole, and "path:0" is not a place, so it is the bare
+ * path - the same rule the prompt follows. */
 function rangeLabel(c: Pick<Comment, 'path' | 'side' | 'startLine' | 'endLine'>): string {
+  if (c.startLine <= 0) return c.path
   const lines = c.endLine > c.startLine ? `${c.startLine}-${c.endLine}` : `${c.startLine}`
   return `${c.path}:${lines}${c.side === 'old' ? ' (old)' : ''}`
 }

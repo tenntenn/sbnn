@@ -3,13 +3,8 @@ import type { Comment, Diff, FileDiff, Hunk, Line, ViewMode } from '../types'
 import { filePath } from '../types'
 import { client } from '../client'
 import { wordDiff } from '../wordDiff'
-import {
-  ensureHighlightStyles,
-  highlightLine,
-  languageOf,
-  tokenClass,
-  type LanguageId,
-} from '../highlight'
+import { ensureHighlightStyles, languageOf, type LanguageId } from '../highlight'
+import { Code } from './Code'
 import { CommentForm, CommentThread } from './CommentThread'
 import { Icon } from './Icon'
 import { foldLabel } from '../foldLabel'
@@ -139,9 +134,17 @@ export function DiffFileSection({
   const [selection, setSelection] = useState<Selection | null>(null)
   const mode: ViewMode = locked ? 'unified' : viewMode
 
+  // A comment that names no lines is about the file as a whole: it belongs
+  // under the file header rather than under a row, and there is no row it
+  // could go under anyway for a file the diff carries without any lines - a
+  // pure rename, a mode change, a binary file. Anchoring it by endLine would
+  // key it on "new:0", which no row matches, and it would be drawn nowhere.
+  const fileComments = useMemo(() => comments.filter((c) => c.startLine <= 0), [comments])
+
   const commentsByAnchor = useMemo(() => {
     const map = new Map<string, Comment[]>()
     for (const c of comments) {
+      if (c.startLine <= 0) continue
       const key = anchorKey(c.side, c.endLine)
       const list = map.get(key)
       if (list) list.push(c)
@@ -156,6 +159,9 @@ export function DiffFileSection({
   // inserting it mid-drag would push the rows under the pointer away.
   const dragging = useRef(false)
   const [drafting, setDrafting] = useState(true)
+  // The file-level draft is its own thing: it is opened from the header
+  // rather than from a line, and a file with no rows has no other way in.
+  const [draftingFile, setDraftingFile] = useState(false)
 
   useEffect(() => {
     const stop = () => {
@@ -252,6 +258,24 @@ export function DiffFileSection({
     onChanged()
   }
 
+  const submitFileComment = async (body: string, question: boolean) => {
+    await client.addComment(group, {
+      diffId: diff.id,
+      fileId: file.id,
+      path: filePath(file),
+      side: 'new',
+      // No line: the server reads that as the whole file, and the prompt
+      // writes it as a bare path.
+      startLine: 0,
+      endLine: 0,
+      body,
+      question,
+      snippet: '',
+    })
+    setDraftingFile(false)
+    onChanged()
+  }
+
   const selectionLabel = selection
     ? `${filePath(file)}:${selection.start}${selection.end > selection.start ? `-${selection.end}` : ''}` +
       `${selection.side === 'old' ? ' (old)' : ''}`
@@ -302,6 +326,17 @@ export function DiffFileSection({
           <span className="stat del">-{file.deletions}</span>
         </button>
         <div className="diff-tools">
+          <button
+            className="ghost"
+            onClick={() => {
+              setSelection(null)
+              setDraftingFile((open) => !open)
+            }}
+            aria-expanded={draftingFile}
+            title="Comment on this file as a whole, without pointing at a line"
+          >
+            comment on file
+          </button>
           {locked ? (
             <span
               className="hint"
@@ -335,6 +370,24 @@ export function DiffFileSection({
           )}
         </div>
       </div>
+
+      {!folded && (fileComments.length > 0 || draftingFile) && (
+        <div className="file-comments">
+          {fileComments.length > 0 && (
+            <CommentThread group={group} comments={fileComments} onChanged={onChanged} />
+          )}
+          {draftingFile && (
+            <CommentForm
+              label={filePath(file)}
+              seed=""
+              canSuggest={false}
+              hint="This one is about the file, not about a line of it"
+              onSubmit={submitFileComment}
+              onCancel={() => setDraftingFile(false)}
+            />
+          )}
+        </div>
+      )}
 
       {folded ? (
         <p className="empty">
@@ -689,29 +742,6 @@ function SplitTable({
         ))}
       </tbody>
     </table>
-  )
-}
-
-/**
- * Code is one line of source, coloured if the file's extension is one this
- * knows. Tokens are spans - never a string of HTML - so nothing here can put
- * markup from a diff into the page.
- */
-function Code({ content, language }: { content: string; language: LanguageId | null }) {
-  const tokens = highlightLine(content, language)
-  if (tokens.length === 1 && tokens[0].kind === 'plain') return <>{content || ' '}</>
-  return (
-    <>
-      {tokens.map((token, i) =>
-        token.kind === 'plain' ? (
-          <Fragment key={i}>{token.text}</Fragment>
-        ) : (
-          <span key={i} className={tokenClass(token.kind)}>
-            {token.text}
-          </span>
-        ),
-      )}
-    </>
   )
 }
 

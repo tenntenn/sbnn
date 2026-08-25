@@ -16,8 +16,8 @@ import (
 	"github.com/tenntenn/sbnn/internal/source"
 )
 
-// errNotPreviewable is returned for files mo cannot show.
-var errNotPreviewable = errors.New("no Markdown preview for this file")
+// errNotPreviewable is returned for files there is no preview of.
+var errNotPreviewable = errors.New("no preview for this file")
 
 // errNoDeepLink is returned when mo ran without complaining but reported no
 // page for the file it was asked to open.
@@ -178,12 +178,17 @@ func previewableMarkdown(f *model.File) error {
 }
 
 // previewableText rejects the files sbnn's own renderer has no text preview
-// for: Markdown and notebook JSON, neither of which mo can show for a
-// notebook and both of which a narrow client renders itself.
+// for.
+//
+// What is left is every text file. Markdown and notebook JSON are rendered
+// by the client; anything else - a .go, a .ts, a config file, a script with
+// no extension at all - is shown as its own lines. All three want the same
+// thing from the server, which is the new side of the file as text, and the
+// server has no way to tell a language it has a renderer for from one it
+// does not: that is the client's question, and asking it here only meant
+// refusing to hand out a file that had already been read from disk.
 func previewableText(f *model.File) error {
 	switch {
-	case !f.IsMarkdown && !f.IsNotebook:
-		return fmt.Errorf("%w: %s has no preview", errNotPreviewable, f.Path())
 	case f.IsBinary:
 		return fmt.Errorf("%w: %s is binary", errNotPreviewable, f.Path())
 	case f.Status == model.StatusDeleted:

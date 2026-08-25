@@ -470,16 +470,68 @@ func TestFileContentServesMarkdown(t *testing.T) {
 	}
 }
 
-func TestFileContentNeedsMarkdown(t *testing.T) {
+// A source file is served as text, the same way Markdown and a notebook
+// are. It used to be refused with 400 - a file the server had already read
+// from disk - which left the preview pane with nothing to show for a .go.
+func TestFileContentServesSource(t *testing.T) {
 	ts, _ := newTestServer(t)
 	var added AddDiffResponse
 	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: goDiff}, &added)
 	file := added.Diff.Files[0]
-	resp := getJSON(t, ts.URL+"/_/api/groups/default/diffs/"+added.Diff.ID+"/files/"+file.ID+"/content", nil)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %s, want 400 for a non Markdown file", resp.Status)
+	if file.IsMarkdown || file.IsNotebook || file.IsImage {
+		t.Fatalf("main.go should carry none of the rendered-format flags: %+v", file)
+	}
+
+	var got FileContentResponse
+	resp := getJSON(t, ts.URL+"/_/api/groups/default/diffs/"+added.Diff.ID+"/files/"+file.ID+"/content", &got)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %s, want 200 for a source file", resp.Status)
+	}
+	// The new side, rebuilt from the diff: the working tree has no main.go.
+	if got.Content != "package main\nvar x = 2\n" {
+		t.Errorf("content = %q", got.Content)
+	}
+	if got.Source != SourceReconstructed {
+		t.Errorf("source = %q, want %q", got.Source, SourceReconstructed)
 	}
 }
+
+const binaryDiff = `diff --git a/blob.bin b/blob.bin
+index 1111111..2222222 100644
+Binary files a/blob.bin and b/blob.bin differ
+`
+
+// Serving source text must not turn into serving bytes: a binary file has
+// no text preview, and a deleted one has no new side at all.
+func TestFileContentRefusesBinaryAndDeleted(t *testing.T) {
+	ts, _ := newTestServer(t)
+	for _, tt := range []struct {
+		name string
+		diff string
+	}{
+		{name: "binary", diff: binaryDiff},
+		{name: "deleted", diff: deletedGoDiff},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var added AddDiffResponse
+			postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: tt.diff}, &added)
+			file := added.Diff.Files[0]
+			resp := getJSON(t, ts.URL+"/_/api/groups/default/diffs/"+added.Diff.ID+"/files/"+file.ID+"/content", nil)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %s, want 400", resp.Status)
+			}
+		})
+	}
+}
+
+const deletedGoDiff = `diff --git a/gone.go b/gone.go
+deleted file mode 100644
+--- a/gone.go
++++ /dev/null
+@@ -1,2 +0,0 @@
+-package main
+-var x = 1
+`
 
 const notebookDiff = `diff --git a/analysis.ipynb b/analysis.ipynb
 new file mode 100644
@@ -1141,9 +1193,10 @@ func findFileOfDiff(d *model.Diff, fileID string) (*model.Diff, *model.File, boo
 	return nil, nil, false
 }
 
-// A comment has to point at a line that can exist. The Line model uses
-// 1-based numbers with 0 meaning "not on this side", so a non-positive
-// startLine names nothing, and an endLine before the start is not a range.
+// A comment that names lines has to name ones that can exist. The Line
+// model uses 1-based numbers, so a negative startLine names nothing and an
+// endLine before the start is not a range. Naming no line at all - startLine
+// 0 - is the whole file, which is a place, so that one is kept.
 func TestHandleAddCommentRejectsNonPositiveLines(t *testing.T) {
 	ts, _ := newTestServer(t)
 	var added AddDiffResponse
@@ -1158,7 +1211,8 @@ func TestHandleAddCommentRejectsNonPositiveLines(t *testing.T) {
 		wantEnd   int // the stored endLine, checked when want is 200
 	}{
 		{"a negative start line", -5, -1, http.StatusBadRequest, 0},
-		{"line zero", 0, 0, http.StatusBadRequest, 0},
+		{"an end line with no start line", 0, 4, http.StatusBadRequest, 0},
+		{"line zero is the whole file", 0, 0, http.StatusOK, 0},
 		{"an end line before the start", 3, 2, http.StatusBadRequest, 0},
 		{"no end line at all means the one line", 2, 0, http.StatusOK, 2},
 		{"a proper range", 2, 3, http.StatusOK, 3},
@@ -1192,7 +1246,7 @@ func TestHandleAddCommentRejectsNonPositiveLines(t *testing.T) {
 	var comments []*model.Comment
 	getJSON(t, ts.URL+"/_/api/groups/default/comments", &comments)
 	for _, c := range comments {
-		if c.StartLine < 1 || c.EndLine < c.StartLine {
+		if c.StartLine < 0 || c.EndLine < c.StartLine {
 			t.Errorf("stored comment with an impossible range: %+v", c)
 		}
 	}
@@ -1615,5 +1669,108 @@ func TestHandleGroupKeepsWhatTheGroupHolds(t *testing.T) {
 	}
 	if len(g.Comments) != 1 {
 		t.Errorf("comments = %d, want 1", len(g.Comments))
+	}
+}
+
+// hunklessDiff carries the three kinds of file entry that come with no
+// hunks at all: a pure rename, a mode change, and a binary file. There is
+// no line to point at in any of them, which is why a comment about the
+// file as a whole is the only thing that can be said about them.
+const hunklessDiff = `diff --git a/old.txt b/new.txt
+similarity index 100%
+rename from old.txt
+rename to new.txt
+diff --git a/exec.sh b/exec.sh
+old mode 100644
+new mode 100755
+diff --git a/logo.png b/logo.png
+index 1111111..2222222 100644
+Binary files a/logo.png and b/logo.png differ
+`
+
+// A file with no hunks used to be uncommentable from the command line: the
+// snippet came back empty for every line, and the path shape of the request
+// answered "<path> has no line 1 in this diff". Leaving the line out says
+// the comment is about the file, which needs no snippet and no hunks.
+func TestHandleAddCommentOnAFileWithNoHunks(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: hunklessDiff}, &added)
+
+	for _, f := range added.Diff.Files {
+		if len(f.Hunks) != 0 {
+			t.Fatalf("%s: the diff parsed with %d hunk(s); this test needs a file with none", f.Path(), len(f.Hunks))
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{"a pure rename", "new.txt"},
+		{"a mode change", "exec.sh"},
+		{"a binary file", "logo.png"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The path shape of the request: what `sbnn comment <path>`
+			// sends, with no fileId and no line.
+			req := AddCommentRequest{Path: tc.path, Side: "new", Body: "about this file"}
+			if resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", req, nil); resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status = %s (%s), want 200", resp.Status, strings.TrimSpace(string(body)))
+			}
+			var c model.Comment
+			postJSON(t, ts.URL+"/_/api/groups/default/comments", req, &c)
+			if c.StartLine != 0 || c.EndLine != 0 {
+				t.Errorf("stored range = %d-%d, want 0-0", c.StartLine, c.EndLine)
+			}
+			if c.Path != tc.path {
+				t.Errorf("stored path = %q, want %q", c.Path, tc.path)
+			}
+			// The file has to have been resolved: a comment that names no
+			// file is drawn in no section.
+			if c.DiffID == "" || c.FileID == "" {
+				t.Errorf("stored comment names diff %q file %q; both have to be resolved", c.DiffID, c.FileID)
+			}
+			if c.Snippet != "" {
+				t.Errorf("stored snippet = %q, want none: a comment on the file quotes no lines", c.Snippet)
+			}
+
+			// Pointing at a line of such a file is still the error it was:
+			// the file really has no line 1.
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+				Path: tc.path, Side: "new", StartLine: 1, Body: "on a line that is not there",
+			}, nil)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("commenting on line 1 gave %s, want 400", resp.Status)
+			}
+		})
+	}
+}
+
+// A whole-file comment is not a way to smuggle a suggestion in: a
+// suggestion replaces the lines the comment names, and this one names none.
+func TestHandleAddCommentRefusesASuggestionWithNoLines(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+
+	for _, tc := range []struct {
+		name string
+		req  AddCommentRequest
+	}{
+		{"as a suggestion field", AddCommentRequest{
+			Path: "README.md", Side: "new", Body: "reword", Suggestion: "# sbnn",
+		}},
+		{"as a block typed into the body", AddCommentRequest{
+			Path: "README.md", Side: "new", Body: "reword\n\n```suggestion\n# sbnn\n```\n",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", tc.req, nil)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %s, want 400", resp.Status)
+			}
+		})
 	}
 }

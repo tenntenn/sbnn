@@ -1000,6 +1000,19 @@ body.resizing iframe {
   font-size: var(--text-sm);
 }
 
+/* A comment about the file as a whole sits under the file header rather
+   than under a row, so it carries no gutter indent: there is no line for it
+   to line up with, and for a file the diff shows without any lines - a
+   rename, a mode change, a binary file - there are no rows at all. */
+.file-comments {
+  padding: 0 var(--space-lg);
+}
+
+.file-comments .thread,
+.file-comments .comment-form {
+  margin-left: 0;
+}
+
 .comment + .comment {
   border-top: var(--border-width-hairline) solid var(--border);
   margin-top: var(--space-md);
@@ -1525,6 +1538,56 @@ a {
   background-position:
     0 0,
     10px 10px;
+}
+
+/* ---------- source files ---------- */
+
+/* A source preview is the whole file, so it is the one preview that can be
+   wider than the pane. It scrolls sideways inside itself rather than making
+   the page do it, and the line numbers stay put while it does. */
+.source-preview {
+  /* Named because a blank row's height is computed from it below: an empty
+     line of the file has to take a line of the pane, and it must not do it
+     by holding a space that would then be in anything copied out. */
+  --source-line-height: 1.55;
+  padding: var(--space-md) 0 40px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--source-line-height);
+}
+
+.source-lines {
+  margin: 0;
+  padding: 0;
+  /* The numbers come from the list itself, so a file of ten thousand lines
+     costs ten thousand elements rather than twenty thousand. */
+  list-style: decimal;
+  /* Wide enough for five digits; a longer file simply indents further. */
+  padding-inline-start: 5ch;
+  min-width: max-content;
+}
+
+.source-lines li {
+  white-space: pre;
+  padding-inline-start: var(--space-md);
+  min-height: calc(1em * var(--source-line-height));
+}
+
+.source-lines li::marker {
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
+
+.source-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  border-top: var(--border-width-hairline) solid var(--border);
+  position: sticky;
+  left: 0;
 }
 
 /* ---------- rendered Jupyter notebooks ---------- */
