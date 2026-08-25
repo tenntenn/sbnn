@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -453,7 +454,7 @@ func median(values []time.Duration) time.Duration {
 	if len(values) == 0 {
 		return 0
 	}
-	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	slices.Sort(values)
 	mid := len(values) / 2
 	if len(values)%2 == 1 {
 		return values[mid]

@@ -155,7 +155,7 @@ func TestVisibleTopIsTheNewSideOfTheFirstHunk(t *testing.T) {
 
 	// However long the first hunk is, only the top of the file is read.
 	long := &model.Hunk{NewStart: 1}
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		long.Lines = append(long.Lines, model.Line{Kind: model.LineContext, Content: "x"})
 	}
 	if n := len(strings.Split(diff.VisibleTop(&model.File{Hunks: []*model.Hunk{long}}), "\n")); n != 10 {

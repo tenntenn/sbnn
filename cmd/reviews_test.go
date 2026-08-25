@@ -18,21 +18,17 @@ func stream() []history.CommentRecord {
 			Group:      "api",
 			ReviewedAt: time.Date(2026, 8, 15, 10, 0, 0, 0, time.Local),
 			Labels:     map[string]string{"branch": "main"},
-			Comment: history.Comment{
-				Path: "internal/server/server.go", Side: "new",
-				StartLine: 12, EndLine: 14,
-				Body: "rename this\nand a second line that must not leak",
-			},
+			Path:       "internal/server/server.go", Side: "new",
+			StartLine: 12, EndLine: 14,
+			Body: "rename this\nand a second line that must not leak",
 		},
 		{
 			Group:      "web",
 			ReviewedAt: time.Date(2026, 8, 16, 10, 0, 0, 0, time.Local),
-			Comment: history.Comment{
-				Path: "README.md", Author: "claude", Side: "new",
-				StartLine: 3, EndLine: 3,
-				Body:        "a\ttab becomes a space",
-				Suggestions: []string{"fixed"},
-			},
+			Path:       "README.md", Author: "claude", Side: "new",
+			StartLine: 3, EndLine: 3,
+			Body:        "a\ttab becomes a space",
+			Suggestions: []string{"fixed"},
 		},
 	}
 }

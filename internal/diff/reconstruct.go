@@ -90,7 +90,7 @@ func writeGap(b *strings.Builder, f *model.File, n int, fence fenceState) {
 		b.WriteString("\n")
 	}
 	b.WriteString(blankIn(indent))
-	for _, line := range strings.Split(fmt.Sprintf(GapMarker, n), "\n") {
+	for line := range strings.SplitSeq(fmt.Sprintf(GapMarker, n), "\n") {
 		if line == "" {
 			b.WriteString(blankIn(indent))
 			continue

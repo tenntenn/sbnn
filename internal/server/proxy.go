@@ -145,12 +145,14 @@ func relaxFrameAncestors(h http.Header, origins ...string) {
 	if len(policies) == 0 {
 		return
 	}
-	allow := "frame-ancestors 'self'"
+	var allow strings.Builder
+	allow.WriteString("frame-ancestors 'self'")
 	for _, o := range origins {
 		if o != "" {
-			allow += " " + o
+			allow.WriteString(" " + o)
 		}
 	}
+	allowed := allow.String()
 	rewritten := make([]string, 0, len(policies))
 	for _, policy := range policies {
 		directives := strings.Split(policy, ";")
@@ -158,14 +160,14 @@ func relaxFrameAncestors(h http.Header, origins ...string) {
 		replaced := false
 		for _, d := range directives {
 			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(d)), "frame-ancestors") {
-				out = append(out, " "+allow)
+				out = append(out, " "+allowed)
 				replaced = true
 				continue
 			}
 			out = append(out, d)
 		}
 		if !replaced {
-			out = append(out, " "+allow)
+			out = append(out, " "+allowed)
 		}
 		rewritten = append(rewritten, strings.Join(out, ";"))
 	}
