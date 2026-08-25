@@ -2,7 +2,7 @@ import { useEffect, useState, type RefObject } from 'react'
 import type { Comment, Diff, FileDiff, Status } from '../types'
 import { filePath } from '../types'
 import { client } from '../client'
-import { readSetting, writeSetting } from '../storage'
+import { readEnumSetting, writeSetting } from '../storage'
 import { Icon } from './Icon'
 import { sectionKey } from '../sectionKey'
 
@@ -74,8 +74,11 @@ export function Sidebar({
   // under them. A round can be shut, and the whole list can be turned into
   // tabs, which shows one round at a time.
   const [layout, setLayout] = useState<Layout>(
-    () => (readSetting(LAYOUT_KEY) === 'tabs' ? 'tabs' : 'list'),
+    () => readEnumSetting<Layout>(LAYOUT_KEY, ['list', 'tabs'], 'list'),
   )
+  // Which rounds are shut is about this review rather than about this reader,
+  // so it is deliberately not remembered across a reload - see the rule in
+  // App.tsx.
   const [shutRounds, setShutRounds] = useState<Set<string>>(() => new Set())
   const [tab, setTab] = useState<string | null>(null)
 
