@@ -1000,6 +1000,19 @@ body.resizing iframe {
   font-size: var(--text-sm);
 }
 
+/* A comment about the file as a whole sits under the file header rather
+   than under a row, so it carries no gutter indent: there is no line for it
+   to line up with, and for a file the diff shows without any lines - a
+   rename, a mode change, a binary file - there are no rows at all. */
+.file-comments {
+  padding: 0 var(--space-lg);
+}
+
+.file-comments .thread,
+.file-comments .comment-form {
+  margin-left: 0;
+}
+
 .comment + .comment {
   border-top: var(--border-width-hairline) solid var(--border);
   margin-top: var(--space-md);

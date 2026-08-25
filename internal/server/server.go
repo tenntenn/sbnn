@@ -838,19 +838,47 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a suggestion replaces lines of the new file, not of the old one", http.StatusBadRequest)
 		return
 	}
-	// Line numbers are 1-based; 0 means "not on this side" and is not a
-	// place a comment can point at. The CLI already refuses these, and a
-	// stored comment with a non-positive range anchors to nothing.
-	if req.StartLine < 1 {
-		http.Error(w, fmt.Sprintf("startLine must be 1 or more, got %d", req.StartLine), http.StatusBadRequest)
+	// Line numbers are 1-based when the comment points at lines. Naming
+	// none of them - startLine 0 - says the comment is about the file
+	// itself, which is the only thing there is to say about a file the
+	// diff carries without any lines: a pure rename, a mode change, a
+	// binary file. lineRange already renders such a comment as a bare
+	// path, and the page draws it under the file header.
+	//
+	// A negative line, and an endLine without a startLine, still anchor to
+	// nothing and are refused: the rule is that line numbers are positive
+	// when given, and that absent means the whole file.
+	switch {
+	case req.StartLine < 0:
+		http.Error(w, fmt.Sprintf("startLine must be 1 or more, or 0 for the whole file, got %d", req.StartLine),
+			http.StatusBadRequest)
+		return
+	case req.StartLine == 0 && req.EndLine != 0:
+		http.Error(w, fmt.Sprintf("endLine %d without a startLine: a comment on the whole file names no lines", req.EndLine),
+			http.StatusBadRequest)
 		return
 	}
-	if req.EndLine == 0 {
+	wholeFile := req.StartLine == 0
+	if wholeFile {
+		// Nothing is quoted when nothing is named. A snippet sent along
+		// anyway would be shown as the reviewed code under a comment that
+		// no range identifies, so it is dropped rather than kept.
+		req.Snippet = ""
+	}
+	if req.EndLine == 0 && !wholeFile {
 		// A client that comments on a single line may send startLine alone.
 		req.EndLine = req.StartLine
 	}
 	if req.EndLine < req.StartLine {
 		http.Error(w, fmt.Sprintf("endLine %d is before startLine %d", req.EndLine, req.StartLine), http.StatusBadRequest)
+		return
+	}
+	// A suggestion is a replacement for the lines the comment names, so a
+	// comment that names none has nothing for it to replace: the sentence
+	// the prompt writes under it - "the suggestion block above replaces
+	// <path>" - would be an instruction nobody can carry out.
+	if wholeFile && len(model.Suggestions(body)) > 0 {
+		http.Error(w, "a suggestion replaces the lines a comment names, so it needs a line range", http.StatusBadRequest)
 		return
 	}
 	// Which file the comment is on. Both shapes of the request end up
@@ -888,7 +916,10 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if f != nil {
+	// A comment about the file as a whole quotes no lines, so there is no
+	// snippet to build and nothing to clamp: the checks below are about
+	// where a range lands, and this one is not a range.
+	if f != nil && !wholeFile {
 		if req.Snippet == "" {
 			req.Snippet = diff.Snippet(f, req.Side, req.StartLine, req.EndLine)
 		}
