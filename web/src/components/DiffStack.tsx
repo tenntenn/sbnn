@@ -53,6 +53,56 @@ function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n))
 }
 
+/**
+ * FileStepper is the way on to the next file when only one is on screen.
+ *
+ * The wide layout puts every file in one continuous scroll, so reaching the
+ * next one is just scrolling. A phone shows one file at a time, and a short
+ * file leaves most of the pane empty - which reads as the end of the review
+ * unless something says otherwise. This says otherwise: where the reader is
+ * in the list, and the two steps either side of it.
+ *
+ * It is styled with the classes the rest of the page already uses, plus a
+ * little inline layout, because it is a phone-only arrangement and there is
+ * no room in the stylesheet for a class only it would use.
+ */
+export function FileStepper({
+  at,
+  total,
+  onStep,
+}: {
+  /** at is the zero-based position of the file on screen. */
+  at: number
+  total: number
+  onStep: (by: number) => void
+}) {
+  if (total < 2 || at < 0) return null
+  return (
+    <nav
+      aria-label="Files in this review"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8,
+        padding: '8px 10px',
+      }}
+    >
+      <button className="ghost" disabled={at === 0} onClick={() => onStep(-1)}>
+        <Icon name="chevron_left" small />
+        Previous file
+      </button>
+      <span className="hint">
+        {at + 1} of {total}
+      </span>
+      <button className="ghost" disabled={at === total - 1} onClick={() => onStep(1)}>
+        Next file
+        <Icon name="chevron_right" small />
+      </button>
+    </nav>
+  )
+}
+
 export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
   {
     group,
