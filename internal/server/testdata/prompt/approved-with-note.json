@@ -1,0 +1,16 @@
+{
+  "doc": "An approval with a note. Pins the verdict sentence, the note block, the count line that names the approval, and the closing instruction that says nothing blocks the change.",
+  "options": {},
+  "group": {
+    "name": "api",
+    "reviewedAt": "2026-03-04T05:06:07Z",
+    "reviewNote": "Ship it. The naming nits below are optional.",
+    "reviewVerdict": "approved",
+    "diffs": [{"id": "d1", "title": "handler: return 404 for unknown ids"}],
+    "comments": [
+      {"id": "c1", "diffId": "d1", "path": "handler.go", "side": "new",
+       "startLine": 12, "endLine": 12, "body": "`ids` reads better than `xs` here.",
+       "snippet": "for _, xs := range ids {"}
+    ]
+  }
+}
