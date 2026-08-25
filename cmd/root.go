@@ -193,7 +193,7 @@ func init() {
 	f.StringVar(&onReviewURL, "on-review-url", "",
 		"URL the server POSTs to when the review of this group is submitted")
 	f.StringVar(&historyPath, "history-file", "",
-		`Where submitted reviews are written down ("off" for nowhere, or $SBNN_HISTORY)`)
+		historyFileHelp("Where submitted reviews are written down"))
 
 	rootCmd.AddCommand(commentCmd, commentsCmd, exportCmd, hookCmd, reviewsCmd, skillCmd, submitCmd, waitCmd)
 }
@@ -232,6 +232,13 @@ func run(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	// --history-file is only acted on by the invocation that starts the
+	// server, but a value the flag refuses is refused wherever it is given.
+	// Pointed at a server that was already up, "sbnn --history-file -" said
+	// nothing and exited 0, which reads as "the log went somewhere".
+	if _, err := historyFile(historyPath); err != nil {
+		return err
+	}
 
 	switch {
 	case foreground:
@@ -256,7 +263,7 @@ func run(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	c := client.New(addr(), 5*time.Second)
+	c := client.New(addr(), uploadTimeout(len(content)))
 	_, started, err := ensureServer(ctx, c)
 	if err != nil {
 		return err
@@ -536,6 +543,30 @@ func readStdin() (string, error) {
 		return "", errors.New("the diff on stdin is too large (max 32MB)")
 	}
 	return string(data), nil
+}
+
+// uploadTimeout is how long to give the calls this command makes, which is
+// decided by the diff it is carrying.
+//
+// The server has to read the body, unescape the JSON around the diff, parse
+// the diff and then answer with the parsed result, and near the 32MB limit
+// that whole round trip takes tens of seconds - measured at about 20s for a
+// diff of exactly 32MB. A flat five seconds is right for the small calls and
+// short enough that a large diff was reported as a timeout, which reads as a
+// server that is not answering rather than as an upload still in progress. So
+// the allowance grows with what is being sent, and stays at the old five
+// seconds when there is no diff to send at all.
+func uploadTimeout(size int) time.Duration {
+	const (
+		base  = 5 * time.Second
+		perMB = 2 * time.Second
+		oneMB = 1 << 20
+	)
+	if size <= 0 {
+		return base
+	}
+	mb := (size + oneMB - 1) / oneMB
+	return base + time.Duration(mb)*perMB
 }
 
 // parseLabels reads repeated key=value flags. The values are whatever the

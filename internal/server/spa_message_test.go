@@ -64,7 +64,7 @@ func taskfileTasks(t *testing.T) map[string]bool {
 	out := map[string]bool{}
 	name := regexp.MustCompile(`^  ([a-zA-Z0-9_:-]+):\s*$`)
 	inTasks := false
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		if strings.HasPrefix(line, "tasks:") {
 			inTasks = true
 			continue

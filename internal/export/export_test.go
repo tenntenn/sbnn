@@ -242,24 +242,23 @@ func TestRenderEmbedsReadableJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	const prefix = "window.__SBNN_DATA__ = "
-	start := strings.Index(page, prefix)
-	if start < 0 {
+	_, rest, ok := strings.Cut(page, prefix)
+	if !ok {
 		t.Fatal("no payload in the page")
 	}
-	rest := page[start+len(prefix):]
-	end := strings.Index(rest, ";</script>")
-	if end < 0 {
+	payload, _, ok := strings.Cut(rest, ";</script>")
+	if !ok {
 		t.Fatal("payload is not terminated")
 	}
 	var decoded export.Payload
-	if err := json.Unmarshal([]byte(rest[:end]), &decoded); err != nil {
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
 		t.Fatalf("payload is not valid JSON: %v", err)
 	}
 	if decoded.Group != "default" || len(decoded.Diffs) != 1 {
 		t.Errorf("payload = %+v", decoded)
 	}
 	// encoding/json escapes the characters that could end the script early.
-	if strings.Contains(rest[:end], "</script") {
+	if strings.Contains(payload, "</script") {
 		t.Error("payload can terminate its own script element")
 	}
 }
@@ -370,53 +369,215 @@ func TestRenderNeedsAScript(t *testing.T) {
 	}
 }
 
-// The tool was renamed from sa to sbnn, and everything around this field -
-// __SBNN_DATA__, the sbnn: storage keys, the page title - was renamed with
-// it. A page that still says "saVersion" is a page whose one remaining
-// mention of the old name is the field a reader would reach for to find out
-// which sbnn wrote it.
-func TestPayloadNamesTheVersionAfterTheToolItself(t *testing.T) {
-	b, err := json.Marshal(export.Build(group(t, ""), "1.2.3", time.Now()))
-	if err != nil {
-		t.Fatal(err)
+// TestBuildCarriesTheReview pins the three fields that say how the review
+// ended. Without them an exported page renders a submitted review as if it
+// had never been submitted.
+func TestBuildCarriesTheReview(t *testing.T) {
+	reviewedAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	tests := []struct {
+		name    string
+		set     func(*model.Group)
+		wantAt  time.Time
+		wantNot string
+		wantVer model.Verdict
+	}{
+		{
+			name: "approved with a note",
+			set: func(g *model.Group) {
+				g.ReviewedAt = reviewedAt
+				g.ReviewNote = "Ship it, the naming nits are optional."
+				g.ReviewVerdict = model.VerdictApproved
+			},
+			wantAt:  reviewedAt,
+			wantNot: "Ship it, the naming nits are optional.",
+			wantVer: model.VerdictApproved,
+		},
+		{
+			name: "changes requested without a note",
+			set: func(g *model.Group) {
+				g.ReviewedAt = reviewedAt
+				g.ReviewVerdict = model.VerdictChangesRequested
+			},
+			wantAt:  reviewedAt,
+			wantVer: model.VerdictChangesRequested,
+		},
+		{
+			name: "never submitted",
+			set:  func(*model.Group) {},
+		},
 	}
-	var decoded map[string]any
-	if err := json.Unmarshal(b, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if got := decoded["sbnnVersion"]; got != "1.2.3" {
-		t.Errorf("sbnnVersion = %v, want 1.2.3", got)
-	}
-	if _, ok := decoded["saVersion"]; ok {
-		t.Error("the payload still writes saVersion, the name the tool had before it was renamed")
-	}
-
-	// And the same in the page a reader actually receives.
-	page, err := export.Render(export.Build(group(t, ""), "1.2.3", time.Now()), assets(), export.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(page, `"sbnnVersion":"1.2.3"`) {
-		t.Error("the rendered page does not carry sbnnVersion")
-	}
-	if strings.Contains(page, "saVersion") {
-		t.Error("the rendered page still carries saVersion")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := group(t, "")
+			tt.set(g)
+			p := export.Build(g, "test", time.Now())
+			if !p.ReviewedAt.Equal(tt.wantAt) {
+				t.Errorf("ReviewedAt = %v, want %v", p.ReviewedAt, tt.wantAt)
+			}
+			if p.ReviewNote != tt.wantNot {
+				t.Errorf("ReviewNote = %q, want %q", p.ReviewNote, tt.wantNot)
+			}
+			if p.ReviewVerdict != tt.wantVer {
+				t.Errorf("ReviewVerdict = %q, want %q", p.ReviewVerdict, tt.wantVer)
+			}
+		})
 	}
 }
 
-// An sbnn built without a version says nothing rather than saying "".
-func TestPayloadOmitsAnUnknownVersion(t *testing.T) {
-	b, err := json.Marshal(export.Build(group(t, ""), "", time.Now()))
+// TestRenderEmbedsTheReviewUnderTheLiveNames checks the JSON the page reads:
+// the static client has to see the same keys the live API sends, or it
+// cannot render a frozen review the way it renders a live one.
+func TestRenderEmbedsTheReviewUnderTheLiveNames(t *testing.T) {
+	g := group(t, "")
+	g.ReviewedAt = time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	g.ReviewNote = "One question about the retry loop."
+	g.ReviewVerdict = model.VerdictApproved
+
+	page, err := export.Render(export.Build(g, "test", time.Now()), assets(), export.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var decoded map[string]any
-	if err := json.Unmarshal(b, &decoded); err != nil {
+	if err := json.Unmarshal(payloadJSON(t, page), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"sbnnVersion", "saVersion"} {
-		if _, ok := decoded[key]; ok {
-			t.Errorf("%s is present although the version is unknown", key)
+	want := map[string]any{
+		"reviewedAt":    "2026-03-04T05:06:07Z",
+		"reviewNote":    "One question about the retry loop.",
+		"reviewVerdict": "approved",
+	}
+	for key, val := range want {
+		if got := decoded[key]; got != val {
+			t.Errorf("%s = %v, want %v", key, got, val)
 		}
 	}
+
+	// A group sent through the live API marshals the same three keys, so a
+	// page cannot end up reading one name from a server and another from an
+	// exported payload.
+	live, err := json.Marshal(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var liveDecoded map[string]any
+	if err := json.Unmarshal(live, &liveDecoded); err != nil {
+		t.Fatal(err)
+	}
+	for key, val := range want {
+		if got := liveDecoded[key]; got != val {
+			t.Errorf("model.Group marshals %s as %v, want %v", key, got, val)
+		}
+	}
+}
+
+// TestRenderOmitsAnUnsubmittedReview keeps an unreviewed group free of keys
+// that would make the page draw a review banner.
+func TestRenderOmitsAnUnsubmittedReview(t *testing.T) {
+	page, err := export.Render(export.Build(group(t, ""), "test", time.Now()), assets(), export.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payloadJSON(t, page), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"reviewedAt", "reviewNote", "reviewVerdict"} {
+		if _, ok := decoded[key]; ok {
+			t.Errorf("%s is present for a group that was never reviewed", key)
+		}
+	}
+	if decoded["version"] != float64(export.PayloadVersion) {
+		t.Errorf("version = %v, want %d", decoded["version"], export.PayloadVersion)
+	}
+}
+
+// TestBuildSaysWhetherTheVerdictStillCoversTheDiffs pins the flag the page
+// needs to tell a current verdict from a stale one. A live page reads that
+// from the status summary; an exported page has no server to ask, so a page
+// exported one diff after an approval would otherwise show Approved against
+// a change nobody has looked at.
+func TestBuildSaysWhetherTheVerdictStillCoversTheDiffs(t *testing.T) {
+	reviewedAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	tests := []struct {
+		name string
+		set  func(*model.Group)
+		want bool
+	}{
+		{
+			name: "approved, and nothing has arrived since",
+			set: func(g *model.Group) {
+				g.ReviewedAt = reviewedAt
+				g.ReviewVerdict = model.VerdictApproved
+				g.Diffs[0].CreatedAt = reviewedAt.Add(-time.Hour)
+			},
+			want: true,
+		},
+		{
+			name: "approved, then another diff arrived",
+			set: func(g *model.Group) {
+				g.ReviewedAt = reviewedAt
+				g.ReviewVerdict = model.VerdictApproved
+				g.Diffs[0].CreatedAt = reviewedAt.Add(time.Hour)
+			},
+			want: false,
+		},
+		{
+			name: "never submitted",
+			set:  func(*model.Group) {},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := group(t, "")
+			tt.set(g)
+			if got := export.Build(g, "test", time.Now()).Reviewed; got != tt.want {
+				t.Errorf("Reviewed = %v, want %v (Group.Reviewed() = %v)", got, tt.want, g.Reviewed())
+			}
+		})
+	}
+}
+
+// The flag has to reach the page under a name the page reads, and it is a
+// plain false rather than an absent key: absent is what a page written by an
+// older sbnn looks like, and those two do not mean the same thing.
+func TestRenderEmbedsWhetherTheReviewIsCurrent(t *testing.T) {
+	g := group(t, "")
+	g.ReviewedAt = time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	g.ReviewVerdict = model.VerdictApproved
+	g.Diffs[0].CreatedAt = g.ReviewedAt.Add(time.Hour)
+
+	page, err := export.Render(export.Build(g, "test", time.Now()), assets(), export.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payloadJSON(t, page), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := decoded["reviewed"]
+	if !ok {
+		t.Fatal("the payload has no reviewed key, so the page cannot tell a stale verdict from a current one")
+	}
+	if got != false {
+		t.Errorf("reviewed = %v, want false: a diff arrived after the approval", got)
+	}
+	if decoded["reviewVerdict"] != "approved" {
+		t.Errorf("reviewVerdict = %v, want approved: the review still happened", decoded["reviewVerdict"])
+	}
+}
+
+// payloadJSON pulls window.__SBNN_DATA__ back out of a rendered page.
+func payloadJSON(t *testing.T, page string) []byte {
+	t.Helper()
+	const prefix = "window.__SBNN_DATA__ = "
+	_, rest, ok := strings.Cut(page, prefix)
+	if !ok {
+		t.Fatal("no payload in the page")
+	}
+	payload, _, ok := strings.Cut(rest, ";</script>")
+	if !ok {
+		t.Fatal("payload is not terminated")
+	}
+	return []byte(payload)
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/pkg/browser"
@@ -22,26 +23,67 @@ import (
 // repeating the flag. sbnn itself has no idea what the name stands for.
 const TargetEnv = "SBNN_TARGET"
 
-// HistoryEnv points the log of submitted reviews somewhere else. "off"
-// keeps no log at all.
+// HistoryEnv points the log of submitted reviews somewhere else. Any of the
+// words in HistoryOffWords keeps no log at all.
 const HistoryEnv = "SBNN_HISTORY"
+
+// HistoryOffWords are the spellings of "keep no log" accepted by
+// --history-file and $SBNN_HISTORY. They are matched case-insensitively and
+// after trimming spaces. The list is deliberately generous: someone turning
+// the log off reaches for whichever of these words their other tools use,
+// and a word that is not recognised silently becomes a file of that name
+// with the reviews piling up in it.
+var HistoryOffWords = []string{"off", "none", "no", "false", "0", "disabled"}
+
+// historyStdinWord is the one spelling --history-file refuses outright: it
+// names a standard stream everywhere else in sbnn, and a log cannot be
+// appended to one.
+const historyStdinWord = "-"
+
+// historyFileHelp builds the help of a --history-file flag out of
+// HistoryOffWords itself, so that a spelling the flag accepts cannot stay
+// undocumented: the list grew from three words to six and the help still
+// named only "off", which is the very thing that makes a near-miss such as
+// --history-file false unguessable. lead is the part that differs between
+// the commands, e.g. "Where the log is kept".
+func historyFileHelp(lead string) string {
+	quoted := make([]string, 0, len(HistoryOffWords))
+	for _, word := range HistoryOffWords {
+		quoted = append(quoted, strconv.Quote(word))
+	}
+	words := quoted[0]
+	if len(quoted) > 1 {
+		words = strings.Join(quoted[:len(quoted)-1], ", ") + " or " + quoted[len(quoted)-1]
+	}
+	return fmt.Sprintf("%s (%s for nowhere, %q is refused, or $%s)",
+		lead, words, historyStdinWord, HistoryEnv)
+}
 
 // historyFile resolves where the reviews are written down: --history-file,
 // then $SBNN_HISTORY, then the state directory. It is a plain path on purpose:
 // a project that wants its reviews under version control points it into the
 // repository and commits the file.
+//
+// "-" is rejected rather than taken as a file name. Elsewhere in sbnn - in
+// "reviews --file" and in "comment --suggest" - it names a standard stream,
+// and there is nothing to append a log to on stdout, so a bare dash here is
+// far more likely to be a mistake than a request for a file called "-".
 func historyFile(flag string) (string, error) {
 	if flag == "" {
 		flag = os.Getenv(HistoryEnv)
 	}
-	switch strings.ToLower(strings.TrimSpace(flag)) {
-	case "off", "none", "no":
-		return "", nil
-	case "":
+	word := strings.ToLower(strings.TrimSpace(flag))
+	if word == "" {
 		return paths.HistoryFile()
-	default:
-		return filepath.Abs(flag)
 	}
+	if slices.Contains(HistoryOffWords, word) {
+		return "", nil
+	}
+	if word == historyStdinWord {
+		return "", fmt.Errorf("history file %q: a log cannot be written to a standard stream; pass a path, or %q to keep no log",
+			flag, HistoryOffWords[0])
+	}
+	return filepath.Abs(flag)
 }
 
 // groupName resolves the group a command works on: --target, then

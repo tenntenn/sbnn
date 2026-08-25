@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +54,11 @@ type Store struct {
 	rounds map[string]int
 	// persistErr is why the last write to path failed, if it did.
 	persistErr error
+	// sealed is set when Load refused the session file. The bytes on disk
+	// are the only copy of a session this build cannot read, so nothing may
+	// write over them - not even the write() that reports through
+	// persistErr, because a sealed store must not touch the file at all.
+	sealed bool
 }
 
 // NewStore returns a store persisting to path. An empty path disables
@@ -114,9 +120,39 @@ func (s *Store) Load() error {
 		return fmt.Errorf("session file %s is broken, so sbnn started a new session; "+
 			"the old one was kept as %s: %w", s.path, kept, err)
 	}
+	// A file from a newer sbnn may hold fields this build knows nothing
+	// about. Loading it as far as the JSON tags happen to line up would turn
+	// a format change into silently missing diffs and comments, so refuse it
+	// and say which version wrote it.
+	if p.Version > persistVersion {
+		// Refusing the file is only half the job: the server logs the error
+		// and keeps running, so the very first diff would otherwise persist
+		// an empty session over the file we just declined to read. Seal the
+		// store instead, which keeps the bytes on disk intact and makes the
+		// advice below something the reader can still act on.
+		//
+		// Moving the file aside is advice for a stopped sbnn. A running one
+		// stays sealed whatever happens to the path, because it still cannot
+		// read what it refused and has nothing to merge a new session into,
+		// so the sentence says to restart rather than leaving the reader to
+		// find out that the diffs went nowhere.
+		refused := fmt.Errorf("session file %s was written by a newer sbnn (format version %d, this one understands %d): "+
+			"this session is not saved and the file is left untouched; "+
+			"upgrade sbnn, or move the file aside and restart sbnn to start a new session", s.path, p.Version, persistVersion)
+		s.mu.Lock()
+		s.sealed = true
+		// persist() returns before write() for a sealed store, so nothing
+		// after this ever sets persistErr. Status.SessionError is why the
+		// session is not on disk and is empty only while the file is up to
+		// date, so leaving it empty here would tell a reader the session was
+		// saved when it is in memory and nowhere else.
+		s.persistErr = refused
+		s.mu.Unlock()
+		return refused
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.groups = p.Groups
+	s.groups = validGroups(s.path, p.Groups)
 	s.seq = p.Seqs
 	if s.seq == nil {
 		// A file written before the counters were split apart carries one
@@ -132,12 +168,44 @@ func (s *Store) Load() error {
 		// A file written before the rounds were counted has to carry on
 		// from the highest number it already used, or the next round
 		// repeats a title.
-		s.rounds = make(map[string]int, len(p.Groups))
-		for _, g := range p.Groups {
+		s.rounds = make(map[string]int, len(s.groups))
+		for _, g := range s.groups {
 			s.rounds[g.Name] = roundsSoFar(g)
 		}
 	}
 	return nil
+}
+
+// validGroups drops the groups of a session file whose name sbnn would never
+// have accepted from the CLI or the URL.
+//
+// The session file is a plain JSON file in a user-writable directory, and a
+// hand edit, a partial write or a format change can put anything in it. A
+// name that fails ValidateGroupName cannot be read, deleted or linked to
+// afterwards - the router normalises the path, the handlers validate, and
+// GroupURL builds a broken link - so it would sit in every listing with no
+// way to get rid of it short of --clear --all.
+func validGroups(path string, groups []*model.Group) []*model.Group {
+	kept := make([]*model.Group, 0, len(groups))
+	for _, g := range groups {
+		// A JSON null in the groups array unmarshals to a nil element, and
+		// the same hand edits and partial writes this function exists for
+		// are what produce one. Reading g.Name would panic in Load, which
+		// runs on server.New's goroutine and would take the process down
+		// before it ever listened.
+		if g == nil {
+			continue
+		}
+		// ValidateGroupName maps the empty name to the default group, but a
+		// stored group with no name is as unreachable as an invalid one.
+		if _, err := ValidateGroupName(g.Name); err != nil || g.Name == "" {
+			slog.Warn("dropping a group the session file should not contain",
+				"file", path, "group", g.Name, "reason", "the name cannot be used")
+			continue
+		}
+		kept = append(kept, g)
+	}
+	return kept
 }
 
 // setAside renames a session file sbnn refuses to load, so that the new
@@ -157,7 +225,7 @@ func (s *Store) setAside() (string, error) {
 // after it is lost on the next restart. So the reason is logged and kept for
 // PersistError, which the status API reports.
 func (s *Store) persist() {
-	if s.path == "" {
+	if s.path == "" || s.sealed {
 		return
 	}
 	err := s.write()
@@ -585,8 +653,7 @@ func (s *Store) FindFileByPath(group, diffID, path string) (*model.Diff, *model.
 	if g == nil {
 		return nil, nil, false
 	}
-	for i := len(g.Diffs) - 1; i >= 0; i-- {
-		d := g.Diffs[i]
+	for _, d := range slices.Backward(g.Diffs) {
 		if diffID != "" && d.ID != diffID {
 			continue
 		}
