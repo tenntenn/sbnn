@@ -975,3 +975,91 @@ func TestSubmitReviewWithoutABrowser(t *testing.T) {
 		t.Errorf("flattened = %+v", got)
 	}
 }
+
+// The API used to fold every side that was not the literal "old" into
+// "new", so "OLD" attached the comment to the new side -- a different
+// file, on lines that mean something else -- and said 200. The CLI is
+// strict about the same field, so the two layers disagreed silently.
+func TestHandleAddCommentValidatesSide(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[0]
+
+	cases := []struct {
+		name     string
+		side     string
+		want     int
+		wantSide string // the side actually stored, checked when want is 200
+	}{
+		{"lower case new", "new", http.StatusOK, "new"},
+		{"lower case old", "old", http.StatusOK, "old"},
+		{"empty means new", "", http.StatusOK, "new"},
+		{"upper case old is old, not new", "OLD", http.StatusOK, "old"},
+		{"mixed case old", "Old", http.StatusOK, "old"},
+		{"padded old", "  old  ", http.StatusOK, "old"},
+		{"upper case new", "NEW", http.StatusOK, "new"},
+		{"a different word", "left", http.StatusBadRequest, ""},
+		{"a typo", "NEWW", http.StatusBadRequest, ""},
+		{"nonsense", "sideways", http.StatusBadRequest, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := AddCommentRequest{
+				DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(), Side: tc.side,
+				StartLine: 1, EndLine: 1, Body: "hi",
+			}
+			if tc.want != http.StatusOK {
+				resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", req, nil)
+				if resp.StatusCode != tc.want {
+					t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+				}
+				return
+			}
+			var comment model.Comment
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", req, &comment)
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+			}
+			// A 200 is not enough: the point of the bug was that the
+			// wrong side was stored while the status looked fine.
+			if comment.Side != tc.wantSide {
+				t.Errorf("stored side = %q, want %q", comment.Side, tc.wantSide)
+			}
+		})
+	}
+
+	// Nothing refused reached the store, and every stored side is canonical.
+	var comments []*model.Comment
+	getJSON(t, ts.URL+"/_/api/groups/default/comments", &comments)
+	if len(comments) != 7 {
+		t.Errorf("stored %d comments, want 7", len(comments))
+	}
+	for _, c := range comments {
+		if c.Side != "new" && c.Side != "old" {
+			t.Errorf("stored comment with a non-canonical side: %+v", c)
+		}
+	}
+}
+
+// A suggestion replaces lines of the new file, so it cannot sit on the
+// old side however that side was spelled. The check used to run before
+// the side was folded, so "OLD" slipped past it.
+func TestHandleAddCommentRejectsSuggestionOnFoldedOldSide(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[0]
+
+	for _, side := range []string{"old", "OLD", " Old "} {
+		t.Run(side, func(t *testing.T) {
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+				DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(), Side: side,
+				StartLine: 1, EndLine: 1, Body: "try this", Suggestion: "replacement",
+			}, nil)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %s, want 400", resp.Status)
+			}
+		})
+	}
+}
