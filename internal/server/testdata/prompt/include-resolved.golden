@@ -1,0 +1,31 @@
+# Review comments (sbnn group "api")
+
+The reviewer asked for changes; the change should not go ahead as it is.
+
+2 comment(s) to address.
+
+## 1. main.go:4
+
+Diff: first
+
+Status: resolved
+
+```
+var x = 1
+```
+
+done
+
+## 2. main.go:9
+
+Diff: first
+
+```
+var y = 2
+```
+
+still open
+
+---
+
+Address every comment above. A suggestion block replaces the lines it names, verbatim. When a comment is not worth acting on, say why instead of changing the code.
