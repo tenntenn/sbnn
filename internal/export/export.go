@@ -23,7 +23,13 @@ import (
 )
 
 // PayloadVersion is the schema version of the embedded data.
-const PayloadVersion = 1
+//
+// It is bumped when the absence of a field stops meaning what it used to.
+// Version 2 added the review fields: in a version 1 page an absent verdict
+// could equally mean "not reviewed" and "exported by a binary that did not
+// carry the verdict", and a reader has no way to tell those apart. From
+// version 2 on, an absent verdict means the review was not submitted.
+const PayloadVersion = 2
 
 // Preview is the Markdown or notebook JSON of one file, frozen at export
 // time.
@@ -51,6 +57,26 @@ type Payload struct {
 	Comments    []*model.Comment   `json:"comments"`
 	Previews    map[string]Preview `json:"previews"`
 	Images      map[string]Image   `json:"images"`
+
+	// ReviewedAt, ReviewNote and ReviewVerdict say how the review ended.
+	// Without them the page can only show the comments, and renders a
+	// submitted review as though it had never been submitted - no banner,
+	// no verdict on the button, and a prompt that tells an agent to address
+	// comments that in fact came with an approval.
+	//
+	// The names match model.Group, so a page reads a frozen review exactly
+	// the way it reads a live one.
+	ReviewedAt    time.Time     `json:"reviewedAt,omitzero"`
+	ReviewNote    string        `json:"reviewNote,omitempty"`
+	ReviewVerdict model.Verdict `json:"reviewVerdict,omitempty"`
+
+	// Reviewed is whether that verdict still covers the diffs on the page,
+	// as Group.Reviewed reports it: a diff that arrived after the review
+	// has not been reviewed, and the live page says so because the status
+	// summary tells it. An exported page has no status to ask, so a page
+	// exported one diff after an approval would otherwise show that
+	// approval against a change nobody has looked at.
+	Reviewed bool `json:"reviewed"`
 }
 
 // Build freezes a group into a payload. Markdown, notebook and image files
@@ -67,6 +93,11 @@ func Build(g *model.Group, saVersion string, now time.Time) *Payload {
 		Comments:    g.Comments,
 		Previews:    map[string]Preview{},
 		Images:      map[string]Image{},
+
+		ReviewedAt:    g.ReviewedAt,
+		ReviewNote:    g.ReviewNote,
+		ReviewVerdict: g.ReviewVerdict,
+		Reviewed:      g.Reviewed(),
 	}
 	if p.Comments == nil {
 		p.Comments = []*model.Comment{}

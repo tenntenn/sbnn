@@ -461,11 +461,11 @@ type hunkHeader = model.Hunk
 // parseHunkHeader parses "@@ -1,3 +1,4 @@ optional section".
 func parseHunkHeader(line string) (*hunkHeader, bool) {
 	rest := strings.TrimPrefix(line, "@@")
-	end := strings.Index(rest, "@@")
-	if end < 0 {
+	before, after, ok := strings.Cut(rest, "@@")
+	if !ok {
 		return nil, false
 	}
-	ranges := strings.Fields(rest[:end])
+	ranges := strings.Fields(before)
 	if len(ranges) < 2 {
 		return nil, false
 	}
@@ -483,7 +483,7 @@ func parseHunkHeader(line string) (*hunkHeader, bool) {
 		OldLines: oldLines,
 		NewStart: newStart,
 		NewLines: newLines,
-		Section:  strings.TrimSpace(rest[end+2:]),
+		Section:  strings.TrimSpace(after),
 	}, true
 }
 
@@ -645,8 +645,8 @@ func hasPrefixPath(s, prefix string) bool {
 
 // trimTimestamp drops the timestamp "diff -u" appends after a tab.
 func trimTimestamp(s string) string {
-	if i := strings.IndexByte(s, '\t'); i >= 0 {
-		return s[:i]
+	if before, _, ok := strings.Cut(s, "\t"); ok {
+		return before
 	}
 	return strings.TrimRight(s, " ")
 }
