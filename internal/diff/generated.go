@@ -27,6 +27,13 @@ var generatedMarkers = []*regexp.Regexp{
 	// The same statement in the words other generators use.
 	regexp.MustCompile(`(?i)(automatically |auto-?)?generated( file)?[ ,.:;!-]*.{0,40}do not (edit|modify)`),
 	regexp.MustCompile(`(?i)do not (edit|modify)[ ,.:;!-]*.{0,40}(automatically |auto-?)?generated`),
+	// The same statement in Japanese. A file whose header says 自動生成 is
+	// speaking about itself just as plainly as one that says @generated, and a
+	// project cannot be asked to write that header in English before its diff
+	// can be reviewed properly. These are the phrases generators actually
+	// emit; each still has to appear near the top of the file, and the line it
+	// matched is still what gets reported.
+	regexp.MustCompile(`自動生成|自動的に生成|編集しないで|編集不可|手動で編集しない`),
 }
 
 // GeneratedMarker returns the line by which a file declares itself
