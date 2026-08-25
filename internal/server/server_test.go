@@ -329,8 +329,10 @@ func TestPreviewPrefersWorktreeFile(t *testing.T) {
 	}
 	dir := t.TempDir()
 	stub := filepath.Join(dir, "mo")
-	script := "#!/bin/sh\n" +
-		`printf '{"url":"http://localhost:6275","files":[]}\n'` + "\n"
+	script := `#!/bin/sh
+path=$(eval echo \${$#})
+printf '{"url":"http://localhost:6275","files":[{"url":"http://localhost:6275/sbnn-default?file=new","name":"new.md","path":"%s"}]}\n' "$path"
+`
 	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -356,6 +358,45 @@ func TestPreviewPrefersWorktreeFile(t *testing.T) {
 	getJSON(t, ts.URL+"/_/api/groups/default/diffs/"+added.Diff.ID+"/files/"+file.ID+"/preview", &preview)
 	if preview.Source != SourceWorktree || preview.Path != real {
 		t.Errorf("preview = %+v, want the working tree file %s", preview, real)
+	}
+}
+
+// A preview whose deep link mo never reported used to come back as 200 with
+// an empty moUrl: a blank frame beside the diff, and nothing on the server
+// saying the link failed. The reviewer has to be told, so the request fails.
+func TestPreviewReportsAMissingDeepLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stub mo is a shell script")
+	}
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "mo")
+	// mo ran, answered, and listed no page for the file it was given.
+	script := "#!/bin/sh\n" +
+		`printf '{"url":"http://localhost:6275","files":[]}\n'` + "\n"
+	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ts, _ := newTestServer(t, func(o *Options) {
+		o.Mo = mo.New(stub, 6275, "localhost")
+		o.CacheDir = t.TempDir()
+	})
+
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[1] // docs/new.md
+
+	// Decoded loosely on purpose: the answer this test guards against is a
+	// 200 PreviewResponse, whose fields are not all strings, and a decode
+	// error there would hide what actually came back.
+	var body map[string]any
+	resp := getJSON(t, ts.URL+"/_/api/groups/default/diffs/"+added.Diff.ID+"/files/"+file.ID+"/preview", &body)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %s with moUrl %q, want 500 when mo reported no page for the file",
+			resp.Status, body["moUrl"])
+	}
+	msg, _ := body["error"].(string)
+	if !strings.Contains(msg, "no URL") {
+		t.Errorf("error = %q, want it to say mo gave the file no URL", msg)
 	}
 }
 
