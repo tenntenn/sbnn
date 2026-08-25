@@ -89,6 +89,14 @@ func (s *Store) Load() error {
 func validGroups(path string, groups []*model.Group) []*model.Group {
 	kept := make([]*model.Group, 0, len(groups))
 	for _, g := range groups {
+		// A JSON null in the groups array unmarshals to a nil element, and
+		// the same hand edits and partial writes this function exists for
+		// are what produce one. Reading g.Name would panic in Load, which
+		// runs on server.New's goroutine and would take the process down
+		// before it ever listened.
+		if g == nil {
+			continue
+		}
 		// ValidateGroupName maps the empty name to the default group, but a
 		// stored group with no name is as unreachable as an invalid one.
 		if _, err := ValidateGroupName(g.Name); err != nil || g.Name == "" {

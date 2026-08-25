@@ -76,7 +76,11 @@ func TestADroppedGroupIsNotPersistedAgain(t *testing.T) {
 	if err := s.Load(); err != nil {
 		t.Fatal(err)
 	}
-	for _, sum := range s.Summary("http://localhost:6280") {
+	sums := s.Summary("http://localhost:6280")
+	if len(sums) != 1 {
+		t.Fatalf("Summary() = %+v, want exactly the default group", sums)
+	}
+	for _, sum := range sums {
 		if sum.Name != DefaultGroup {
 			t.Errorf("Summary() holds %q, want only the default group", sum.Name)
 		}
@@ -89,5 +93,42 @@ func TestADroppedGroupIsNotPersistedAgain(t *testing.T) {
 	}
 	if strings.Contains(string(b), "evil") {
 		t.Errorf("the session file still holds the dropped group:\n%s", b)
+	}
+}
+
+// A JSON null in the groups array is exactly the kind of damage validGroups
+// exists to survive, and it reaches Load on server.New's goroutine: a panic
+// there kills the process before it listens, so every later sbnn invocation
+// times out against a server that is not coming back.
+func TestLoadSurvivesANullGroup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.json")
+	raw := []byte(`{"version":` + strconv.Itoa(persistVersion) + `,"seq":1,"groups":[null,` +
+		`{"name":"default","diffs":[{"id":"d1","title":"kept"}]},null]}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewStore(path)
+	if err := s.Load(); err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if names := s.GroupNames(); len(names) != 1 || names[0] != DefaultGroup {
+		t.Fatalf("groups after load = %v, want [%q]", names, DefaultGroup)
+	}
+	if g, ok := s.Group(DefaultGroup); !ok || len(g.Diffs) != 1 {
+		t.Errorf("group %q = %+v (ok=%v), want its diff kept", DefaultGroup, g, ok)
+	}
+	if sums := s.Summary("http://localhost:6280"); len(sums) != 1 {
+		t.Errorf("Summary() = %+v, want exactly the default group", sums)
+	}
+
+	// The nulls must not come back on the next save either.
+	s.AddDiff(DefaultGroup, &model.Diff{})
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "null,") || strings.Contains(string(b), ",null") {
+		t.Errorf("persisted session = %s, want the null groups gone", b)
 	}
 }
