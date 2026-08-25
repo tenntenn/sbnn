@@ -3,6 +3,7 @@ package server
 import (
 	"path"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/model"
@@ -92,35 +93,61 @@ func matchPath(pattern, p string) bool {
 	return ok
 }
 
-// matchDoubleStar handles the one pattern path.Match cannot: "**" for any
-// number of directories.
+// matchDoubleStar handles the one thing path.Match cannot: "**", standing
+// for any run of directories - anywhere in the pattern, as many times as the
+// sender cares to write it. The pattern and the path are cut into segments
+// and walked together, because "**" is about whole directory steps and
+// path.Match cannot see a "/" at all.
 func matchDoubleStar(pattern, p string) bool {
-	prefix, suffix, _ := strings.Cut(pattern, "**")
-	if !strings.HasPrefix(p, prefix) {
-		return false
-	}
-	rest := strings.TrimPrefix(p, prefix)
-	suffix = strings.TrimPrefix(suffix, "/")
-	if suffix == "" {
-		return true
-	}
-	// The suffix may match at any depth below the prefix.
-	for {
-		if ok, _ := path.Match(suffix, rest); ok {
-			return true
-		}
-		_, after, found := strings.Cut(rest, "/")
-		if !found {
-			return false
-		}
-		rest = after
-	}
+	return matchSegments(strings.Split(pattern, "/"), strings.Split(p, "/"))
 }
 
+// matchSegments matches path segments against pattern segments. A pattern
+// segment of exactly "**" stands for any number of path segments, none
+// included - except as the last segment of the pattern, where "dir/**" means
+// what is inside dir and so wants at least one. Every other segment is
+// path.Match against a single segment, so "*" stops at a "/" the way it
+// always did.
+func matchSegments(pattern, p []string) bool {
+	for len(pattern) > 0 {
+		if pattern[0] == "**" {
+			if len(pattern) == 1 {
+				return len(p) > 0
+			}
+			for i := 0; i <= len(p); i++ {
+				if matchSegments(pattern[1:], p[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(p) == 0 {
+			return false
+		}
+		if ok, _ := path.Match(pattern[0], p[0]); !ok {
+			return false
+		}
+		pattern, p = pattern[1:], p[1:]
+	}
+	return len(p) == 0
+}
+
+// shorten cuts s to at most n runes, saying so with an ellipsis when it had
+// to cut.
+//
+// Runes, not bytes: the result goes out as JSON in a fold reason somebody
+// reads, and a marker line in Japanese cut at 60 bytes lands in the middle
+// of a rune, whereupon encoding/json swaps the broken bytes for U+FFFD and
+// the reader gets mojibake instead of a reason. (Cutting to a display width
+// would suit a one-line reason better still, but that needs a new
+// dependency, so runes it is.)
 func shorten(s string, n int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= n {
+	if n < 1 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	return string([]rune(s)[:n-1]) + "…"
 }
