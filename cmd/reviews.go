@@ -262,9 +262,12 @@ func printReviews(w io.Writer, records []history.Record) error {
 		return nil
 	}
 	for _, rec := range records {
-		fmt.Fprintf(w, "%s  %-14s %2d comment(s)%s  %d file(s), +%d -%d%s%s\n",
+		// The verdict gets a column of its own: what a review decided is
+		// the one thing counting its comments cannot tell you.
+		fmt.Fprintf(w, "%s  %-14s %-17s %2d comment(s)%s  %d file(s), +%d -%d%s%s\n",
 			rec.ReviewedAt.Local().Format("2006-01-02 15:04"),
 			rec.Group,
+			rec.Verdict.String(),
 			len(rec.Comments),
 			suggestionCount(rec),
 			rec.Files, rec.Additions, rec.Deletions,
@@ -311,6 +314,8 @@ func waited(rec history.Record) string {
 func printStats(w io.Writer, s history.Stats) {
 	fmt.Fprintf(w, "%d review(s), %d comment(s) (%.1f per review), %d suggestion(s)\n",
 		s.Reviews, s.Comments, s.CommentsPerReview, s.Suggestions)
+	fmt.Fprintf(w, "%d approved, %d commented, %d changes requested\n",
+		s.Approved, s.Commented, s.ChangesRequested)
 	fmt.Fprintf(w, "%d review(s) had nothing to say, %d comment(s) were resolved\n", s.Silent, s.Resolved)
 	fmt.Fprintf(w, "%d file(s) reviewed, +%d -%d\n", s.Files, s.Additions, s.Deletions)
 	if s.MedianWait > 0 {
