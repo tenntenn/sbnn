@@ -36,6 +36,40 @@ func TestSuggestions(t *testing.T) {
 			[]string{"```go\ncode\n```"},
 		},
 		{
+			// The inner fence is part of the replacement text, not
+			// the end of the block.
+			"suggestion proposing a code block",
+			"```suggestion\n```go\nx\n```\n```",
+			[]string{"```go\nx\n```"},
+		},
+		{
+			"nested fence indented inside a list item",
+			"```suggestion\n- run it:\n\n  ```sh\n  go test ./...\n  ```\n```",
+			[]string{"- run it:\n\n  ```sh\n  go test ./...\n  ```"},
+		},
+		{
+			"nested tilde block",
+			"```suggestion\n~~~\ny\n~~~\n```",
+			[]string{"~~~\ny\n~~~"},
+		},
+		{
+			// A close never needs to be longer than the fence it
+			// closes, so the longer run is the suggestion's.
+			"a run longer than the nested fence closes the suggestion",
+			"````suggestion\n```\n````",
+			[]string{"```"},
+		},
+		{
+			"an unclosed nested fence still ends at the suggestion fence",
+			"```suggestion\n~~~\n```",
+			[]string{"~~~"},
+		},
+		{
+			"two blocks each holding a fence",
+			"```suggestion\n```go\na\n```\n```\n\nand\n\n```suggestion\n```go\nb\n```\n```",
+			[]string{"```go\na\n```", "```go\nb\n```"},
+		},
+		{
 			"plain code block is not a suggestion",
 			"```go\ncode\n```",
 			nil,
@@ -88,5 +122,96 @@ func TestCommentJSONCarriesSuggestions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(decoded.Suggestions, []string{"new"}) {
 		t.Errorf("suggestions = %q", decoded.Suggestions)
+	}
+}
+
+// Whatever WithSuggestion writes, Suggestions has to read back unchanged:
+// the two are the only ends of the wire a suggestion travels over.
+func TestWithSuggestionRoundTrip(t *testing.T) {
+	for _, suggestion := range []string{
+		"func parse() {",
+		"a\n\nb",
+		"```go\nx\n```",
+		"```",
+		"~~~\ny\n~~~",
+		"text with ``` in it",
+		"# Heading\n\n```suggestion\nnested\n```",
+		"````\ndeep\n````",
+	} {
+		t.Run(suggestion, func(t *testing.T) {
+			body := model.WithSuggestion("note", suggestion)
+			if got := model.Suggestions(body); !reflect.DeepEqual(got, []string{suggestion}) {
+				t.Errorf("round trip through %q gave %q, want %q", body, got, []string{suggestion})
+			}
+		})
+	}
+}
+
+func TestParseVerdict(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		want model.Verdict
+		ok   bool
+	}{
+		{"", model.VerdictCommented, true},
+		{"  ", model.VerdictCommented, true},
+		{"approved", model.VerdictApproved, true},
+		{"approve", model.VerdictApproved, true},
+		{"LGTM", model.VerdictApproved, true},
+		{"accept", model.VerdictApproved, true},
+		{"ship it", model.VerdictApproved, true},
+		{"commented", model.VerdictCommented, true},
+		{"comment", model.VerdictCommented, true},
+		{"changes-requested", model.VerdictChangesRequested, true},
+		{"changes_requested", model.VerdictChangesRequested, true},
+		{"request-changes", model.VerdictChangesRequested, true},
+		{"changes", model.VerdictChangesRequested, true},
+		// The spelling GitHub's own review API uses.
+		{"request_changes", model.VerdictChangesRequested, true},
+		{"REQUEST_CHANGES", model.VerdictChangesRequested, true},
+		{"requestchanges", model.VerdictChangesRequested, true},
+		{"reject", model.VerdictChangesRequested, true},
+		{"nope", "", false},
+		{"changes requested?", "", false},
+
+		// Padding is whatever the program the verdict was pasted out of
+		// used, not the four spaces ASCII has. U+3000 in particular is what
+		// a Japanese keyboard produces, so it turns up in front of anything
+		// typed there.
+		{"approved\v", model.VerdictApproved, true},
+		{"approved\f", model.VerdictApproved, true},
+		{"approved\u00a0", model.VerdictApproved, true}, // no-break space
+		{"\u3000approved", model.VerdictApproved, true}, // ideographic space
+		{"approved\u2007", model.VerdictApproved, true}, // figure space
+		{"\u3000changes\u3000requested\u3000", model.VerdictChangesRequested, true},
+		{"\u3000", model.VerdictCommented, true}, // padding only is still empty
+
+		// Separators are dropped before matching, so these fold down to the
+		// empty string - but they are typos, not an omitted verdict. Reading
+		// one as "commented" would confirm the review, write it to the
+		// history and fire the hook.
+		{"-", "", false},
+		{"_", "", false},
+		{"...", "", false},
+		{"-_-", "", false},
+		{". - _", "", false},
+	} {
+		t.Run(tt.in, func(t *testing.T) {
+			got, ok := model.ParseVerdict(tt.in)
+			if got != tt.want || ok != tt.ok {
+				t.Errorf("ParseVerdict(%q) = %q, %v; want %q, %v", tt.in, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+// What String writes has to read back, or a verdict cannot survive being
+// printed and typed again.
+func TestParseVerdictRoundTripsString(t *testing.T) {
+	for _, v := range []model.Verdict{model.VerdictApproved, model.VerdictCommented, model.VerdictChangesRequested} {
+		got, ok := model.ParseVerdict(v.String())
+		if !ok || got != v {
+			t.Errorf("ParseVerdict(%q.String() = %q) = %q, %v", string(v), v.String(), got, ok)
+		}
 	}
 }

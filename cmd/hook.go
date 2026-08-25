@@ -67,6 +67,15 @@ func init() {
 	f.StringVar(&hookURL, "on-review-url", "", "URL to POST to when a review is submitted")
 	f.BoolVar(&hookClear, "clear", false, "Remove the hooks of the group")
 	f.BoolVar(&jsonOutput, "json", false, "Print structured JSON on stdout")
+	// --clear used to win over a registration given in the same command,
+	// taking the hooks and dropping the new one without a word. Refusing
+	// the combination says so once, instead of leaving the user to believe
+	// a hook is registered when none is. The two registration flags are
+	// paired with --clear separately rather than put in one group with it:
+	// a single hook may carry a command and a URL at once, and one group
+	// of three would forbid that too.
+	hookCmd.MarkFlagsMutuallyExclusive("clear", "on-review")
+	hookCmd.MarkFlagsMutuallyExclusive("clear", "on-review-url")
 }
 
 func runHook(cmd *cobra.Command, _ []string) error {
