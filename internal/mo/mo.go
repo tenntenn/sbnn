@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -128,15 +129,54 @@ func (r *Runner) Open(ctx context.Context, group string, paths ...string) (*Resu
 	return &res, nil
 }
 
-// URLFor returns the deep link mo reported for path.
+// URLFor returns the deep link mo reported for path, or "" when mo reported
+// no file whose path is the one asked for.
+//
+// mo echoes back a path of its own making: it may be absolute where sbnn
+// passed a relative one, cleaned, or resolved through a symlink. So a plain
+// string comparison is only the fast path; anything else is compared as
+// canonical paths. Nothing matching is answered with "" on purpose. The
+// group URL would render, but it is some other file's page, and framing it
+// tells the reviewer nothing is wrong when the deep link in fact failed.
 func (res *Result) URLFor(path string) string {
+	// An empty path names no file, so it must not match one - not even the
+	// entry of a file mo listed without a path of its own, which the plain
+	// string comparison below would otherwise hand back.
+	if path == "" {
+		return ""
+	}
 	for _, f := range res.Files {
 		if f.Path == path {
 			return f.URL
 		}
 	}
-	if len(res.Files) == 1 {
-		return res.Files[0].URL
+	want := canonicalPath(path)
+	if want == "" {
+		return ""
 	}
-	return res.URL
+	for _, f := range res.Files {
+		if canonicalPath(f.Path) == want {
+			return f.URL
+		}
+	}
+	return ""
+}
+
+// canonicalPath returns the form of p used to compare mo's answer with the
+// path sbnn asked about: absolute, cleaned, and with symlinks resolved.
+// Resolving needs the file to exist, so a path that cannot be resolved -- a
+// deleted file, a temporary copy already gone -- falls back to the cleaned
+// absolute path. An empty path stays empty: it identifies no file, and must
+// not be allowed to match one.
+func canonicalPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(p)
 }

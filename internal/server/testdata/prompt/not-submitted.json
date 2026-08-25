@@ -1,0 +1,12 @@
+{
+  "doc": "Comments in progress: nothing was submitted, so there is no reviewer to attribute a verdict to and no verdict sentence is written.",
+  "options": {},
+  "group": {
+    "name": "default",
+    "diffs": [{"id": "d1", "title": "first"}],
+    "comments": [
+      {"id": "c1", "diffId": "d1", "path": "main.go", "side": "new",
+       "startLine": 4, "endLine": 4, "body": "a remark", "snippet": "var x = 1"}
+    ]
+  }
+}
