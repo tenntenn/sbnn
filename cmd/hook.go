@@ -61,6 +61,16 @@ func init() {
 	f.BoolVar(&hookClear, "clear", false, "Remove the hooks of the group")
 	f.StringVar(&hookRemove, "remove", "", "Remove one hook by ID (sbnn hook lists the IDs)")
 	f.BoolVar(&jsonOutput, "json", false, "Print structured JSON on stdout")
+	// A removal and a registration asked for in the same command disagree
+	// about what the command is for, and the switch in runHook would settle
+	// it by order: the removal happens, the new hook is dropped without a
+	// word, and the user is left believing it is registered. Refusing the
+	// combination says so once. The flags are paired one by one rather than
+	// put in a single group of four: a hook may carry a command and a URL at
+	// once, and one group would forbid that too.
+	hookCmd.MarkFlagsMutuallyExclusive("remove", "clear")
+	hookCmd.MarkFlagsMutuallyExclusive("remove", "on-review")
+	hookCmd.MarkFlagsMutuallyExclusive("remove", "on-review-url")
 }
 
 func runHook(cmd *cobra.Command, _ []string) error {
@@ -68,11 +78,6 @@ func runHook(cmd *cobra.Command, _ []string) error {
 	group, err := groupName(target)
 	if err != nil {
 		return err
-	}
-	// --clear and --remove disagree about how much to take, so refuse the
-	// pair rather than letting the order of the switch decide silently.
-	if hookRemove != "" && hookClear {
-		return fmt.Errorf("--remove and --clear cannot be used together")
 	}
 	c := client.New(addr(), 5*time.Second)
 	if _, err := c.Status(ctx); err != nil {

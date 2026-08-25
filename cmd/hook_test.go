@@ -128,3 +128,59 @@ func TestDeleteHookReportsServerErrors(t *testing.T) {
 		t.Errorf("removed = %d on an error, want 0", got)
 	}
 }
+
+// validateHookFlags parses args the way cobra does before RunE and returns
+// what the flag rules make of them. Flag state on hookCmd is package-wide,
+// so every value it touches is put back before the next case runs.
+func validateHookFlags(t *testing.T, args []string) error {
+	t.Helper()
+	fs := hookCmd.Flags()
+	t.Cleanup(func() {
+		for _, name := range []string{"remove", "clear", "on-review", "on-review-url"} {
+			f := fs.Lookup(name)
+			f.Changed = false
+			if err := f.Value.Set(f.DefValue); err != nil {
+				t.Fatalf("restoring --%s: %v", name, err)
+			}
+		}
+	})
+	if err := hookCmd.ParseFlags(args); err != nil {
+		return err
+	}
+	return hookCmd.ValidateFlagGroups()
+}
+
+// Asking to remove a hook and to register one in the same command used to be
+// settled by the order of the switch in runHook: the removal happened, the
+// hook the user asked for was dropped without a word, and the command still
+// exited 0. The pairs have to be refused before anything is touched, and the
+// combinations that mean something - a removal on its own, a registration on
+// its own, a hook carrying both a command and a URL - have to stay legal.
+func TestHookRemoveRefusesToBeMixedWithRegistration(t *testing.T) {
+	tests := map[string]struct {
+		args    []string
+		wantErr bool
+	}{
+		"remove with a command":     {args: []string{"--remove", "h2", "--on-review", "echo NEW"}, wantErr: true},
+		"remove with a url":         {args: []string{"--remove", "h2", "--on-review-url", "http://localhost:9000/reviews"}, wantErr: true},
+		"remove with clear":         {args: []string{"--remove", "h2", "--clear"}, wantErr: true},
+		"remove alone":              {args: []string{"--remove", "h2"}},
+		"command alone":             {args: []string{"--on-review", "echo NEW"}},
+		"url alone":                 {args: []string{"--on-review-url", "http://localhost:9000/reviews"}},
+		"one hook with both halves": {args: []string{"--on-review", "echo NEW", "--on-review-url", "http://localhost:9000/reviews"}},
+		"listing takes no flags":    {args: nil},
+		"clear alone":               {args: []string{"--clear"}},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := validateHookFlags(t, tt.args)
+			if tt.wantErr && err == nil {
+				t.Fatalf("sbnn hook %s was accepted, want it refused", strings.Join(tt.args, " "))
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("sbnn hook %s was refused: %v", strings.Join(tt.args, " "), err)
+			}
+		})
+	}
+}
