@@ -79,7 +79,11 @@ func New(opts Options) (*Server, error) {
 		shutdown: make(chan struct{}),
 	}
 	if err := s.store.Load(); err != nil {
+		// The background server's log lands in the state directory, where
+		// nobody is looking, so this also goes to stderr: losing a session
+		// is worth one line wherever the human is.
 		slog.Warn("could not restore session", "error", err)
+		fmt.Fprintf(os.Stderr, "sbnn: %v\n", err)
 	}
 	// Run replaces this with a previewer that knows the frame proxy.
 	s.prev = &previewer{mo: opts.Mo, cacheDir: opts.CacheDir}
@@ -230,7 +234,16 @@ func (s *Server) crossOrigin(r *http.Request) (string, bool) {
 	// Sec-Fetch-Site is sent by every current browser and by nothing else.
 	// "none" is the address bar, "same-origin" is sbnn's own page.
 	switch site := r.Header.Get("Sec-Fetch-Site"); site {
-	case "", "none", "same-origin":
+	case "none", "same-origin":
+		// The browser computed this against the page's real origin, and a
+		// page cannot forge it: Sec-Fetch-* are forbidden header names, so a
+		// request from anywhere else arrives as "cross-site" whatever it
+		// wants to claim. Answering here instead of falling through to the
+		// Origin check is what keeps writes working under --bind, where the
+		// address the user typed is one sbnn was never told.
+		return "", false
+	case "":
+		// Too old to send it, or not a browser at all. Origin decides.
 	default:
 		return "Sec-Fetch-Site: " + site, true
 	}
@@ -240,7 +253,7 @@ func (s *Server) crossOrigin(r *http.Request) (string, bool) {
 		// hooks it runs all land here.
 		return "", origin == "null"
 	}
-	if !s.ownOrigin(origin) {
+	if !s.ownOrigin(origin, r.Host) {
 		return "Origin: " + origin, true
 	}
 	return "", false
@@ -249,22 +262,34 @@ func (s *Server) crossOrigin(r *http.Request) (string, bool) {
 // ownOrigin reports whether an Origin header names this server. The page is
 // reached by whichever loopback name the user typed, so all of them count,
 // as long as the port is the one sbnn listens on.
-func (s *Server) ownOrigin(origin string) bool {
+//
+// host is the request's own Host header - the authority the client actually
+// dialled. An Origin that matches it is by definition same-origin, which is
+// the only thing that identifies sbnn's page when it is served on an address
+// opts.Bind does not name: under --bind 0.0.0.0 the user reaches the page at
+// the machine's LAN address, and the browser reports that back. A page on
+// another site cannot borrow this: the browser sets Host from the URL it is
+// dialling and Origin from the page it is dialling out of, so for a genuine
+// cross-origin request the two differ.
+func (s *Server) ownOrigin(origin, host string) bool {
 	u, err := url.Parse(origin)
 	if err != nil || u.Scheme != "http" {
 		return false
 	}
+	if host != "" && u.Host == host {
+		return true
+	}
 	if u.Port() != strconv.Itoa(s.opts.Port) {
 		return false
 	}
-	host := u.Hostname()
-	if host == s.opts.Bind {
+	hostname := u.Hostname()
+	if hostname == s.opts.Bind {
 		return true
 	}
-	if ip, err := netip.ParseAddr(host); err == nil {
+	if ip, err := netip.ParseAddr(hostname); err == nil {
 		return ip.IsLoopback()
 	}
-	return host == "localhost"
+	return hostname == "localhost"
 }
 
 // Status is the payload of GET /_/api/status.
@@ -279,6 +304,9 @@ type Status struct {
 	MoAvailable bool           `json:"moAvailable"`
 	MoError     string         `json:"moError,omitempty"`
 	Groups      []GroupSummary `json:"groups"`
+	// SessionError says why the session is not being written to disk. It is
+	// empty while the session file is up to date.
+	SessionError string `json:"sessionError,omitempty"`
 }
 
 func (s *Server) status() Status {
@@ -293,6 +321,9 @@ func (s *Server) status() Status {
 	}
 	if s.proxy != nil {
 		st.MoProxyURL = s.proxy.baseURL
+	}
+	if err := s.store.PersistError(); err != nil {
+		st.SessionError = err.Error()
 	}
 	if err := s.opts.Mo.Available(); err != nil {
 		st.MoError = err.Error()
@@ -594,8 +625,20 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a suggestion replaces lines of the new file, not of the old one", http.StatusBadRequest)
 		return
 	}
-	if req.EndLine < req.StartLine {
+	// Line numbers are 1-based; 0 means "not on this side" and is not a
+	// place a comment can point at. The CLI already refuses these, and a
+	// stored comment with a non-positive range anchors to nothing.
+	if req.StartLine < 1 {
+		http.Error(w, fmt.Sprintf("startLine must be 1 or more, got %d", req.StartLine), http.StatusBadRequest)
+		return
+	}
+	if req.EndLine == 0 {
+		// A client that comments on a single line may send startLine alone.
 		req.EndLine = req.StartLine
+	}
+	if req.EndLine < req.StartLine {
+		http.Error(w, fmt.Sprintf("endLine %d is before startLine %d", req.EndLine, req.StartLine), http.StatusBadRequest)
+		return
 	}
 	if req.FileID == "" {
 		if req.Path == "" {
@@ -614,6 +657,16 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		if req.Snippet == "" {
 			http.Error(w, fmt.Sprintf("%s has no line %s in this diff", req.Path, lineSpec(req.StartLine, req.EndLine)),
 				http.StatusBadRequest)
+			return
+		}
+	} else if g, ok := s.store.Group(name); ok {
+		// A fileId that names no file of this diff anchors the comment to
+		// nothing: the page keys its sections on diffId:fileId, so such a
+		// comment is counted in every total and shown on no line. An
+		// unknown diffId is left alone here, because AddComment below
+		// already reports that one.
+		if d := g.FindDiff(req.DiffID); d != nil && d.FindFile(req.FileID) == nil {
+			http.Error(w, fmt.Sprintf("no file %q in diff %q", req.FileID, req.DiffID), http.StatusBadRequest)
 			return
 		}
 	}
