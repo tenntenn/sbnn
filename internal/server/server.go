@@ -46,6 +46,9 @@ type Options struct {
 	Revision string
 	// AllowRemote must be set to bind to a non-loopback address.
 	AllowRemote bool
+	// IdleTimeout ends the server once it has held nothing to review for this
+	// long. Zero, the default, keeps it resident until it is told to stop.
+	IdleTimeout time.Duration
 }
 
 // Server is the resident sbnn server.
@@ -126,6 +129,10 @@ func (s *Server) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
 
+	if s.opts.IdleTimeout > 0 {
+		go s.watchIdle(ctx, idleCheckInterval(s.opts.IdleTimeout))
+	}
+
 	select {
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -138,6 +145,78 @@ func (s *Server) Run(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// idleCheckInterval picks how often to test for idleness: often enough that
+// the timeout is honoured with reasonable precision, rarely enough that a
+// long timeout does not mean a busy ticker.
+func idleCheckInterval(timeout time.Duration) time.Duration {
+	check := timeout / 4
+	if check > 30*time.Second {
+		check = 30 * time.Second
+	}
+	if check <= 0 {
+		check = time.Millisecond
+	}
+	return check
+}
+
+// watchIdle ends the server once it has had nothing to do for IdleTimeout.
+//
+// The first `git diff | sbnn` starts a resident server and detaches it, and
+// nothing has ever ended it: no idle timeout, no lifetime bound, no cleanup on
+// logout. The only ways out are `sbnn --shutdown`, POST /_/api/shutdown, or
+// killing the process, so a review from three months ago could still be
+// holding a port, a session file and its parsed diffs. It is invisible too -
+// the process reads like something running in a terminal, and nothing tells
+// the user it is still there.
+//
+// The timeout must be continuous: any sign of life resets it, so a server is
+// only collected after being useless for the whole stretch.
+func (s *Server) watchIdle(ctx context.Context, check time.Duration) {
+	t := time.NewTicker(check)
+	defer t.Stop()
+	var since time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.shutdown:
+			return
+		case now := <-t.C:
+			switch {
+			case !s.idle():
+				since = time.Time{}
+			case since.IsZero():
+				since = now
+			case now.Sub(since) >= s.opts.IdleTimeout:
+				slog.Info("shutting down: nothing left to review",
+					"idle", s.opts.IdleTimeout)
+				s.requestShutdown()
+				return
+			}
+		}
+	}
+}
+
+// idle reports whether the server is holding nothing worth staying alive for.
+//
+// Conservative on purpose. A review waiting for a human must never be
+// collected - that is the whole point of the hooks - so this asks "nothing
+// here at all" rather than "no recent activity". A group still holding a diff
+// is a review someone may come back to, an open event stream is a page
+// watching, and a registered hook is something waiting to fire. A server that
+// has none of the three has nothing to lose.
+func (s *Server) idle() bool {
+	if s.broker.count() > 0 {
+		return false
+	}
+	for _, g := range s.store.Summary("") {
+		if g.Diffs > 0 || g.Hooks > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) requestShutdown() {
