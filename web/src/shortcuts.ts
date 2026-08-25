@@ -17,7 +17,7 @@ export interface Shortcut {
 export const shortcuts: Shortcut[] = [
   { keys: ['j'], what: 'Next file' },
   { keys: ['k'], what: 'Previous file' },
-  { keys: ['/'], what: 'Filter the file list by path' },
+  { keys: ['/'], what: 'Search paths and lines' },
   { keys: ['n'], what: 'Next comment' },
   { keys: ['p'], what: 'Previous comment' },
   { keys: ['f'], what: 'Fold or unfold this file' },
