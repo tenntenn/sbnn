@@ -75,4 +75,7 @@ test('the stepper is laid out by the stylesheet, not beside the diff', () => {
   const decls = rule(source('styles.css'), '.file-stepper')
   // A foot takes the height it asks for and leaves the rest to the diff.
   assert.match(decls, /flex:\s*0 0 auto/)
+  // And it sits at the bottom of the space a short file leaves, rather than
+  // floating in the middle of the screen.
+  assert.match(decls, /margin-top:\s*auto/)
 })
