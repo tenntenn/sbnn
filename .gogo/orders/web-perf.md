@@ -36,7 +36,7 @@ gogodash task set --id t-dd50d6 --status done --progress 100 --result "PR #<番�
 
 ## 4. 触ってよいファイル
 
-**専有（この波（G5）のほかの 3 レーンとは 1 ファイルも重なっていない）**
+**主担当（この波（G5）のほかの 3 レーンとは 1 ファイルも重なっていない）**
 
 - `web/src/components/DiffStack.tsx`
 - `web/src/components/PreviewStack.tsx`

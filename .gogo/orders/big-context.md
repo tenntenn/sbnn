@@ -2,6 +2,7 @@ slug: big-context
 
 # big-context — ハンクの前後を開く機能の方針（issue #97）
 
+ダッシュボードのタスク ID: t-af00b4（issue #97）
 優先度: P2
 期限: 2026-08-25 中（この波の中で）
 

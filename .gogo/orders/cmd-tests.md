@@ -54,12 +54,20 @@ issue が列挙している 0% の関数のうち、**いま別の issue で挙�
 | `splitPatterns` | #52（パターン中のカンマで分割される） |
 | `printCommentStream` / `lineRef` / `firstLine` | 既に `cmd/reviews_test.go` にテストがある |
 
-**候補（ここから選ぶ）:** `groupName`（util.go）、`chosenVerdict`（submit.go）、
-`shouldOpen`（root.go）、`lineRangeOf`（comment.go）、`suggestionText`（comment.go）、
-`singleComment`（comment.go）、`readBulkComments`（comment.go）、`readStdin`（root.go）、
-`describeHook`（hook.go）、`shortDuration`（reviews.go）、`indent`（reviews.go）、
-`waited`（reviews.go）、`labelPairs`（reviews.go）、`suggestionCount`（reviews.go）、
-`summarize`（root.go）、`jsonEncoder` / `lineEncoder`（util.go）。
+**候補（この順に優先して選ぶ）:**
+
+1. **`cmd/submit.go` と `cmd/util.go` の関数を最優先で選ぶ。**
+   この 2 ファイルは、いまどのレーンも実装を書き換えていない（`util.go` の `historyFile` だけが
+   例外で、上の表で既に除外済み）。
+   → `chosenVerdict`（submit.go）、`groupName`（util.go）、
+     `jsonEncoder` / `lineEncoder`（util.go）
+2. 次に `cmd/root.go` の純粋な関数 → `shouldOpen`、`summarize`
+3. 最後に `cmd/reviews.go` / `cmd/comment.go` の純粋な関数 →
+   `shortDuration`、`indent`、`waited`、`labelPairs`、`suggestionCount`、
+   `lineRangeOf`、`suggestionText`、`singleComment`、`readBulkComments`
+
+`cmd/hook.go` の関数（`describeHook` など）は**選ばない。**
+cmd-hook レーンが同じ波でこのファイルの実装を書き換えている。
 
 **候補から 1 つ選ぶたびに、必ずこの機械的な確認をしてから書く:**
 
@@ -80,8 +88,12 @@ mcp__github__search_issues で
   `internal/model/model_test.go`）の書き方に合わせる。名前付きケースの `[]struct` と
   `t.Run(tt.name, ...)`。
 - **トップレベルの識別子はすべて `helpers` で始める**（`helpersTempHome` など）。
-  `cmd/reviews_test.go` や、別レーンが後で足すテストファイルと名前がぶつからないようにするため。
   テスト関数名も `TestHelpers<関数名>` の形にする。
+  理由: 同じ波で、**同じ `package cmd` に別レーンがテストファイルを新規追加している**
+  （cmd-flags が `cmd/root_test.go`、cmd-hook が `cmd/hook_test.go`、
+  cmd-serve が `cmd/server_test.go`）。ファイル名は違っても、
+  **同じ名前のヘルパを定義した瞬間、マージ後にコンパイルが壊れる。**
+  `newTestServer` `tempHome` `mustParse` のような、いかにも他人と衝突する名前を定義しない。
 - グローバルなフラグ変数に依存する関数（`shouldOpen`、`groupName`、`chosenVerdict` など）は、
   テストの中で値を保存 → 設定 → `t.Cleanup` で復元する。**復元を忘れると他のテストが壊れる。**
 - 環境変数やカレントディレクトリに依存するものは `t.Setenv` と `t.TempDir` を使う。

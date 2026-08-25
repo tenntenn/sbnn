@@ -2,6 +2,7 @@ slug: big-mcp
 
 # big-mcp — MCP サーバを出す案の方針（issue #125）
 
+ダッシュボードのタスク ID: t-fcaebd（issue #125）
 優先度: P2
 期限: 2026-08-25 中（この波の中で）
 

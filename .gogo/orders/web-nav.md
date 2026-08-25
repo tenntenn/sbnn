@@ -43,7 +43,8 @@ gogodash task set --id t-3217f8 --status done --progress 100 --result "PR #<番�
 
 ## 4. 触ってよいファイル
 
-**専有（この指示文だけが触る）**
+**主担当（この波（G4）ではこの指示文だけが触る。次の波（G5）の web-perf / web-a11y / web-search が
+`DiffStack.tsx` と `DiffFileSection.tsx` を引き継ぐが、G4 が先に終わるので衝突しない）**
 
 - `web/src/components/DiffFileSection.tsx`
 - `web/src/components/DiffStack.tsx`

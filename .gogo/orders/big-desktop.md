@@ -2,6 +2,7 @@ slug: big-desktop
 
 # big-desktop — デスクトップアプリで包む案の方針（issue #105）
 
+ダッシュボードのタスク ID: t-4b4d24（issue #105）
 優先度: P2
 期限: 2026-08-25 中（この波の中で）
 

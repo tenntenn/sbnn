@@ -2,6 +2,7 @@ slug: big-terminal
 
 # big-terminal — 端末以外の入口をどう並べるかの方針（issue #147）
 
+ダッシュボードのタスク ID: t-096e78（issue #147）
 優先度: P2
 期限: 2026-08-25 中（この波の中で）
 

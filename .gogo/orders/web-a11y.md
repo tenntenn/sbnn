@@ -35,9 +35,10 @@ gogodash task set --id t-a83621 --status done --progress 100 --result "PR #<番�
 
 ## 4. 触ってよいファイル
 
-**専有（あなたが持ち主）**
+**主担当（あなたが持ち主）**
 
-- `web/src/components/DiffFileSection.tsx`
+- `web/src/components/DiffFileSection.tsx` — **あなたが持ち主。ただし web-search が #100 の
+  ためだけに「行の中身を描いている箇所」を触る**（下の「共有」を読むこと）
 
 **共有（同じ波（G5）の web-search も触る。下の注意を守ること）**
 

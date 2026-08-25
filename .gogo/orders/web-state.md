@@ -36,11 +36,12 @@ gogodash task set --id t-95d08f --status done --progress 100 --result "PR #<番�
 
 ## 4. 触ってよいファイル
 
-**専有（この指示文だけが触る）**
+**主担当（あなたが持ち主）**
 
-- `web/src/api.ts`
-- `web/src/storage.ts`
-- `web/src/components/Sidebar.tsx`
+- `web/src/api.ts` — この波（G4）ではあなただけ
+- `web/src/storage.ts` — この波（G4）ではあなただけ
+- `web/src/components/Sidebar.tsx` — **あなたが持ち主。ただし web-nav が #66 のためだけに
+  数行だけ触る**（下の「共有」を読むこと）
 
 **共有（他のレーンも同じサイクルで触る。下の注意を守ること）**
 

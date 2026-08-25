@@ -36,7 +36,7 @@ gogodash task set --id t-7b77d0 --status done --progress 100 --result "PR #<番�
 
 ## 4. 触ってよいファイル
 
-**専有（この指示文だけが触る。他のレーンとは 1 ファイルも重なっていない）**
+**主担当（この 3 ファイルは、G4 の他の 3 レーンとも G5 の 4 レーンとも 1 ファイルも重なっていない）**
 
 - `web/src/client.ts`
 - `web/src/components/Icon.tsx`
