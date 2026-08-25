@@ -568,3 +568,143 @@ func TestParseCombinedKeepsNonBodyText(t *testing.T) {
 		t.Errorf("last line = %+v, want context %q", lines[len(lines)-1], "2 files changed")
 	}
 }
+
+// A hunk header whose numbers carry a sign of their own is malformed. Accepting
+// it produced hunks numbered from a negative line, which Line.OldNumber cannot
+// express and the UI renders as a blank, uncommentable gutter.
+func TestParseRejectsSignedHunkHeaderNumbers(t *testing.T) {
+	const headers = `--- a/a.txt
++++ b/a.txt
+`
+	bad := []string{
+		"@@ --1,2 +1,2 @@", // negative old start
+		"@@ -1,2 +-1,2 @@", // negative new start
+		"@@ -1,-5 +1,1 @@", // negative old count
+		"@@ -1,1 +1,-5 @@", // negative new count
+		"@@ -+1,2 +1,2 @@", // explicit plus on the old start
+		"@@ -1,+2 +1,2 @@", // explicit plus on the old count
+		"@@ - ,2 +1,2 @@",  // not a number at all
+		"@@ -1,2 +1, @@",   // empty count
+	}
+	for _, header := range bad {
+		t.Run(header, func(t *testing.T) {
+			files := diff.Parse(headers + header + "\n-a\n+b\n")
+			if len(files) != 1 {
+				t.Fatalf("got %d file(s), want 1:\n%s", len(files), describe(files))
+			}
+			if n := len(files[0].Hunks); n != 0 {
+				t.Errorf("header %q was accepted: %d hunk(s), OldStart=%d OldLines=%d NewStart=%d NewLines=%d",
+					header, n, files[0].Hunks[0].OldStart, files[0].Hunks[0].OldLines,
+					files[0].Hunks[0].NewStart, files[0].Hunks[0].NewLines)
+			}
+		})
+	}
+}
+
+// A start of 0 is how git writes the missing side of an added or deleted file,
+// so it must keep parsing.
+func TestParseAcceptsZeroAndPlainHunkHeaderNumbers(t *testing.T) {
+	tests := []struct {
+		header                                 string
+		body                                   string
+		oldStart, oldLines, newStart, newLines int
+	}{
+		{"@@ -0,0 +1,2 @@", "+a\n+b\n", 0, 0, 1, 2},
+		{"@@ -1,2 +0,0 @@", "-a\n-b\n", 1, 2, 0, 0},
+		{"@@ -1 +1 @@", "-a\n+b\n", 1, 1, 1, 1},
+		{"@@ -12,3 +14,4 @@", " a\n-b\n+c\n+d\n", 12, 3, 14, 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.header, func(t *testing.T) {
+			files := diff.Parse("--- a/a.txt\n+++ b/a.txt\n" + tt.header + "\n" + tt.body)
+			if len(files) != 1 || len(files[0].Hunks) != 1 {
+				t.Fatalf("want 1 file with 1 hunk, got:\n%s", describe(files))
+			}
+			h := files[0].Hunks[0]
+			if h.OldStart != tt.oldStart || h.OldLines != tt.oldLines ||
+				h.NewStart != tt.newStart || h.NewLines != tt.newLines {
+				t.Errorf("got -%d,%d +%d,%d, want -%d,%d +%d,%d",
+					h.OldStart, h.OldLines, h.NewStart, h.NewLines,
+					tt.oldStart, tt.oldLines, tt.newStart, tt.newLines)
+			}
+			for _, l := range h.Lines {
+				if l.OldNumber < 0 || l.NewNumber < 0 {
+					t.Errorf("line %+v has a negative number", l)
+				}
+			}
+		})
+	}
+}
+
+// A diff that never names its file must not produce a file whose path is the
+// empty string: the reviewer would see a nameless row, and any lookup handed
+// an empty path would match it.
+func TestParseUnnamedFileGetsPlaceholderPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		src     string
+		status  model.FileStatus
+		oldPath string
+		newPath string
+	}{
+		{
+			name:    "bare hunk",
+			src:     "@@ -1,2 +1,2 @@\n-a\n+b\n c\n",
+			status:  model.StatusModified,
+			newPath: diff.UnnamedPath,
+		},
+		{
+			name:    "git header without paths",
+			src:     "diff --git\n@@ -1,1 +1,1 @@\n-a\n+b\n",
+			status:  model.StatusModified,
+			newPath: diff.UnnamedPath,
+		},
+		{
+			name:    "both sides are /dev/null",
+			src:     "--- /dev/null\n+++ /dev/null\n@@ -0,0 +1,1 @@\n+a\n",
+			status:  model.StatusAdded,
+			newPath: diff.UnnamedPath,
+		},
+		{
+			name:    "deletion without paths keeps the name on the old side",
+			src:     "diff --git \ndeleted file mode 100644\n@@ -1,1 +0,0 @@\n-a\n",
+			status:  model.StatusDeleted,
+			oldPath: diff.UnnamedPath,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files := diff.Parse(tt.src)
+			if len(files) != 1 {
+				t.Fatalf("got %d file(s), want 1:\n%s", len(files), describe(files))
+			}
+			f := files[0]
+			if f.Path() == "" {
+				t.Errorf("Path() is empty:\n%s", describe(files))
+			}
+			if f.Status != tt.status || f.OldPath != tt.oldPath || f.NewPath != tt.newPath {
+				t.Errorf("got %s %q -> %q, want %s %q -> %q",
+					f.Status, f.OldPath, f.NewPath, tt.status, tt.oldPath, tt.newPath)
+			}
+		})
+	}
+}
+
+// The placeholder is only for entries the diff never named; a real path is
+// never replaced, and a one-sided path stays one-sided.
+func TestParseNamedFilesKeepTheirPaths(t *testing.T) {
+	src := `diff --git a/gone.txt b/gone.txt
+deleted file mode 100644
+--- a/gone.txt
++++ /dev/null
+@@ -1,1 +0,0 @@
+-a
+`
+	files := diff.Parse(src)
+	if len(files) != 1 {
+		t.Fatalf("got %d file(s), want 1:\n%s", len(files), describe(files))
+	}
+	if f := files[0]; f.OldPath != "gone.txt" || f.NewPath != "" {
+		t.Errorf("got %q -> %q, want %q -> %q", f.OldPath, f.NewPath, "gone.txt", "")
+	}
+}

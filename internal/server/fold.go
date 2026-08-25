@@ -3,6 +3,7 @@ package server
 import (
 	"path"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/model"
@@ -131,10 +132,22 @@ func matchSegments(pattern, p []string) bool {
 	return len(p) == 0
 }
 
+// shorten cuts s to at most n runes, saying so with an ellipsis when it had
+// to cut.
+//
+// Runes, not bytes: the result goes out as JSON in a fold reason somebody
+// reads, and a marker line in Japanese cut at 60 bytes lands in the middle
+// of a rune, whereupon encoding/json swaps the broken bytes for U+FFFD and
+// the reader gets mojibake instead of a reason. (Cutting to a display width
+// would suit a one-line reason better still, but that needs a new
+// dependency, so runes it is.)
 func shorten(s string, n int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= n {
+	if n < 1 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	return string([]rune(s)[:n-1]) + "…"
 }
