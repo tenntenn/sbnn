@@ -41,6 +41,7 @@ year of reviews can be read as one thing.
   $ sbnn reviews --since 7d          # this week
   $ sbnn reviews -t api --limit 5
   $ sbnn reviews --stats             # what they say together, and only then
+  $ sbnn reviews --stats --format json   # the same aggregate as one object
 
 --comments turns the stream around: one record per comment instead of one
 per review, which is the shape counting tools want. Parse the jsonl form -
@@ -117,6 +118,12 @@ func runReviews(cmd *cobra.Command, _ []string) error {
 	if reviewsComments {
 		return printCommentStream(os.Stdout, history.Comments(records), format)
 	}
+	if reviewsStats {
+		// --stats asks for the aggregate instead of the list, in whatever
+		// format was asked for. Deciding this per format, inside the text
+		// branch, left the flag doing nothing for json and jsonl.
+		return printReviewStats(os.Stdout, records, format)
+	}
 	switch format {
 	case "json":
 		return jsonEncoder(os.Stdout).Encode(map[string]any{
@@ -133,6 +140,32 @@ func runReviews(cmd *cobra.Command, _ []string) error {
 		return nil
 	case "text":
 		return printReviews(os.Stdout, records)
+	default:
+		return fmt.Errorf("unknown format %q: use text, json or jsonl", format)
+	}
+}
+
+// printReviewStats writes what the reviews say together: the aggregate and
+// only the aggregate, which is what --stats promises, in every format.
+//
+// jsonl gets the same object on one line rather than a line per tally: a
+// Stats is one thing said about one pile of reviews, and splitting it would
+// leave each line meaningless on its own, which is the opposite of what a
+// jsonl reader wants.
+func printReviewStats(w io.Writer, records []history.Record, format string) error {
+	stats := history.Summarize(records)
+	switch format {
+	case "json":
+		return jsonEncoder(w).Encode(stats)
+	case "jsonl":
+		return lineEncoder(w).Encode(stats)
+	case "text":
+		if len(records) == 0 {
+			fmt.Fprintln(w, "no review has been submitted yet")
+			return nil
+		}
+		printStats(w, stats, verdicts(records))
+		return nil
 	default:
 		return fmt.Errorf("unknown format %q: use text, json or jsonl", format)
 	}
@@ -229,13 +262,9 @@ func printReviews(w io.Writer, records []history.Record) error {
 		fmt.Fprintln(w, "no review has been submitted yet")
 		return nil
 	}
-	if reviewsStats {
-		// The aggregate is printed when asked for and only then; the list
-		// is a list.
-		printStats(w, history.Summarize(records), verdicts(records))
-		return nil
-	}
 	for _, rec := range records {
+		// The verdict gets a column of its own: what a review decided is
+		// the one thing counting its comments cannot tell you.
 		fmt.Fprintf(w, "%s  %-14s %-17s %2d comment(s)%s  %d file(s), +%d -%d%s%s\n",
 			rec.ReviewedAt.Local().Format("2006-01-02 15:04"),
 			rec.Group,

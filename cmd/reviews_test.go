@@ -79,9 +79,102 @@ func TestCommentStreamJSONLIsOneObjectPerLine(t *testing.T) {
 	}
 }
 
-// reviewed is three reviews, one of each verdict, plus one written before
-// the verdict was recorded at all.
+// reviewed is two reviews with enough on them for a summary to be about
+// something.
 func reviewed() []history.Record {
+	return []history.Record{
+		{
+			Group:      "api",
+			ReviewedAt: time.Date(2026, 8, 15, 10, 0, 0, 0, time.Local),
+			Files:      2, Additions: 10, Deletions: 1,
+			Comments: []history.Comment{{Path: "a.go", Side: "new", StartLine: 1, EndLine: 1, Body: "x"}},
+		},
+		{
+			Group:      "web",
+			ReviewedAt: time.Date(2026, 8, 16, 10, 0, 0, 0, time.Local),
+			Files:      1, Additions: 3, Deletions: 3,
+		},
+	}
+}
+
+// --stats says "print what the reviews say together", which is a promise
+// about what is printed, not about the format it is printed in. It used to
+// be read only inside the text branch, so json and jsonl silently printed
+// the per-review stream instead and nothing said the flag had been ignored.
+func TestStatsIsHonouredInEveryFormat(t *testing.T) {
+	t.Run("json", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := printReviewStats(&buf, reviewed(), "json"); err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+			t.Fatalf("not a JSON object: %v\n%s", err, buf.String())
+		}
+		// The aggregate and only the aggregate: no per-review list, and
+		// no "stats" wrapper to reach through.
+		if _, ok := got["stats"]; ok {
+			t.Errorf("--stats still wraps the aggregate: %s", buf.String())
+		}
+		if n, ok := got["reviews"].(float64); !ok || n != 2 {
+			t.Errorf(`"reviews" is not the review count: %v`, got["reviews"])
+		}
+		if n, ok := got["comments"].(float64); !ok || n != 1 {
+			t.Errorf(`"comments" is not the comment count: %v`, got["comments"])
+		}
+	})
+
+	t.Run("jsonl", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := printReviewStats(&buf, reviewed(), "jsonl"); err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+		if len(lines) != 1 {
+			t.Fatalf("the aggregate is one thing, got %d line(s):\n%s", len(lines), buf.String())
+		}
+		var got map[string]any
+		if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
+			t.Fatalf("line is not a JSON object: %q: %v", lines[0], err)
+		}
+		if n, ok := got["reviews"].(float64); !ok || n != 2 {
+			t.Errorf(`"reviews" is not the review count: %v`, got["reviews"])
+		}
+	})
+
+	t.Run("text", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := printReviewStats(&buf, reviewed(), "text"); err != nil {
+			t.Fatal(err)
+		}
+		if want := "2 review(s), 1 comment(s)"; !strings.Contains(buf.String(), want) {
+			t.Errorf("the text aggregate lost its first line:\nwant %q in\n%s", want, buf.String())
+		}
+	})
+
+	t.Run("unknown", func(t *testing.T) {
+		if err := printReviewStats(&bytes.Buffer{}, reviewed(), "yaml"); err == nil {
+			t.Error("an unknown format is an error, not silence")
+		}
+	})
+}
+
+// An empty log says so rather than printing a summary of nothing.
+func TestStatsOnAnEmptyLogSaysSo(t *testing.T) {
+	var buf bytes.Buffer
+	if err := printReviewStats(&buf, nil, "text"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "no review has been submitted yet\n"; buf.String() != want {
+		t.Errorf("got %q, want %q", buf.String(), want)
+	}
+}
+
+// reviewedEachWay is one review of every verdict, plus one written before
+// the verdict was recorded at all. It is separate from reviewed() because
+// the tests above are about how much a summary counts, and these are about
+// what it says the reviews decided.
+func reviewedEachWay() []history.Record {
 	at := func(day int) time.Time {
 		return time.Date(2026, 8, day, 10, 0, 0, 0, time.Local)
 	}
@@ -95,10 +188,11 @@ func reviewed() []history.Record {
 
 // The verdict is the one thing a listing is read for: whether the change
 // was approved, remarked on or stopped. Counting comments does not answer
-// it, so every line has to carry it.
+// it - an approval can carry three and a request for changes none - so
+// every line has to carry it.
 func TestReviewLinesShowTheVerdict(t *testing.T) {
 	var buf bytes.Buffer
-	if err := printReviews(&buf, reviewed()); err != nil {
+	if err := printReviews(&buf, reviewedEachWay()); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
@@ -118,9 +212,9 @@ func TestReviewLinesShowTheVerdict(t *testing.T) {
 // --stats has to answer the same question for the pile: how many went
 // through, how many were only remarked on, how many were stopped.
 func TestStatsCountTheVerdicts(t *testing.T) {
-	records := reviewed()
-	if got := (verdictTally{Approved: 1, Commented: 2, ChangesRequested: 1}); got != verdicts(records) {
-		t.Errorf("verdicts() = %+v, want %+v", verdicts(records), got)
+	records := reviewedEachWay()
+	if want := (verdictTally{Approved: 1, Commented: 2, ChangesRequested: 1}); want != verdicts(records) {
+		t.Errorf("verdicts() = %+v, want %+v", verdicts(records), want)
 	}
 	var buf bytes.Buffer
 	printStats(&buf, history.Summarize(records), verdicts(records))
