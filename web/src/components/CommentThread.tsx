@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import type { Comment } from '../types'
 import { client } from '../client'
+import { renderComment } from '../markdown'
 import { insertSuggestion, originalLines, parseBody, suggestionBlock, suggestions } from '../suggestion'
 
 interface ThreadProps {
@@ -82,6 +83,28 @@ function SuggestedChange({
       </table>
     </div>
   )
+}
+
+/**
+ * CommentBody draws one prose segment of a comment.
+ *
+ * A comment body is Markdown - model.Comment says so, and `sbnn comments`
+ * hands it to an agent as Markdown - so the reviewer reading the same field
+ * in the browser gets it rendered too. renderComment returns HTML that has
+ * been through DOMPurify, which is what makes it safe to set as innerHTML
+ * here. Nothing else on this path may reach dangerouslySetInnerHTML.
+ *
+ * It is renderComment and not the preview's renderMarkdown because a comment
+ * draws no image: the page is opened locally and the body is written by an
+ * agent, so an <img> would turn opening a review into a request to whatever
+ * host the comment named. renderComment says the rest.
+ *
+ * Suggestion blocks never arrive here: parseBody has already peeled them off
+ * into their own segments, which SuggestedChange keeps drawing as a diff.
+ */
+function CommentBody({ text }: { text: string }) {
+  const html = renderComment(text)
+  return <div className="comment-body" dangerouslySetInnerHTML={{ __html: html }} />
 }
 
 function CommentItem({
@@ -173,9 +196,7 @@ function CommentItem({
         <>
           {segments.map((segment, i) =>
             segment.kind === 'text' ? (
-              <div key={i} className="comment-body">
-                {segment.text}
-              </div>
+              <CommentBody key={i} text={segment.text} />
             ) : (
               <SuggestedChange key={i} comment={comment} suggestion={segment.text} />
             ),

@@ -39,9 +39,7 @@ func TestLockForAppendIsExclusive(t *testing.T) {
 	)
 	var wg sync.WaitGroup
 	for range writers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 			if err != nil {
 				t.Errorf("opening the log = %v", err)
@@ -68,7 +66,7 @@ func TestLockForAppendIsExclusive(t *testing.T) {
 			mu.Lock()
 			inside--
 			mu.Unlock()
-		}()
+		})
 	}
 	wg.Wait()
 

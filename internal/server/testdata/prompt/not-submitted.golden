@@ -1,0 +1,17 @@
+# Review comments (sbnn group "default")
+
+1 comment(s) to address.
+
+## 1. main.go:4
+
+Diff: first
+
+```
+var x = 1
+```
+
+a remark
+
+---
+
+Address every comment above. A suggestion block replaces the lines it names, verbatim. When a comment is not worth acting on, say why instead of changing the code.

@@ -37,13 +37,14 @@ human has written them:
 It is meant to be combined with other commands, so it says what it found in
 its exit status as well:
 
-  $ sbnn comments --exit-code        # 1 when there is something to address
+  $ sbnn comments --exit-code        # 1 when the review blocks the change
   $ sbnn wait && sbnn comments -q && git commit   # commit if the review was clean
 
 --exit-code answers the same question sbnn wait and sbnn submit answer, and
-in the same way: what the reviewer decided outranks counting comments. A
-review that asked for changes exits 1; an approval exits 0 whatever it said
-along the way; a plain "commented" - and a round nobody has submitted yet -
+in the same way: what the reviewer decided about this round outranks counting
+comments. A review that asked for changes exits 1; an approval exits 0
+whatever it said along the way; a plain "commented" - and a round nobody has
+submitted yet, which is what a diff sent after the last review starts -
 exits 1 only if a comment is left open.`,
 	Args:         cobra.NoArgs,
 	RunE:         runComments,
