@@ -385,8 +385,7 @@ func runClear(ctx context.Context, group string) error {
 			return err
 		}
 		if !ok {
-			fmt.Fprintln(os.Stderr, "sbnn: cancelled")
-			return nil
+			return errCancelled
 		}
 		removed, err := c.DeleteAllGroups(ctx)
 		if err != nil {
@@ -400,8 +399,7 @@ func runClear(ctx context.Context, group string) error {
 		return err
 	}
 	if !ok {
-		fmt.Fprintln(os.Stderr, "sbnn: cancelled")
-		return nil
+		return errCancelled
 	}
 	if err := c.DeleteGroup(ctx, group); err != nil {
 		return err
@@ -410,13 +408,26 @@ func runClear(ctx context.Context, group string) error {
 	return nil
 }
 
+// errCancelled ends a --clear that the user declined. Nothing was dropped,
+// which is not a failure, but it is not the job the caller asked for either:
+// a script that pipes an answer in, or runs into a prompt it cannot answer,
+// has to be able to tell "closed" from "left alone", and a status of 0 makes
+// the no-op invisible. Execute prints it as "sbnn: cancelled" and exits 1.
+var errCancelled = errors.New("cancelled")
+
+// stdinIsTerminal reports whether there is somebody there to answer. It is a
+// variable so a test can drive the prompt: stdin under "go test" is never a
+// terminal, and the answer to a destructive question is the thing worth
+// testing.
+var stdinIsTerminal = func() bool { return isTerminal(os.Stdin) }
+
 // askBeforeClear puts a question to the user before something is dropped. An
 // empty question means there is nothing to lose and so nothing to ask.
 // --yes skips it on purpose, and so does a stdin that is not a terminal: a
 // pipeline or a job has nobody there to answer, and blocking one on a prompt
 // would break the scripts that clear a review today.
 func askBeforeClear(question string) (bool, error) {
-	if question == "" || assumeYes || !isTerminal(os.Stdin) {
+	if question == "" || assumeYes || !stdinIsTerminal() {
 		return true, nil
 	}
 	return confirm(os.Stdin, os.Stderr, question)

@@ -1,6 +1,15 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -138,6 +147,131 @@ func TestClearGroupQuestion(t *testing.T) {
 				if !strings.Contains(got, want) {
 					t.Errorf("clearGroupQuestion(%q) = %q; want it to contain %q", tt.group, got, want)
 				}
+			}
+		})
+	}
+}
+
+// A prompt is only worth asking where somebody can answer it. os.ModeCharDevice
+// on its own does not say that: the null device is a character device, so
+// "sbnn --clear --all < /dev/null" - what a cron job, a systemd unit or a CI
+// step writes to say there is nobody here - looked like a terminal, got the
+// question, and read the EOF as "no". The three ways of handing sbnn a stdin
+// with nobody behind it have to agree.
+func TestIsTerminalOnStreamsWithNobodyBehindThem(t *testing.T) {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("opening %s: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+
+	regular, err := os.CreateTemp(t.TempDir(), "stdin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer regular.Close()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	tests := map[string]*os.File{
+		"the null device": devNull,
+		"a regular file":  regular,
+		"a pipe":          r,
+	}
+
+	for name, f := range tests {
+		t.Run(name, func(t *testing.T) {
+			if isTerminal(f) {
+				t.Errorf("isTerminal(%s) = true; want false - there is nobody to answer a prompt", name)
+			}
+		})
+	}
+}
+
+// statusServer answers the one status call runClear makes and records whether
+// anything was actually deleted.
+func statusServer(t *testing.T, groups []server.GroupSummary) (addr string, deleted *[]string) {
+	t.Helper()
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			seen = append(seen, r.URL.Path)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"removed":1}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(server.Status{App: "sbnn", Groups: groups})
+	}))
+	t.Cleanup(srv.Close)
+	return strings.TrimPrefix(srv.URL, "http://"), &seen
+}
+
+// A declined --clear drops nothing, and the caller has to be able to see
+// that: the status used to stay 0, so a script could not tell a review that
+// was closed from one that was left standing. It is now an error, printed by
+// Execute as "sbnn: cancelled".
+func TestClearCancelledIsAnError(t *testing.T) {
+	groups := []server.GroupSummary{
+		{Name: "default", Diffs: 1, Comments: 2, Unresolved: 2},
+		{Name: "api", Diffs: 1, Comments: 1, Unresolved: 1},
+	}
+
+	tests := map[string]struct {
+		answer      string
+		all         bool
+		wantErr     error
+		wantDeletes int
+	}{
+		"declining --clear --all": {answer: "n\n", all: true, wantErr: errCancelled},
+		"eof on --clear --all":    {answer: "", all: true, wantErr: errCancelled},
+		"accepting --clear --all": {answer: "y\n", all: true, wantDeletes: 1},
+		"declining one review":    {answer: "n\n", wantErr: errCancelled},
+		"accepting one review":    {answer: "y\n", wantDeletes: 1},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			host, deleted := statusServer(t, groups)
+			hostname, p, err := net.SplitHostPort(host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n, err := strconv.Atoi(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			answers, err := os.CreateTemp(t.TempDir(), "answer")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := answers.WriteString(tt.answer); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := answers.Seek(0, io.SeekStart); err != nil {
+				t.Fatal(err)
+			}
+
+			oldBind, oldPort, oldAll, oldYes, oldStdin, oldTTY := bind, port, clearAll, assumeYes, os.Stdin, stdinIsTerminal
+			t.Cleanup(func() {
+				bind, port, clearAll, assumeYes, os.Stdin, stdinIsTerminal = oldBind, oldPort, oldAll, oldYes, oldStdin, oldTTY
+			})
+			bind, port, clearAll, assumeYes = hostname, n, tt.all, false
+			os.Stdin = answers
+			stdinIsTerminal = func() bool { return true }
+
+			err = runClear(context.Background(), "default")
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("runClear = %v; want %v", err, tt.wantErr)
+			}
+			if got := len(*deleted); got != tt.wantDeletes {
+				t.Errorf("%d delete(s) sent (%v); want %d", got, *deleted, tt.wantDeletes)
 			}
 		})
 	}
