@@ -12,6 +12,7 @@ import {
 } from '../highlight'
 import { CommentForm, CommentThread } from './CommentThread'
 import { Icon } from './Icon'
+import { foldLabel } from '../foldLabel'
 
 interface Props {
   group: string
@@ -25,6 +26,11 @@ interface Props {
    * already forced open when the file carries comments) - this component
    * only renders it, it does not decide it. */
   folded: boolean
+  /** foldedByReader says the fold standing on this file is one the reader
+   * performed here, keyed by sectionKey, rather than one the sender asked
+   * for with --collapse. The two read the same on screen but have very
+   * different explanations, and only the sender's comes with a reason. */
+  foldedByReader?: boolean
   onSetFolded: (value: boolean) => void
   /** viewMode is likewise resolved by the caller (an override, or the
    * server's default); a file locked to unified ignores it. */
@@ -110,6 +116,7 @@ export function DiffFileSection({
   narrow = false,
   onChanged,
   folded,
+  foldedByReader,
   onSetFolded,
   viewMode,
   onSetViewMode,
@@ -312,7 +319,7 @@ export function DiffFileSection({
 
       {folded ? (
         <p className="empty">
-          Folded — {file.foldReason || 'the sender asked for it'} · {file.additions + file.deletions}{' '}
+          {foldLabel(foldedByReader === true, file.foldReason)} · {file.additions + file.deletions}{' '}
           changed lines
         </p>
       ) : file.isBinary ? (
