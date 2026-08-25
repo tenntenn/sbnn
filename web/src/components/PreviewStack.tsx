@@ -6,6 +6,7 @@ import { sectionKey } from '../sectionKey'
 import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
 import type { ScrollFraction } from './DiffStack'
+import { client } from '../client'
 
 // How far ahead of the visible area a section is fetched: generous enough
 // that the render is usually ready by the time the reader arrives, small
@@ -67,12 +68,19 @@ export function PreviewStack({
   // sections, every one of the code files carrying nothing but a header and
   // the line "... has no preview" - half the sections on the page, and half
   // its DOM nodes, saying nothing.
+  // An exported page has no server to read a working tree file from, so a
+  // source file has nothing to show there and stays out of the pane.
+  const hasSource = !client.isStatic
+
   const rounds = useMemo(
     () =>
       diffs
-        .map((d) => ({ diff: d, files: d.files.filter(isPreviewable) as FileDiff[] }))
+        .map((d) => ({
+          diff: d,
+          files: d.files.filter((f) => isPreviewable(f, hasSource)) as FileDiff[],
+        }))
         .filter((r) => r.files.length > 0),
-    [diffs],
+    [diffs, hasSource],
   )
 
   const order = useMemo(

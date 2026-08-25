@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { FileDiff, PreviewKind, Status } from '../types'
-import { filePath } from '../types'
+import type { FileDiff, PreviewFormat, PreviewKind, Status } from '../types'
+import { filePath, previewFormatOf } from '../types'
 import { client, type PreviewResult } from '../client'
 import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
+import { SourceView } from './SourceView'
 
 interface Props {
   group: string
@@ -20,17 +21,12 @@ interface Props {
   onUserScroll?: () => void
 }
 
-/** Format is which of sbnn's three renderers a file's preview uses. mo only
- * ever renders Markdown - it cannot show an image or a notebook at all - so
- * those two always use sbnn's own renderer regardless of the page's kind
- * toggle. */
-type Format = 'markdown' | 'image' | 'notebook' | null
-
-function formatOf(file: FileDiff): Format {
-  if (file.isMarkdown) return 'markdown'
-  if (file.isNotebook) return 'notebook'
-  if (file.isImage) return 'image'
-  return null
+/** formatOf is previewFormatOf with this page's answer to whether there is
+ * a server to read a source file from. mo only ever renders Markdown - it
+ * cannot show an image, a notebook or a .go file at all - so every other
+ * format uses sbnn's own renderer regardless of the page's kind toggle. */
+function formatOf(file: FileDiff): PreviewFormat {
+  return previewFormatOf(file, !client.isStatic)
 }
 
 // A framed preview is sized between these two: never so short that a
@@ -189,7 +185,7 @@ export function PreviewFileSection({ group, diffId, file, status, kind, active, 
   }, [imageSrc])
 
   useEffect(() => {
-    if (format !== 'markdown' && format !== 'notebook') {
+    if (format !== 'markdown' && format !== 'notebook' && format !== 'source') {
       setPreview(null)
       setError(null)
       return
@@ -201,9 +197,11 @@ export function PreviewFileSection({ group, diffId, file, status, kind, active, 
     const load =
       format === 'notebook'
         ? client.previewNotebook(group, diffId, file.id)
-        : renderHere
-          ? client.previewMarkdown(group, diffId, file.id)
-          : client.preview(group, diffId, file.id)
+        : format === 'source'
+          ? client.previewSource(group, diffId, file.id)
+          : renderHere
+            ? client.previewMarkdown(group, diffId, file.id)
+            : client.preview(group, diffId, file.id)
     load
       .then((p) => {
         if (!cancelled) setPreview(p)
@@ -391,6 +389,8 @@ export function PreviewFileSection({ group, diffId, file, status, kind, active, 
             </p>
           )}
         </div>
+      ) : preview?.kind === 'source' ? (
+        <SourceView path={filePath(file)} content={preview.content} onUserScroll={onUserScroll} />
       ) : preview?.kind === 'html' ? (
         <div
           className={format === 'notebook' ? 'notebook' : 'markdown'}

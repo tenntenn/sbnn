@@ -137,8 +137,36 @@ export function filePath(file: FileDiff): string {
   return file.newPath || file.oldPath
 }
 
+/** PreviewFormat is which of the preview pane's renderers a file uses, or
+ * null when the pane has nothing to show for it at all. */
+export type PreviewFormat = 'markdown' | 'notebook' | 'image' | 'source' | null
+
+/**
+ * previewFormatOf says how the preview pane would draw a file.
+ *
+ * The first three are the rendered formats and are decided by the flags the
+ * server sets. Everything else that is text is 'source': the file's own
+ * lines, syntax coloured. A binary that is not an image has nothing to show,
+ * and a deleted file has no new side to show - but a deleted Markdown file
+ * still answers 'markdown', because it did before this function existed and
+ * the section it produces reports the server's refusal rather than
+ * disappearing from the pane.
+ *
+ * hasSource is false where there is no server behind the page. An exported
+ * page freezes a preview only for Markdown, notebooks and images
+ * (internal/export/export.go), so a source file there would be a section
+ * that can only say it has nothing - which is what leaving it out avoids.
+ */
+export function previewFormatOf(file: FileDiff, hasSource: boolean): PreviewFormat {
+  if (file.isMarkdown) return 'markdown'
+  if (file.isNotebook) return 'notebook'
+  if (file.isImage) return 'image'
+  if (!hasSource || file.isBinary || file.status === 'deleted') return null
+  return 'source'
+}
+
 /** isPreviewable reports whether the preview pane has anything to show for
- * file, regardless of which of the three renderers it would use. */
-export function isPreviewable(file: FileDiff): boolean {
-  return file.isMarkdown || file.isImage || file.isNotebook
+ * file, regardless of which of its renderers it would use. */
+export function isPreviewable(file: FileDiff, hasSource: boolean): boolean {
+  return previewFormatOf(file, hasSource) !== null
 }

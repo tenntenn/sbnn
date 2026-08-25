@@ -3,13 +3,8 @@ import type { Comment, Diff, FileDiff, Hunk, Line, ViewMode } from '../types'
 import { filePath } from '../types'
 import { client } from '../client'
 import { wordDiff } from '../wordDiff'
-import {
-  ensureHighlightStyles,
-  highlightLine,
-  languageOf,
-  tokenClass,
-  type LanguageId,
-} from '../highlight'
+import { ensureHighlightStyles, languageOf, type LanguageId } from '../highlight'
+import { Code } from './Code'
 import { CommentForm, CommentThread } from './CommentThread'
 import { Icon } from './Icon'
 import { foldLabel } from '../foldLabel'
@@ -747,29 +742,6 @@ function SplitTable({
         ))}
       </tbody>
     </table>
-  )
-}
-
-/**
- * Code is one line of source, coloured if the file's extension is one this
- * knows. Tokens are spans - never a string of HTML - so nothing here can put
- * markup from a diff into the page.
- */
-function Code({ content, language }: { content: string; language: LanguageId | null }) {
-  const tokens = highlightLine(content, language)
-  if (tokens.length === 1 && tokens[0].kind === 'plain') return <>{content || ' '}</>
-  return (
-    <>
-      {tokens.map((token, i) =>
-        token.kind === 'plain' ? (
-          <Fragment key={i}>{token.text}</Fragment>
-        ) : (
-          <span key={i} className={tokenClass(token.kind)}>
-            {token.text}
-          </span>
-        ),
-      )}
-    </>
   )
 }
 

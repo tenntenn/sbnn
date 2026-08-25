@@ -470,16 +470,68 @@ func TestFileContentServesMarkdown(t *testing.T) {
 	}
 }
 
-func TestFileContentNeedsMarkdown(t *testing.T) {
+// A source file is served as text, the same way Markdown and a notebook
+// are. It used to be refused with 400 - a file the server had already read
+// from disk - which left the preview pane with nothing to show for a .go.
+func TestFileContentServesSource(t *testing.T) {
 	ts, _ := newTestServer(t)
 	var added AddDiffResponse
 	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: goDiff}, &added)
 	file := added.Diff.Files[0]
-	resp := getJSON(t, ts.URL+"/_/api/groups/default/diffs/"+added.Diff.ID+"/files/"+file.ID+"/content", nil)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %s, want 400 for a non Markdown file", resp.Status)
+	if file.IsMarkdown || file.IsNotebook || file.IsImage {
+		t.Fatalf("main.go should carry none of the rendered-format flags: %+v", file)
+	}
+
+	var got FileContentResponse
+	resp := getJSON(t, ts.URL+"/_/api/groups/default/diffs/"+added.Diff.ID+"/files/"+file.ID+"/content", &got)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %s, want 200 for a source file", resp.Status)
+	}
+	// The new side, rebuilt from the diff: the working tree has no main.go.
+	if got.Content != "package main\nvar x = 2\n" {
+		t.Errorf("content = %q", got.Content)
+	}
+	if got.Source != SourceReconstructed {
+		t.Errorf("source = %q, want %q", got.Source, SourceReconstructed)
 	}
 }
+
+const binaryDiff = `diff --git a/blob.bin b/blob.bin
+index 1111111..2222222 100644
+Binary files a/blob.bin and b/blob.bin differ
+`
+
+// Serving source text must not turn into serving bytes: a binary file has
+// no text preview, and a deleted one has no new side at all.
+func TestFileContentRefusesBinaryAndDeleted(t *testing.T) {
+	ts, _ := newTestServer(t)
+	for _, tt := range []struct {
+		name string
+		diff string
+	}{
+		{name: "binary", diff: binaryDiff},
+		{name: "deleted", diff: deletedGoDiff},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var added AddDiffResponse
+			postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: tt.diff}, &added)
+			file := added.Diff.Files[0]
+			resp := getJSON(t, ts.URL+"/_/api/groups/default/diffs/"+added.Diff.ID+"/files/"+file.ID+"/content", nil)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %s, want 400", resp.Status)
+			}
+		})
+	}
+}
+
+const deletedGoDiff = `diff --git a/gone.go b/gone.go
+deleted file mode 100644
+--- a/gone.go
++++ /dev/null
+@@ -1,2 +0,0 @@
+-package main
+-var x = 1
+`
 
 const notebookDiff = `diff --git a/analysis.ipynb b/analysis.ipynb
 new file mode 100644
