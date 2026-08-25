@@ -283,6 +283,9 @@ type Status struct {
 	MoAvailable bool           `json:"moAvailable"`
 	MoError     string         `json:"moError,omitempty"`
 	Groups      []GroupSummary `json:"groups"`
+	// SessionError says why the session is not being written to disk. It is
+	// empty while the session file is up to date.
+	SessionError string `json:"sessionError,omitempty"`
 }
 
 func (s *Server) status() Status {
@@ -297,6 +300,9 @@ func (s *Server) status() Status {
 	}
 	if s.proxy != nil {
 		st.MoProxyURL = s.proxy.baseURL
+	}
+	if err := s.store.PersistError(); err != nil {
+		st.SessionError = err.Error()
 	}
 	if err := s.opts.Mo.Available(); err != nil {
 		st.MoError = err.Error()

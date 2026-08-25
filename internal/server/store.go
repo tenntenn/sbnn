@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -36,6 +37,8 @@ type Store struct {
 	path   string
 	groups []*model.Group
 	seq    int
+	// persistErr is why the last write to path failed, if it did.
+	persistErr error
 }
 
 // NewStore returns a store persisting to path. An empty path disables
@@ -96,35 +99,79 @@ func (s *Store) setAside() (string, error) {
 }
 
 // persist writes the session to disk. The caller must hold the lock.
+//
+// A failure is not fatal - the server keeps serving the session it holds in
+// memory - but it must not pass unnoticed either, because everything written
+// after it is lost on the next restart. So the reason is logged and kept for
+// PersistError, which the status API reports.
 func (s *Store) persist() {
 	if s.path == "" {
 		return
 	}
+	err := s.write()
+	if err != nil {
+		// A full disk or a removed state directory keeps failing on every
+		// comment, so only the first failure of a streak is logged; the
+		// current reason is always available from PersistError.
+		if s.persistErr == nil {
+			slog.Warn("the session is not being saved", "file", s.path, "error", err)
+		}
+		s.persistErr = err
+		return
+	}
+	if s.persistErr != nil {
+		slog.Info("the session is being saved again", "file", s.path)
+		s.persistErr = nil
+	}
+}
+
+// write replaces the session file with the current session. The caller must
+// hold the lock.
+func (s *Store) write() (err error) {
 	b, err := json.Marshal(persisted{Version: persistVersion, Seq: s.seq, Groups: s.groups})
 	if err != nil {
-		return
+		return fmt.Errorf("encoding the session: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".session-*")
+	dir := filepath.Dir(s.path)
+	tmp, err := os.CreateTemp(dir, ".session-*")
 	if err != nil {
-		return
+		return fmt.Errorf("creating a temporary file in %s: %w", dir, err)
 	}
 	name := tmp.Name()
+	defer func() {
+		if err != nil {
+			os.Remove(name)
+		}
+	}()
 	if _, err := tmp.Write(b); err != nil {
 		tmp.Close()
-		os.Remove(name)
-		return
+		return fmt.Errorf("writing %s: %w", name, err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("setting the mode of %s: %w", name, err)
+	}
+	// Flush before the rename: a crash right after an unsynced rename leaves
+	// the session file in place but empty, which is worse than the old one.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("flushing %s: %w", name, err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(name)
-		return
-	}
-	if err := os.Chmod(name, 0o600); err != nil {
-		os.Remove(name)
-		return
+		return fmt.Errorf("closing %s: %w", name, err)
 	}
 	if err := os.Rename(name, s.path); err != nil {
-		os.Remove(name)
+		return fmt.Errorf("renaming %s to %s: %w", name, s.path, err)
 	}
+	return nil
+}
+
+// PersistError reports why the session was last not written to disk, or nil
+// when the session file is up to date.
+func (s *Store) PersistError() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.persistErr
 }
 
 func (s *Store) nextID(prefix string) string {
