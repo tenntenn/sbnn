@@ -243,6 +243,7 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
                   comments={fileComments}
                   onChanged={onChanged}
                   folded={folded}
+                  foldedByReader={foldOverrides.get(key) === true}
                   onSetFolded={(value) => onSetFolded(key, value)}
                   viewMode={viewMode}
                   onSetViewMode={(mode) => onSetViewMode(key, mode)}

@@ -18,6 +18,11 @@ interface Props {
    * already forced open when the file carries comments) - this component
    * only renders it, it does not decide it. */
   folded: boolean
+  /** foldedByReader says the fold standing on this file is one the reader
+   * performed here, keyed by sectionKey, rather than one the sender asked
+   * for with --collapse. The two read the same on screen but have very
+   * different explanations, and only the sender's comes with a reason. */
+  foldedByReader?: boolean
   onSetFolded: (value: boolean) => void
   /** viewMode is likewise resolved by the caller (an override, or the
    * server's default); a file locked to unified ignores it. */
@@ -57,6 +62,20 @@ function marker(kind: Line['kind']): string {
   }
 }
 
+/** foldLabel explains a fold in words the reader can check.
+ *
+ * foldReason is written by the server, for the folds it performs itself;
+ * sbnn never folds a file on its own without one. A fold the reader
+ * performed has no reason to state and is not the sender's doing, so it
+ * says whose it is instead of borrowing an explanation that is not true.
+ * The remaining case - folded, no reason, not by the reader - should not
+ * arise, and says only what is certain. */
+export function foldLabel(byReader: boolean, foldReason: string | undefined): string {
+  if (byReader) return 'Folded by you'
+  if (foldReason) return `Folded — ${foldReason}`
+  return 'Folded'
+}
+
 export function DiffFileSection({
   group,
   diff,
@@ -65,6 +84,7 @@ export function DiffFileSection({
   narrow = false,
   onChanged,
   folded,
+  foldedByReader,
   onSetFolded,
   viewMode,
   onSetViewMode,
@@ -257,7 +277,7 @@ export function DiffFileSection({
 
       {folded ? (
         <p className="empty">
-          Folded — {file.foldReason || 'the sender asked for it'} · {file.additions + file.deletions}{' '}
+          {foldLabel(foldedByReader === true, file.foldReason)} · {file.additions + file.deletions}{' '}
           changed lines
         </p>
       ) : file.isBinary ? (

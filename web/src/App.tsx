@@ -425,6 +425,7 @@ export function App() {
         folded={
           (foldOverrides.get(activeKey!) ?? Boolean(activeEntry.file.folded)) && activeComments.length === 0
         }
+        foldedByReader={foldOverrides.get(activeKey!) === true}
         onSetFolded={(value) => setFolded(activeKey!, value)}
         viewMode={viewModeOverrides.get(activeKey!) ?? viewModeDefault ?? activeEntry.file.viewMode}
         onSetViewMode={(mode) => setViewModeFor(activeKey!, mode)}
