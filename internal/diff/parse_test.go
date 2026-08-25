@@ -708,3 +708,135 @@ deleted file mode 100644
 		t.Errorf("got %q -> %q, want %q -> %q", f.OldPath, f.NewPath, "gone.txt", "")
 	}
 }
+
+// The counts a combined diff reports are read off the marker columns, and
+// there is one column per parent. Getting them wrong is not only a wrong pair
+// of numbers on the file header: the same Additions and Deletions go to the
+// sidebar, to the "%d file(s), +%d -%d" line sbnn prints, and to the record
+// the review history keeps, so a merge commit gets reviewed and then filed
+// under stats that never matched the screen. They also decide the view mode,
+// which is how a merge that only adds lines ends up in the split view.
+//
+// The counting is fixed here on its own so that a change to how a combined
+// hunk body is read has to keep them right.
+func TestParseCombinedCounts(t *testing.T) {
+	tests := []struct {
+		name      string
+		src       string
+		additions int
+		deletions int
+	}{
+		{
+			// The hunk from the issue: one line replaced, one parent
+			// each side of it.
+			name: "one line replaced",
+			src: "diff --cc a.txt\n--- a/a.txt\n+++ b/a.txt\n" +
+				"@@@ -1,2 -1,2 +1,2 @@@\n  ctx\n- x\n +y\n",
+			additions: 1,
+			deletions: 1,
+		},
+		{
+			name: "added against the second parent only",
+			src: "diff --cc a.txt\n@@@ -1,1 -1,3 +1,3 @@@\n" +
+				"  ctx\n +one\n +two\n",
+			additions: 2,
+			deletions: 0,
+		},
+		{
+			name: "removed against the first parent only",
+			src: "diff --cc a.txt\n@@@ -1,3 -1,1 +1,1 @@@\n" +
+				"  ctx\n- one\n- two\n",
+			additions: 0,
+			deletions: 2,
+		},
+		{
+			name: "changed against both parents counts once a side",
+			src: "diff --cc a.txt\n@@@ -1,2 -1,2 +1,2 @@@\n" +
+				"--gone\n++new\n  ctx\n",
+			additions: 1,
+			deletions: 1,
+		},
+		{
+			name: "three parents, marker in the last column",
+			src: "diff --cc a.txt\n@@@@ -1,1 -1,1 -1,1 +1,1 @@@@\n" +
+				"   ctx\n  +third\n---gone\n",
+			additions: 1,
+			deletions: 1,
+		},
+		{
+			name: "context is never counted",
+			src: "diff --cc a.txt\n@@@ -1,3 -1,3 +1,3 @@@\n" +
+				"  ctx\n  ctx\n  ctx\n",
+			additions: 0,
+			deletions: 0,
+		},
+		{
+			// Content that begins with a marker character sits past
+			// the columns and is not a marker.
+			name: "content beginning with a marker is not counted",
+			src: "diff --cc a.txt\n@@@ -1,2 -1,2 +1,2 @@@\n" +
+				"  - not a marker\n  + not a marker\n",
+			additions: 0,
+			deletions: 0,
+		},
+		{
+			name: "several hunks add up",
+			src: "diff --cc a.txt\n@@@ -1,2 -1,2 +1,2 @@@\n  ctx\n +a\n" +
+				"@@@ -9,2 -9,2 +9,2 @@@\n  ctx\n- b\n +c\n",
+			additions: 2,
+			deletions: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files := diff.Parse(tt.src)
+			if len(files) != 1 {
+				t.Fatalf("got %d file(s), want 1:\n%s", len(files), describe(files))
+			}
+			f := files[0]
+			if f.Additions != tt.additions || f.Deletions != tt.deletions {
+				t.Errorf("got +%d -%d, want +%d -%d", f.Additions, f.Deletions, tt.additions, tt.deletions)
+			}
+		})
+	}
+}
+
+// Each file of a combined diff is counted on its own, and the total is what
+// sbnn prints as its summary.
+func TestParseCombinedCountsPerFile(t *testing.T) {
+	src := "diff --cc a.txt\n@@@ -1,2 -1,2 +1,2 @@@\n  ctx\n +added\n" +
+		"diff --cc b.txt\n@@@ -1,2 -1,2 +1,2 @@@\n  ctx\n- removed\n"
+	files := diff.Parse(src)
+	if len(files) != 2 {
+		t.Fatalf("got %d file(s), want 2:\n%s", len(files), describe(files))
+	}
+	want := []struct{ add, del int }{{1, 0}, {0, 1}}
+	var totalAdd, totalDel int
+	for i, f := range files {
+		if f.Additions != want[i].add || f.Deletions != want[i].del {
+			t.Errorf("%s: got +%d -%d, want +%d -%d", f.NewPath, f.Additions, f.Deletions, want[i].add, want[i].del)
+		}
+		totalAdd += f.Additions
+		totalDel += f.Deletions
+	}
+	if totalAdd != 1 || totalDel != 1 {
+		t.Errorf("summary = +%d -%d, want +1 -1", totalAdd, totalDel)
+	}
+}
+
+// An addition-only merge stays in the unified view. It is the deletion count
+// that decides, so a miscounted marker column silently moves the whole file
+// into the split view.
+func TestParseCombinedAdditionsOnlyStaysUnified(t *testing.T) {
+	files := diff.Parse("diff --cc a.txt\n@@@ -1,1 -1,2 +1,2 @@@\n  ctx\n +added\n")
+	if len(files) != 1 {
+		t.Fatalf("got %d file(s), want 1:\n%s", len(files), describe(files))
+	}
+	f := files[0]
+	if f.Additions != 1 || f.Deletions != 0 {
+		t.Fatalf("got +%d -%d, want +1 -0", f.Additions, f.Deletions)
+	}
+	if f.ViewMode != model.ViewUnified {
+		t.Errorf("ViewMode = %q, want %q", f.ViewMode, model.ViewUnified)
+	}
+}
