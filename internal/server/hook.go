@@ -20,12 +20,16 @@ const hookTimeout = 10 * time.Minute
 
 // ReviewEvent is what a hook is told about a submitted review.
 type ReviewEvent struct {
-	Group      string           `json:"group"`
-	URL        string           `json:"url"`
-	ReviewedAt time.Time        `json:"reviewedAt"`
-	Note       string           `json:"note,omitempty"`
-	Comments   []*model.Comment `json:"comments"`
-	Prompt     string           `json:"prompt"`
+	Group      string    `json:"group"`
+	URL        string    `json:"url"`
+	ReviewedAt time.Time `json:"reviewedAt"`
+	Note       string    `json:"note,omitempty"`
+	// Verdict is what the reviewer decided about the change as a whole. It
+	// is here so that a hook can act on the decision without counting
+	// comments or reading the prose in Prompt.
+	Verdict  model.Verdict    `json:"verdict"`
+	Comments []*model.Comment `json:"comments"`
+	Prompt   string           `json:"prompt"`
 }
 
 // runHooks reacts to a submitted review.
@@ -39,6 +43,7 @@ func (s *Server) runHooks(g *model.Group) {
 		URL:        GroupURL(s.BaseURL(), g.Name),
 		ReviewedAt: g.ReviewedAt,
 		Note:       g.ReviewNote,
+		Verdict:    g.ReviewVerdict,
 		Comments:   openComments(g),
 		Prompt:     Prompt(g, PromptOptions{}),
 	}
@@ -69,6 +74,31 @@ func (s *Server) runHook(h *model.Hook, event ReviewEvent) {
 	}
 }
 
+// hookEnv is what a command hook is told about the review, besides the prompt
+// on its stdin.
+//
+// SBNN_VERDICT carries the verdict exactly as the JSON event spells it, and
+// stays empty for a review that has none - a hook that wants a default picks
+// its own rather than being handed an invented one. SBNN_BLOCKING is the
+// answer to the question every hook would otherwise re-implement: may the
+// change go ahead?
+func (s *Server) hookEnv(event ReviewEvent) []string {
+	blocking := "0"
+	if event.Verdict.Blocking() {
+		blocking = "1"
+	}
+	return []string{
+		"SBNN_GROUP=" + event.Group,
+		"SBNN_URL=" + event.URL,
+		"SBNN_SERVER=" + s.BaseURL(),
+		"SBNN_PORT=" + strconv.Itoa(s.opts.Port),
+		"SBNN_COMMENTS=" + strconv.Itoa(len(event.Comments)),
+		"SBNN_REVIEW_NOTE=" + event.Note,
+		"SBNN_VERDICT=" + string(event.Verdict),
+		"SBNN_BLOCKING=" + blocking,
+	}
+}
+
 // runHookCommand runs the command through the shell, with the review prompt
 // on its stdin and the details in the environment.
 func (s *Server) runHookCommand(ctx context.Context, h *model.Hook, event ReviewEvent) {
@@ -78,14 +108,7 @@ func (s *Server) runHookCommand(ctx context.Context, h *model.Hook, event Review
 	}
 	cmd := exec.CommandContext(ctx, shell, flag, h.Command)
 	cmd.Stdin = bytes.NewReader([]byte(event.Prompt))
-	cmd.Env = append(cmd.Environ(),
-		"SBNN_GROUP="+event.Group,
-		"SBNN_URL="+event.URL,
-		"SBNN_SERVER="+s.BaseURL(),
-		"SBNN_PORT="+strconv.Itoa(s.opts.Port),
-		"SBNN_COMMENTS="+strconv.Itoa(len(event.Comments)),
-		"SBNN_REVIEW_NOTE="+event.Note,
-	)
+	cmd.Env = append(cmd.Environ(), s.hookEnv(event)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		slog.Warn("review hook failed", "hook", h.ID, "command", h.Command, "error", err,
