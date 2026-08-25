@@ -27,6 +27,13 @@ interface Props {
 
 type Side = 'new' | 'old'
 
+/** GUTTER_FOCUS is the ring a focused line number wears: the one the
+ * buttons wear, drawn inside the cell so the narrow gutter keeps it. */
+const GUTTER_FOCUS = {
+  outline: 'var(--border-width-marker) solid var(--accent-border)',
+  outlineOffset: 'calc(var(--border-width-marker) * -1)',
+}
+
 interface Selection {
   side: Side
   start: number
@@ -309,6 +316,66 @@ function isSelected(selection: Selection | null, side: Side, line: number): bool
   )
 }
 
+interface GutterProps {
+  side: Side
+  /** line is the number shown in the gutter. Zero or less means this side
+   * has no line on this row - a cell like that is inert, and stays out of
+   * the tab order. */
+  line: number
+  className: string
+  onSelect: (side: Side, line: number, extend: boolean) => void
+  onSelectLine: (side: Side, line: number, extend: boolean) => void
+  onDragOver: (side: Side, line: number) => void
+}
+
+/**
+ * GutterCell is one line number, and the way into a comment on that line.
+ *
+ * The gutter is where a comment starts, so it has to answer to the keyboard
+ * as well as to the pointer: it takes a stop in the tab order, says what it
+ * is and which line it is on, and Enter or Space picks the line the way a
+ * click on it does. Shift held down extends the range instead of starting a
+ * new one, which is what shift-clicking already did.
+ *
+ * It stays a <td>. A <button> in its place would take the cell out of the
+ * row and the diff would lose its columns; the role and the key handling
+ * are what a button would have given it anyway.
+ *
+ * The focus ring is drawn from state rather than from a stylesheet rule so
+ * that it can live in this file - :focus-visible would need styles.css,
+ * which other work is sitting on. It follows focus, so it shows for a
+ * pointer press too; the ring is the same one the buttons use.
+ */
+function GutterCell({ side, line, className, onSelect, onSelectLine, onDragOver }: GutterProps) {
+  const [focused, setFocused] = useState(false)
+  // This side has no line on this row, so there is nothing to comment on
+  // and nothing to stop at.
+  if (line <= 0) return <td className={className} />
+  return (
+    <td
+      className={className}
+      role="button"
+      tabIndex={0}
+      aria-label={`Comment on ${side} line ${line}`}
+      style={focused ? GUTTER_FOCUS : undefined}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      onPointerDown={(ev) => onSelect(side, line, ev.shiftKey)}
+      onPointerEnter={() => onDragOver(side, line)}
+      onKeyDown={(ev) => {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return
+        // Space scrolls the page unless something stops it, and a keyboard
+        // pick is never a drag, so this goes the way a click on the line
+        // goes: pick the line and open the draft straight away.
+        ev.preventDefault()
+        onSelectLine(side, line, ev.shiftKey)
+      }}
+    >
+      {line}
+    </td>
+  )
+}
+
 function UnifiedTable({ hunks, selection, onSelect, onSelectLine, onDragOver, renderExtras }: TableProps) {
   return (
     <table className="diff-table unified">
@@ -348,20 +415,22 @@ function UnifiedTable({ hunks, selection, onSelect, onSelectLine, onDragOver, re
               return (
                 <Fragment key={li}>
                   <tr className={`line ${line.kind}${selected ? ' selected' : ''}`}>
-                    <td
+                    <GutterCell
+                      side="old"
+                      line={line.oldNumber}
                       className="num clickable"
-                      onPointerDown={(ev) => onSelect('old', line.oldNumber, ev.shiftKey)}
-                      onPointerEnter={() => onDragOver('old', line.oldNumber)}
-                    >
-                      {line.oldNumber > 0 ? line.oldNumber : ''}
-                    </td>
-                    <td
+                      onSelect={onSelect}
+                      onSelectLine={onSelectLine}
+                      onDragOver={onDragOver}
+                    />
+                    <GutterCell
+                      side="new"
+                      line={line.newNumber}
                       className="num clickable"
-                      onPointerDown={(ev) => onSelect('new', line.newNumber, ev.shiftKey)}
-                      onPointerEnter={() => onDragOver('new', line.newNumber)}
-                    >
-                      {line.newNumber > 0 ? line.newNumber : ''}
-                    </td>
+                      onSelect={onSelect}
+                      onSelectLine={onSelectLine}
+                      onDragOver={onDragOver}
+                    />
                     <td className="marker">{marker(line.kind)}</td>
                     <td className="code" onClick={(ev) => onSelectLine(side, num, ev.shiftKey)}>
                       {line.content || ' '}
@@ -445,13 +514,14 @@ function SplitTable({ hunks, selection, onSelect, onSelectLine, onDragOver, rend
               return (
                 <Fragment key={ri}>
                   <tr className="line">
-                    <td
+                    <GutterCell
+                      side="old"
+                      line={row.left?.oldNumber ?? -1}
                       className={`num clickable${isSelected(selection, 'old', row.left?.oldNumber ?? -1) ? ' selected' : ''}`}
-                      onPointerDown={(ev) => row.left && onSelect('old', row.left.oldNumber, ev.shiftKey)}
-                      onPointerEnter={() => row.left && onDragOver('old', row.left.oldNumber)}
-                    >
-                      {row.left && row.left.oldNumber > 0 ? row.left.oldNumber : ''}
-                    </td>
+                      onSelect={onSelect}
+                      onSelectLine={onSelectLine}
+                      onDragOver={onDragOver}
+                    />
                     <td
                       className={`code side ${row.left ? row.left.kind : 'empty'}${
                         isSelected(selection, 'old', row.left?.oldNumber ?? -1) ? ' selected' : ''
@@ -460,13 +530,14 @@ function SplitTable({ hunks, selection, onSelect, onSelectLine, onDragOver, rend
                     >
                       {row.left ? renderSegments(row.left.content, oldSegments) : ''}
                     </td>
-                    <td
+                    <GutterCell
+                      side="new"
+                      line={row.right?.newNumber ?? -1}
                       className={`num clickable${isSelected(selection, 'new', row.right?.newNumber ?? -1) ? ' selected' : ''}`}
-                      onPointerDown={(ev) => row.right && onSelect('new', row.right.newNumber, ev.shiftKey)}
-                      onPointerEnter={() => row.right && onDragOver('new', row.right.newNumber)}
-                    >
-                      {row.right && row.right.newNumber > 0 ? row.right.newNumber : ''}
-                    </td>
+                      onSelect={onSelect}
+                      onSelectLine={onSelectLine}
+                      onDragOver={onDragOver}
+                    />
                     <td
                       className={`code side ${row.right ? row.right.kind : 'empty'}${
                         isSelected(selection, 'new', row.right?.newNumber ?? -1) ? ' selected' : ''
