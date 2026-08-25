@@ -401,15 +401,21 @@ func waitForDown(ctx context.Context, c *client.Client, timeout time.Duration) e
 
 // readStdin reads the diff piped into sbnn. A terminal on stdin means the user
 // only wants to open or manage the server, so it reads nothing.
-func readStdin() (string, error) {
-	fi, err := os.Stdin.Stat()
+func readStdin() (string, error) { return readDiff(os.Stdin) }
+
+// readDiff reads the diff from f. A character device is the legitimate signal
+// that nothing was piped in; a stat that fails is a different thing and is
+// reported, because answering "no diff" for it would let sbnn print a review
+// URL and exit 0 without ever sending the diff it was handed.
+func readDiff(f *os.File) (string, error) {
+	fi, err := f.Stat()
 	if err != nil {
-		return "", nil
+		return "", fmt.Errorf("cannot inspect stdin: %w", err)
 	}
 	if fi.Mode()&os.ModeCharDevice != 0 {
 		return "", nil
 	}
-	data, err := io.ReadAll(io.LimitReader(os.Stdin, maxDiffSize+1))
+	data, err := io.ReadAll(io.LimitReader(f, maxDiffSize+1))
 	if err != nil {
 		return "", fmt.Errorf("cannot read the diff from stdin: %w", err)
 	}
