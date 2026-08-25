@@ -15,7 +15,9 @@ import (
 	"io"
 	"os"
 	"path"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -439,6 +441,11 @@ func tally(counts map[string]int) []Count {
 	return out
 }
 
+// daysRE matches the "7d" form whole, so that "7days" or "7d3h" - which
+// plainly mean something other than seven days - are refused rather than
+// silently read as the part before the first "d".
+var daysRE = regexp.MustCompile(`^([0-9]+)d$`)
+
 // ParseSince reads "7d", "36h", "90m" or an RFC3339 date as a starting
 // point. A date without a zone is read in the local zone.
 func ParseSince(s string, now time.Time) (time.Time, error) {
@@ -446,9 +453,8 @@ func ParseSince(s string, now time.Time) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, nil
 	}
-	if strings.HasSuffix(s, "d") {
-		var days int
-		if _, err := fmt.Sscanf(s, "%dd", &days); err == nil && days > 0 {
+	if m := daysRE.FindStringSubmatch(s); m != nil {
+		if days, err := strconv.Atoi(m[1]); err == nil && days > 0 {
 			return now.AddDate(0, 0, -days), nil
 		}
 	}
