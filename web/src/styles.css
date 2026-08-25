@@ -740,8 +740,6 @@ body.resizing iframe {
 
 .diff-title .disclosure {
   color: var(--fg-muted);
-  flex: none;
-  display: flex;
 }
 
 .path {
@@ -1857,8 +1855,19 @@ a {
 .diff-round-title.as-button:hover {
   color: var(--fg);
 }
+/* The box holds an .icon, so it is sized from the glyph rather than from the
+   text beside it: 0.8em against a 12px parent came to 9.6px, and the 14px
+   chevron it holds overhung its allotment by 4.4px into the title, sitting
+   2.5px above the label's centre because a plain box aligns on the baseline.
+   One rule for both places the component appears, centring the glyph in a
+   box that is --space-xl on a side - wider than .icon at 16px and .icon.sm
+   at 14px, so neither overhangs. */
 .disclosure {
-  width: 0.8em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-xl);
+  height: var(--space-xl);
   flex: none;
 }
 .diff-tabs {
