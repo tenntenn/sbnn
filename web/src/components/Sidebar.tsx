@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState, type RefObject } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties, type RefObject } from 'react'
 import type { Comment, Diff, FileDiff, Status } from '../types'
 import { filePath } from '../types'
 import { client } from '../client'
-import { readSetting, writeSetting } from '../storage'
+import { readEnumSetting, writeSetting } from '../storage'
 import { Icon } from './Icon'
 import { sectionKey } from '../sectionKey'
 import { MAX_SCANNED_LINES, SEARCH_DEBOUNCE_MS, matchSummary, searchDiffs } from '../search'
@@ -11,6 +11,35 @@ import { MAX_SCANNED_LINES, SEARCH_DEBOUNCE_MS, matchSummary, searchDiffs } from
 type Layout = 'list' | 'tabs'
 
 const LAYOUT_KEY = 'sbnn.sidebar.layout'
+
+// A tab is two controls, not one: picking the round, and dropping it. They
+// are siblings because a button may not hold another button - nested that
+// way the remove control was invalid markup and no keyboard could reach it.
+// The wrapper keeps the .diff-tab box, and these hand the buttons back the
+// padding and the chrome they used to inherit from it. Inline rather than in
+// styles.css, which several other changes are sitting on.
+const TAB_BOX: CSSProperties = { padding: '0 var(--space-lg) 0 0' }
+
+const TAB_BODY: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-sm)',
+  padding: 'var(--space-xs) 0 var(--space-xs) var(--space-lg)',
+  margin: 0,
+  border: 0,
+  background: 'transparent',
+  color: 'inherit',
+  font: 'inherit',
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+}
+
+const TAB_REMOVE: CSSProperties = {
+  border: 0,
+  background: 'transparent',
+  font: 'inherit',
+  cursor: 'pointer',
+}
 
 interface Props {
   /** width in pixels; 0 collapses the file list out of the way and null lets
@@ -59,8 +88,11 @@ export function Sidebar({
   // under them. A round can be shut, and the whole list can be turned into
   // tabs, which shows one round at a time.
   const [layout, setLayout] = useState<Layout>(
-    () => (readSetting(LAYOUT_KEY) === 'tabs' ? 'tabs' : 'list'),
+    () => readEnumSetting<Layout>(LAYOUT_KEY, ['list', 'tabs'], 'list'),
   )
+  // Which rounds are shut is about this review rather than about this reader,
+  // so it is deliberately not remembered across a reload - see the rule in
+  // App.tsx.
   const [shutRounds, setShutRounds] = useState<Set<string>>(() => new Set())
   const [tab, setTab] = useState<string | null>(null)
 
@@ -226,39 +258,46 @@ export function Sidebar({
       {layout === 'tabs' && diffs.length > 1 && (
         <div className="diff-tabs" role="tablist">
           {tabbed.map((diff) => (
-            <button
+            <div
               key={diff.id}
-              role="tab"
-              aria-selected={diff.id === activeTab}
               className={`diff-tab${diff.id === activeTab ? ' active' : ''}`}
-              title={new Date(diff.createdAt).toLocaleString()}
-              onClick={() => {
-                setTab(diff.id)
-                const first = shown(diff)[0]
-                if (first) onSelect(diff.id, first.id)
-              }}
+              style={TAB_BOX}
             >
-              {diff.title}
-              {searching && tabbed.length > 1 && (
-                <span className="hint" title="files matching in this round">
-                  {shown(diff).length}
-                </span>
-              )}
-              {roundComments(diff) > 0 && <span className="badge sm warn">{roundComments(diff)}</span>}
+              <button type="button"
+                role="tab"
+                aria-selected={diff.id === activeTab}
+                title={new Date(diff.createdAt).toLocaleString()}
+                style={TAB_BODY}
+                onClick={() => {
+                  setTab(diff.id)
+                  const first = shown(diff)[0]
+                  if (first) onSelect(diff.id, first.id)
+                }}
+              >
+                {diff.title}
+                {searching && tabbed.length > 1 && (
+                  <span className="hint" title="files matching in this round">
+                    {shown(diff).length}
+                  </span>
+                )}
+                {roundComments(diff) > 0 && (
+                  <span className="badge sm warn">{roundComments(diff)}</span>
+                )}
+              </button>
               {!client.isStatic && diff.id === activeTab && (
-                <span
+                <button type="button"
                   className="tab-remove"
-                  role="button"
+                  style={TAB_REMOVE}
+                  aria-label="Remove this round"
                   title="Remove this round"
-                  onClick={(ev) => {
-                    ev.stopPropagation()
+                  onClick={() => {
                     void client.deleteDiff(group, diff.id).then(onChanged)
                   }}
                 >
                   <Icon name="close" small />
-                </span>
+                </button>
               )}
-            </button>
+            </div>
           ))}
         </div>
       )}
