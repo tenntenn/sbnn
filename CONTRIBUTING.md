@@ -6,11 +6,11 @@ from reading the code.
 
 ## What you need
 
-- **The Go toolchain `go.mod` asks for**, which is `go 1.24.0`. Your installed
+- **The Go toolchain `go.mod` asks for**, which is `go 1.27.0`. Your installed
   Go does not have to be that new: since Go 1.21 the default `GOTOOLCHAIN=auto`
   downloads the toolchain a module requires. It stops only under
   `GOTOOLCHAIN=local`, or on Go 1.20 and earlier, and the error names both
-  versions — `go: go.mod requires go >= 1.24.0 (running go 1.22.0;
+  versions — `go: go.mod requires go >= 1.27.0 (running go 1.24.7;
   GOTOOLCHAIN=local)` — so upgrade to the version it prints.
 - **[aqua](https://aquaproj.github.io/).** Run `aqua install` in the repository
   root to get the pinned tools — `task` and `tagpr`, at the versions in
@@ -24,16 +24,18 @@ from reading the code.
 ```console
 $ task build     # pnpm build in web/, then go build ./...
 $ task test      # go test ./...
-$ task lint      # go vet, a gofmt check, and go mod tidy with no diff
+$ task lint      # go vet, a gofmt check, go fix -diff, and go mod tidy with no diff
 $ task dev       # sbnn in the foreground plus the Vite dev server
 ```
 
 **Run `task lint` and `task test` before you push, and treat that as your job
 rather than a checker's.** `task lint` is `go vet ./...`, a `gofmt -l` check
-that fails on any unformatted file, then `go mod tidy` followed by
-`git diff --exit-code go.mod go.sum` — so it also catches a dependency added
-without tidying. Unformatted code that reaches review costs someone else a
-round trip.
+that fails on any unformatted file, `go fix -diff ./...`, then `go mod tidy`
+followed by `git diff --exit-code go.mod go.sum` — so it also catches a
+dependency added without tidying. `go fix -diff` prints the rewrite the
+standard library has since given a better spelling for rather than applying
+it, and exits non-zero when there is one; run `go fix ./...` to take the
+patch. Unformatted code that reaches review costs someone else a round trip.
 
 ## If you touch `web/src`, rebuild `web/dist`
 
