@@ -8,6 +8,7 @@
 // fixed, which is the signal to delete the annotation. The value measured
 // when the test was written is in the comment above it.
 import { test, expect, type Page } from '@playwright/test'
+import { pathToFileURL } from 'node:url'
 import { handoff } from './harness'
 
 /** True in the two projects that run at 390x844. */
@@ -188,5 +189,77 @@ test.describe('rendered geometry', () => {
     expect(colours.selected).not.toBeNull()
     expect(colours.hover).not.toBeNull()
     expect(colours.hover, 'hover background equals selected background').not.toBe(colours.selected)
+  })
+
+  // A guard rather than a pinned defect: this holds in the shipped bundle
+  // today, and the point of the harness is that it stops holding loudly.
+  //
+  // It is the half of #79 that does work. Which file is on screen is said
+  // with a background, so a row that is the current file must not be painted
+  // like a row that is not - and it is read through the same settling wait,
+  // because the selected row is transitioning towards its background from
+  // the moment it is clicked. Take the wait away and the two colours differ
+  // by however far along the transition is, which is what let the assertion
+  // above pass while the bundle painted both states the same.
+  test('the selected file is painted differently from an unselected one', async ({ page }) => {
+    await open(page)
+    await showFiles(page)
+    const items = page.locator('.file-item')
+    expect(await items.count()).toBeGreaterThan(1)
+
+    await items.nth(0).click()
+    // On the narrow layout, choosing a file switches to the diff tab and
+    // takes the list off screen; ask for it back before measuring it.
+    await showFiles(page)
+    await expect(page.locator('.file-item.active')).toHaveCount(1)
+    // Park the pointer somewhere that is not a row, so nothing measured
+    // here is carrying a hover state as well.
+    await page.mouse.move(0, 0)
+    await settled(page, '.file-item')
+
+    const colours = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.file-item')] as HTMLElement[]
+      const active = rows.find((r) => r.classList.contains('active')) ?? null
+      const plain = rows.find((r) => !r.classList.contains('active')) ?? null
+      return {
+        selected: active ? getComputedStyle(active).backgroundColor : null,
+        plain: plain ? getComputedStyle(plain).backgroundColor : null,
+      }
+    })
+    expect(colours.selected).not.toBeNull()
+    expect(colours.plain).not.toBeNull()
+    expect(colours.selected, 'the selected row is painted like every other row')
+      .not.toBe(colours.plain)
+  })
+
+  // A guard rather than a pinned defect. `sbnn export` writes one file to be
+  // read from disk or handed to someone; a page that reaches for a font, a
+  // script or an image on some host is a page that renders differently
+  // offline and tells that host who opened the review. Measured as request
+  // count rather than by reading the markup, because a data: URI, an inline
+  // <style> and a CDN link all look alike in the source and only one of them
+  // goes out.
+  test('the exported page contacts no network host (#55)', async ({ page }) => {
+    const external: string[] = []
+    page.on('request', (r) => {
+      if (!r.url().startsWith('file://') && !r.url().startsWith('data:')) external.push(r.url())
+    })
+    await page.goto(pathToFileURL(handoff().exportPath).href, { waitUntil: 'domcontentloaded' })
+    await page.locator('.diff-table').first().waitFor({ state: 'visible' })
+    // The page is static, so once the table is up nothing else is coming;
+    // give a late request a moment to show up anyway.
+    await page.waitForTimeout(500)
+
+    // A page that rendered nothing would also make no requests, so say what
+    // was on screen while the count was taken. The narrow layout shows one
+    // file at a time (8 rows, 90 nodes); the wide one shows all seven tables
+    // (55 rows, 617 nodes).
+    const shown = await page.evaluate(() => ({
+      nodes: document.querySelectorAll('*').length,
+      rows: document.querySelectorAll('.diff-table tr').length,
+    }))
+    expect(shown.rows, 'diff rows in the exported page').toBeGreaterThan(5)
+    expect(shown.nodes, 'DOM nodes in the exported page').toBeGreaterThan(50)
+    expect(external, 'requests the exported page made off the local file').toEqual([])
   })
 })
