@@ -1,0 +1,17 @@
+{
+  "doc": "IncludeResolved keeps a resolved comment and marks it as such, which is the only place the status line appears.",
+  "options": {"includeResolved": true},
+  "group": {
+    "name": "api",
+    "reviewedAt": "2026-03-04T05:06:07Z",
+    "reviewVerdict": "changes-requested",
+    "diffs": [{"id": "d1", "title": "first"}],
+    "comments": [
+      {"id": "c1", "diffId": "d1", "path": "main.go", "side": "new",
+       "startLine": 4, "endLine": 4, "body": "done", "snippet": "var x = 1",
+       "resolved": true},
+      {"id": "c2", "diffId": "d1", "path": "main.go", "side": "new",
+       "startLine": 9, "endLine": 9, "body": "still open", "snippet": "var y = 2"}
+    ]
+  }
+}

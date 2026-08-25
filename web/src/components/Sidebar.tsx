@@ -1,31 +1,44 @@
-import { useEffect, useState, type RefObject } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties, type RefObject } from 'react'
 import type { Comment, Diff, FileDiff, Status } from '../types'
 import { filePath } from '../types'
 import { client } from '../client'
-import { readSetting, writeSetting } from '../storage'
+import { readEnumSetting, writeSetting } from '../storage'
 import { Icon } from './Icon'
 import { sectionKey } from '../sectionKey'
+import { MAX_SCANNED_LINES, SEARCH_DEBOUNCE_MS, matchSummary, searchDiffs } from '../search'
 
 /** Layout is how the rounds are shown: stacked, or one tab at a time. */
 type Layout = 'list' | 'tabs'
 
 const LAYOUT_KEY = 'sbnn.sidebar.layout'
 
-/**
- * matchesPath reports whether a path answers a search.
- *
- * Every whitespace-separated term has to appear somewhere in the path,
- * ignoring case - so "server go" and "internal/server" both find
- * internal/server/server.go. Nothing turns up that does not contain what
- * was typed. A looser match (the letters in order, anywhere)
- * would find more, and would also find things the reader did not ask for,
- * which in a list you are scanning is worse than finding nothing.
- */
-export function matchesPath(path: string, query: string): boolean {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
-  if (terms.length === 0) return true
-  const haystack = path.toLowerCase()
-  return terms.every((term) => haystack.includes(term))
+// A tab is two controls, not one: picking the round, and dropping it. They
+// are siblings because a button may not hold another button - nested that
+// way the remove control was invalid markup and no keyboard could reach it.
+// The wrapper keeps the .diff-tab box, and these hand the buttons back the
+// padding and the chrome they used to inherit from it. Inline rather than in
+// styles.css, which several other changes are sitting on.
+const TAB_BOX: CSSProperties = { padding: '0 var(--space-lg) 0 0' }
+
+const TAB_BODY: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-sm)',
+  padding: 'var(--space-xs) 0 var(--space-xs) var(--space-lg)',
+  margin: 0,
+  border: 0,
+  background: 'transparent',
+  color: 'inherit',
+  font: 'inherit',
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+}
+
+const TAB_REMOVE: CSSProperties = {
+  border: 0,
+  background: 'transparent',
+  font: 'inherit',
+  cursor: 'pointer',
 }
 
 interface Props {
@@ -43,7 +56,8 @@ interface Props {
   activeDiffId: string | null
   onSelect: (diffId: string, fileId: string) => void
   onChanged: () => void
-  /** query narrows the list to the paths that contain it. */
+  /** query narrows the list to the files that contain it, by path or by
+   * what the hunks say. */
   query: string
   onQuery: (query: string) => void
   searchRef?: RefObject<HTMLInputElement | null>
@@ -74,8 +88,11 @@ export function Sidebar({
   // under them. A round can be shut, and the whole list can be turned into
   // tabs, which shows one round at a time.
   const [layout, setLayout] = useState<Layout>(
-    () => (readSetting(LAYOUT_KEY) === 'tabs' ? 'tabs' : 'list'),
+    () => readEnumSetting<Layout>(LAYOUT_KEY, ['list', 'tabs'], 'list'),
   )
+  // Which rounds are shut is about this review rather than about this reader,
+  // so it is deliberately not remembered across a reload - see the rule in
+  // App.tsx.
   const [shutRounds, setShutRounds] = useState<Set<string>>(() => new Set())
   const [tab, setTab] = useState<string | null>(null)
 
@@ -83,11 +100,41 @@ export function Sidebar({
     writeSetting(LAYOUT_KEY, layout)
   }, [layout])
 
-  const shown = (diff: Diff): FileDiff[] => diff.files.filter((f) => matchesPath(filePath(f), query))
-  const total = diffs.reduce((n, d) => n + d.files.length, 0)
-  const found = diffs.reduce((n, d) => n + shown(d).length, 0)
+  // The box shows every keystroke; the search waits for the reader to stop.
+  // Clearing is not typing, so it is answered at once - a reader who wants
+  // the whole list back should not watch it arrive a tenth of a second late.
+  const [settled, setSettled] = useState(query)
+  useEffect(() => {
+    if (query === '') {
+      setSettled('')
+      return
+    }
+    const timer = window.setTimeout(() => setSettled(query), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [query])
 
-  const searching = query !== ''
+  // Same query, same rounds, same answer: the walk over every hunk line
+  // happens once, not on each render of the list it feeds.
+  const results = useMemo(() => searchDiffs(diffs, settled), [diffs, settled])
+
+  const shownByDiff = useMemo(() => {
+    const byDiff = new Map<string, FileDiff[]>()
+    for (const diff of diffs) {
+      byDiff.set(
+        diff.id,
+        results.active
+          ? diff.files.filter((f) => results.matches.has(sectionKey(diff.id, f.id)))
+          : diff.files,
+      )
+    }
+    return byDiff
+  }, [diffs, results])
+
+  const shown = (diff: Diff): FileDiff[] => shownByDiff.get(diff.id) ?? []
+  const total = diffs.reduce((n, d) => n + d.files.length, 0)
+  const found = results.active ? results.files : total
+
+  const searching = results.active
 
   // A search is about the whole review, not about one round of it, so the
   // tabs are searched too: a round with nothing matching drops out of the
@@ -124,13 +171,31 @@ export function Sidebar({
       return next
     })
 
-  // Enter takes you to the first path still standing, which is the whole
-  // point of typing into a list.
+  // Going to a file is the parent's business - it owns which pane is up and
+  // where the stack is scrolled. The scrollIntoView afterwards is for the
+  // section the parent just mounted: on a match found in the content the
+  // reader asked to be taken to a specific file, and the node may not have
+  // existed when the click was handled.
+  const jumpTo = (diffId: string, fileId: string) => {
+    onSelect(diffId, fileId)
+    const key = sectionKey(diffId, fileId)
+    window.setTimeout(() => {
+      document.getElementById(key)?.scrollIntoView({ block: 'start' })
+    }, 50)
+  }
+
+  // Enter takes you to the first file still standing, which is the whole
+  // point of typing into a list. It answers what is in the box now, not what
+  // the debounce has caught up with, so a fast typist is not sent to the
+  // wrong file.
   const openFirst = () => {
+    const now = settled === query ? results : searchDiffs(diffs, query)
     for (const diff of diffs) {
-      const first = shown(diff)[0]
+      const first = now.active
+        ? diff.files.find((f) => now.matches.has(sectionKey(diff.id, f.id)))
+        : diff.files[0]
       if (first) {
-        onSelect(diff.id, first.id)
+        jumpTo(diff.id, first.id)
         return
       }
     }
@@ -152,8 +217,8 @@ export function Sidebar({
             type="search"
             className="file-search-input"
             value={query}
-            placeholder="Filter paths ( / )"
-            aria-label="Filter files by path"
+            placeholder="Search paths and lines ( / )"
+            aria-label="Search files by path and by what the diff lines say"
             onChange={(ev) => onQuery(ev.target.value)}
             onKeyDown={(ev) => {
               if (ev.key === 'Escape') {
@@ -163,9 +228,10 @@ export function Sidebar({
               if (ev.key === 'Enter') openFirst()
             }}
           />
-          {query !== '' && (
+          {searching && (
             <span className="hint">
               {found} of {total}
+              {results.lines > 0 && `, ${results.lines} line${results.lines === 1 ? '' : 's'}`}
             </span>
           )}
           {diffs.length > 1 && (
@@ -192,44 +258,59 @@ export function Sidebar({
       {layout === 'tabs' && diffs.length > 1 && (
         <div className="diff-tabs" role="tablist">
           {tabbed.map((diff) => (
-            <button
+            <div
               key={diff.id}
-              role="tab"
-              aria-selected={diff.id === activeTab}
               className={`diff-tab${diff.id === activeTab ? ' active' : ''}`}
-              title={new Date(diff.createdAt).toLocaleString()}
-              onClick={() => {
-                setTab(diff.id)
-                const first = shown(diff)[0]
-                if (first) onSelect(diff.id, first.id)
-              }}
+              style={TAB_BOX}
             >
-              {diff.title}
-              {searching && tabbed.length > 1 && (
-                <span className="hint" title="paths matching in this round">
-                  {shown(diff).length}
-                </span>
-              )}
-              {roundComments(diff) > 0 && <span className="badge sm warn">{roundComments(diff)}</span>}
+              <button type="button"
+                role="tab"
+                aria-selected={diff.id === activeTab}
+                title={new Date(diff.createdAt).toLocaleString()}
+                style={TAB_BODY}
+                onClick={() => {
+                  setTab(diff.id)
+                  const first = shown(diff)[0]
+                  if (first) onSelect(diff.id, first.id)
+                }}
+              >
+                {diff.title}
+                {searching && tabbed.length > 1 && (
+                  <span className="hint" title="files matching in this round">
+                    {shown(diff).length}
+                  </span>
+                )}
+                {roundComments(diff) > 0 && (
+                  <span className="badge sm warn">{roundComments(diff)}</span>
+                )}
+              </button>
               {!client.isStatic && diff.id === activeTab && (
-                <span
+                <button type="button"
                   className="tab-remove"
-                  role="button"
+                  style={TAB_REMOVE}
+                  aria-label="Remove this round"
                   title="Remove this round"
-                  onClick={(ev) => {
-                    ev.stopPropagation()
-                    void client.deleteDiff(group, diff.id).then(onChanged)
+                  onClick={() => {
+                    if (!window.confirm(removeRoundQuestion(diff.title, roundSize(comments, diff.id)))) return
+                    void client.deleteDiff(group, diff.id).then(onChanged, reportRemoveFailure(diff.title))
                   }}
                 >
                   <Icon name="close" small />
-                </span>
+                </button>
               )}
-            </button>
+            </div>
           ))}
         </div>
       )}
 
-      {searching && found === 0 && <p className="empty">No path contains that.</p>}
+      {results.truncated && (
+        <p className="empty">
+          Stopped reading lines after {MAX_SCANNED_LINES.toLocaleString()}; paths are still
+          searched in full. Narrow the search to see the rest.
+        </p>
+      )}
+
+      {searching && found === 0 && <p className="empty">Nothing matches that.</p>}
 
       {diffs.map((diff) => (
         <div className="diff-round" key={diff.id} hidden={!visible(diff)}>
@@ -260,7 +341,8 @@ export function Sidebar({
                 className="ghost danger"
                 title="Remove this round"
                 onClick={() => {
-                  void client.deleteDiff(group, diff.id).then(onChanged)
+                  if (!window.confirm(removeRoundQuestion(diff.title, roundSize(comments, diff.id)))) return
+                  void client.deleteDiff(group, diff.id).then(onChanged, reportRemoveFailure(diff.title))
                 }}
               >
                 <Icon name="close" small />
@@ -269,8 +351,14 @@ export function Sidebar({
           </div>
           <ul className="file-list" hidden={isShut(diff)}>
             {shown(diff).map((file) => {
-              const active = activeKey === sectionKey(diff.id, file.id)
+              const key = sectionKey(diff.id, file.id)
+              const active = activeKey === key
               const count = commentCount(diff.id, file.id)
+              // Where the file was hit. A file found only by its content
+              // would otherwise look like a path that matched, and the
+              // reader would go looking in the name for a word that is in
+              // the code.
+              const hit = results.matches.get(key)
               // A folded file is still listed - the point is that it is out
               // of the way, not out of sight.
               const folded = Boolean(file.folded) && count === 0
@@ -278,12 +366,19 @@ export function Sidebar({
                 <li key={file.id}>
                   <button
                     className={`file-item${active ? ' active' : ''}${folded ? ' folded' : ''}`}
-                    onClick={() => onSelect(diff.id, file.id)}
+                    onClick={() => jumpTo(diff.id, file.id)}
                   >
                     <span className={`dot status-${file.status}`} title={file.status} />
                     <span className="file-path" title={filePath(file)}>
-                      {filePath(file)}
+                      {/* The box clips from the left; the path inside it
+                          reads in its own direction. See .file-path. */}
+                      <bdi>{filePath(file)}</bdi>
                     </span>
+                    {hit && (
+                      <span className="hint" title="Go to this file">
+                        {'\u2014'} {matchSummary(hit)}
+                      </span>
+                    )}
                     {folded && (
                       <span className="badge sm" title={file.foldReason}>
                         folded
@@ -326,4 +421,29 @@ export function Sidebar({
       )}
     </aside>
   )
+}
+
+/** roundSize counts what a round takes with it: every comment on it, the
+ * resolved ones included, since the store deletes them all. */
+function roundSize(comments: Comment[], diffId: string): number {
+  return comments.filter((c) => c.diffId === diffId).length
+}
+
+/** removeRoundQuestion asks before a round goes.
+ *
+ * Removing one deletes the diff and every comment on it, at once and for
+ * good; the two ways in are both a small close icon, one of them on a tab
+ * the reader clicks to switch rounds. Closing a review - the page's other
+ * destructive control - already asks, and counts what goes, so this asks
+ * the same way. */
+export function removeRoundQuestion(title: string, comments: number): string {
+  if (comments === 0) return `Remove ${title}? This cannot be undone.`
+  return `Remove ${title}? ${comments} comment(s) on it will be deleted too.`
+}
+
+/** reportRemoveFailure says so when the removal did not happen. The round
+ * stays on screen either way, and silence there reads as success. */
+function reportRemoveFailure(title: string): (err: unknown) => void {
+  return (err) =>
+    window.alert(`Could not remove ${title}: ${err instanceof Error ? err.message : String(err)}`)
 }
