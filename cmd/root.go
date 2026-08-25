@@ -193,7 +193,7 @@ func init() {
 	f.StringVar(&onReviewURL, "on-review-url", "",
 		"URL the server POSTs to when the review of this group is submitted")
 	f.StringVar(&historyPath, "history-file", "",
-		`Where submitted reviews are written down ("off" for nowhere, or $SBNN_HISTORY)`)
+		historyFileHelp("Where submitted reviews are written down"))
 
 	rootCmd.AddCommand(commentCmd, commentsCmd, exportCmd, hookCmd, reviewsCmd, skillCmd, submitCmd, waitCmd)
 }
@@ -230,6 +230,13 @@ func run(cmd *cobra.Command, _ []string) error {
 
 	group, err := groupName(target)
 	if err != nil {
+		return err
+	}
+	// --history-file is only acted on by the invocation that starts the
+	// server, but a value the flag refuses is refused wherever it is given.
+	// Pointed at a server that was already up, "sbnn --history-file -" said
+	// nothing and exited 0, which reads as "the log went somewhere".
+	if _, err := historyFile(historyPath); err != nil {
 		return err
 	}
 

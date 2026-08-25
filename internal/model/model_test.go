@@ -215,3 +215,59 @@ func TestParseVerdictRoundTripsString(t *testing.T) {
 		}
 	}
 }
+
+// TestBlocks is the one table both sides of the question are held to: the
+// status sbnn exits with, and the SBNN_BLOCKING a review hook is handed.
+//
+// The verdict alone does not settle it. Verdict.Blocking() says a review
+// that merely commented never blocks, but sbnn has ended on an open comment
+// since before there were verdicts at all, and still does.
+func TestBlocks(t *testing.T) {
+	open := []*model.Comment{{Body: "a remark"}}
+	settled := []*model.Comment{{Body: "a remark", Resolved: true}}
+	mixed := []*model.Comment{{Body: "done", Resolved: true}, {Body: "not done"}}
+
+	for _, tt := range []struct {
+		name     string
+		verdict  model.Verdict
+		comments []*model.Comment
+		want     bool
+	}{
+		{"approved, nothing said", model.VerdictApproved, nil, false},
+		{"an approval with a remark on it is still an approval", model.VerdictApproved, open, false},
+		{"an approval outranks even a pile of open comments", model.VerdictApproved, mixed, false},
+		{"changes requested", model.VerdictChangesRequested, nil, true},
+		{"changes requested blocks with nothing left open", model.VerdictChangesRequested, settled, true},
+		{"commented, with a comment still open", model.VerdictCommented, open, true},
+		{"commented, everything resolved", model.VerdictCommented, settled, false},
+		{"commented, nothing said at all", model.VerdictCommented, nil, false},
+		{"commented, one of two left open", model.VerdictCommented, mixed, true},
+		{"no verdict, with a comment still open", "", open, true},
+		{"no verdict, everything resolved", "", settled, false},
+		{"no verdict, nothing said at all", "", nil, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := model.Blocks(tt.verdict, tt.comments); got != tt.want {
+				t.Errorf("Blocks(%q, %d comment(s)) = %v, want %v",
+					tt.verdict, len(tt.comments), got, tt.want)
+			}
+		})
+	}
+}
+
+// Verdict.Blocking() answers about the verdict and nothing else. Blocks is
+// the wider rule; where they differ, Blocks is the one sbnn acts on.
+func TestBlockingIsOnlyHalfOfBlocks(t *testing.T) {
+	open := []*model.Comment{{Body: "a remark"}}
+	for _, v := range []model.Verdict{model.VerdictApproved, model.VerdictChangesRequested, model.VerdictCommented, ""} {
+		if v.Blocking() && !model.Blocks(v, open) {
+			t.Errorf("%q blocks on its own but Blocks says it does not", v)
+		}
+	}
+	if model.VerdictCommented.Blocking() {
+		t.Error("Verdict.Blocking() has changed meaning; Blocks is the rule to change")
+	}
+	if !model.Blocks(model.VerdictCommented, open) {
+		t.Error("a review that commented and left a comment open must block")
+	}
+}

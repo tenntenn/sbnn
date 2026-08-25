@@ -3,8 +3,16 @@ import type { Comment, Diff, FileDiff, Hunk, Line, ViewMode } from '../types'
 import { filePath } from '../types'
 import { client } from '../client'
 import { wordDiff } from '../wordDiff'
+import {
+  ensureHighlightStyles,
+  highlightLine,
+  languageOf,
+  tokenClass,
+  type LanguageId,
+} from '../highlight'
 import { CommentForm, CommentThread } from './CommentThread'
 import { Icon } from './Icon'
+import { foldLabel } from '../foldLabel'
 
 interface Props {
   group: string
@@ -18,6 +26,11 @@ interface Props {
    * already forced open when the file carries comments) - this component
    * only renders it, it does not decide it. */
   folded: boolean
+  /** foldedByReader says the fold standing on this file is one the reader
+   * performed here, keyed by sectionKey, rather than one the sender asked
+   * for with --collapse. The two read the same on screen but have very
+   * different explanations, and only the sender's comes with a reason. */
+  foldedByReader?: boolean
   onSetFolded: (value: boolean) => void
   /** viewMode is likewise resolved by the caller (an override, or the
    * server's default); a file locked to unified ignores it. */
@@ -103,6 +116,7 @@ export function DiffFileSection({
   narrow = false,
   onChanged,
   folded,
+  foldedByReader,
   onSetFolded,
   viewMode,
   onSetViewMode,
@@ -111,6 +125,10 @@ export function DiffFileSection({
   // for it and the toggle stays locked on unified. A narrow screen has no
   // room for two columns either.
   const locked = narrow || file.status === 'added' || file.status === 'deleted' || file.isBinary
+  // Which language to colour as follows from the extension and nothing else;
+  // a file whose extension is not one of the twelve is left plain.
+  const language = useMemo(() => languageOf(filePath(file)), [file])
+  useEffect(ensureHighlightStyles, [])
   const [selection, setSelection] = useState<Selection | null>(null)
   const mode: ViewMode = locked ? 'unified' : viewMode
 
@@ -301,7 +319,7 @@ export function DiffFileSection({
 
       {folded ? (
         <p className="empty">
-          Folded — {file.foldReason || 'the sender asked for it'} · {file.additions + file.deletions}{' '}
+          {foldLabel(foldedByReader === true, file.foldReason)} · {file.additions + file.deletions}{' '}
           changed lines
         </p>
       ) : file.isBinary ? (
@@ -313,6 +331,7 @@ export function DiffFileSection({
       ) : mode === 'unified' ? (
         <UnifiedTable
           hunks={file.hunks}
+          language={language}
           selection={selection}
           onSelect={select}
           onSelectLine={selectLine}
@@ -323,6 +342,7 @@ export function DiffFileSection({
       ) : (
         <SplitTable
           hunks={file.hunks}
+          language={language}
           selection={selection}
           onSelect={select}
           onSelectLine={selectLine}
@@ -337,6 +357,8 @@ export function DiffFileSection({
 
 interface TableProps {
   hunks: Hunk[]
+  /** language is null for a file this cannot read, which is most of them. */
+  language: LanguageId | null
   selection: Selection | null
   // onSelect starts a possible drag on the gutter; onSelectLine is a click on
   // the code, which may instead be the end of a text selection - it gets the
@@ -359,6 +381,7 @@ function isSelected(selection: Selection | null, side: Side, line: number): bool
 
 function UnifiedTable({
   hunks,
+  language,
   selection,
   onSelect,
   onSelectLine,
@@ -424,7 +447,7 @@ function UnifiedTable({
                       onPointerDown={onCodePointerDown}
                       onClick={(ev) => onSelectLine(side, num, ev)}
                     >
-                      {line.content || ' '}
+                      <Code content={line.content} language={language} />
                       {line.noNewline && <span className="hint"> (no newline at end of file)</span>}
                     </td>
                   </tr>
@@ -479,6 +502,7 @@ function buildSplitRows(lines: Line[]): SplitRow[] {
 
 function SplitTable({
   hunks,
+  language,
   selection,
   onSelect,
   onSelectLine,
@@ -527,7 +551,7 @@ function SplitTable({
                       onPointerDown={onCodePointerDown}
                       onClick={(ev) => row.left && onSelectLine('old', row.left.oldNumber, ev)}
                     >
-                      {row.left ? renderSegments(row.left.content, oldSegments) : ''}
+                      {row.left ? renderSegments(row.left.content, oldSegments, language) : ''}
                     </td>
                     <td
                       className={`num clickable${isSelected(selection, 'new', row.right?.newNumber ?? -1) ? ' selected' : ''}`}
@@ -543,7 +567,7 @@ function SplitTable({
                       onPointerDown={onCodePointerDown}
                       onClick={(ev) => row.right && onSelectLine('new', row.right.newNumber, ev)}
                     >
-                      {row.right ? renderSegments(row.right.content, newSegments) : ''}
+                      {row.right ? renderSegments(row.right.content, newSegments, language) : ''}
                     </td>
                   </tr>
                   {hasExtras && (
@@ -564,8 +588,44 @@ function SplitTable({
   )
 }
 
-function renderSegments(content: string, segments: { text: string; changed: boolean }[] | null) {
-  if (!segments) return content || ' '
+/**
+ * Code is one line of source, coloured if the file's extension is one this
+ * knows. Tokens are spans - never a string of HTML - so nothing here can put
+ * markup from a diff into the page.
+ */
+function Code({ content, language }: { content: string; language: LanguageId | null }) {
+  const tokens = highlightLine(content, language)
+  if (tokens.length === 1 && tokens[0].kind === 'plain') return <>{content || ' '}</>
+  return (
+    <>
+      {tokens.map((token, i) =>
+        token.kind === 'plain' ? (
+          <Fragment key={i}>{token.text}</Fragment>
+        ) : (
+          <span key={i} className={tokenClass(token.kind)}>
+            {token.text}
+          </span>
+        ),
+      )}
+    </>
+  )
+}
+
+/**
+ * renderSegments draws one side of a split row.
+ *
+ * Word level highlighting wins outright where there is any: it says what
+ * this diff changed, which is the reason the reader is here, and laying
+ * syntax colour over it would leave two different meanings competing inside
+ * one line. Syntax colour is for the lines word diff has nothing to say
+ * about.
+ */
+function renderSegments(
+  content: string,
+  segments: { text: string; changed: boolean }[] | null,
+  language: LanguageId | null,
+) {
+  if (!segments) return <Code content={content} language={language} />
   return (
     <>
       {segments.map((seg, i) =>

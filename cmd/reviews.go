@@ -75,7 +75,7 @@ func init() {
 	f.StringVarP(&target, "target", "t", "", "Only the reviews of this group")
 	f.IntVarP(&port, "port", "p", DefaultPort, "Server port (used when sbnn is running)")
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
-	f.StringVar(&historyPath, "history-file", "", `Where the log is kept (or $SBNN_HISTORY)`)
+	f.StringVar(&historyPath, "history-file", "", historyFileHelp("Where the log is kept"))
 	f.StringVar(&reviewsSince, "since", "", "Only reviews after this: 7d, 36h, 2026-01-31")
 	f.IntVar(&reviewsLimit, "limit", 0, "Keep only the newest n reviews")
 	f.StringVar(&reviewsFormat, "format", "text", "Output format: text, json or jsonl")
@@ -262,9 +262,12 @@ func printReviews(w io.Writer, records []history.Record) error {
 		return nil
 	}
 	for _, rec := range records {
-		fmt.Fprintf(w, "%s  %-14s %2d comment(s)%s  %d file(s), +%d -%d%s%s\n",
+		// The verdict gets a column of its own: what a review decided is
+		// the one thing counting its comments cannot tell you.
+		fmt.Fprintf(w, "%s  %-14s %-17s %2d comment(s)%s  %d file(s), +%d -%d%s%s\n",
 			rec.ReviewedAt.Local().Format("2006-01-02 15:04"),
 			rec.Group,
+			rec.Verdict.String(),
 			len(rec.Comments),
 			suggestionCount(rec),
 			rec.Files, rec.Additions, rec.Deletions,
@@ -311,6 +314,8 @@ func waited(rec history.Record) string {
 func printStats(w io.Writer, s history.Stats) {
 	fmt.Fprintf(w, "%d review(s), %d comment(s) (%.1f per review), %d suggestion(s)\n",
 		s.Reviews, s.Comments, s.CommentsPerReview, s.Suggestions)
+	fmt.Fprintf(w, "%d approved, %d commented, %d changes requested\n",
+		s.Approved, s.Commented, s.ChangesRequested)
 	fmt.Fprintf(w, "%d review(s) had nothing to say, %d comment(s) were resolved\n", s.Silent, s.Resolved)
 	fmt.Fprintf(w, "%d file(s) reviewed, +%d -%d\n", s.Files, s.Additions, s.Deletions)
 	if s.MedianWait > 0 {
