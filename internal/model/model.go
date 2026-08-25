@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // FileStatus represents how a file was changed in a diff.
@@ -361,18 +362,52 @@ const (
 
 // ParseVerdict reads a verdict, accepting the spellings people actually
 // type. An empty string is "commented".
+//
+// The separators are thrown away before matching, so that every permutation
+// of a two-word spelling means the same thing: "changes-requested" is what
+// sbnn stores, "changes_requested" is what a GitHub review payload reports
+// and "REQUEST_CHANGES" is what its API takes when submitting one. Whoever
+// is bridging the two should not have to guess which of them we accept.
 func ParseVerdict(s string) (Verdict, bool) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "":
+	// A verdict left empty is "commented" - `sbnn review` with no --verdict
+	// takes this path. It has to be decided on the raw text, before the
+	// separators are dropped: "-_-" also folds down to nothing, and reading
+	// that as a verdict would confirm a review, write it to the history and
+	// fire the hook on what is plainly a typo.
+	if strings.TrimSpace(s) == "" {
 		return VerdictCommented, true
-	case "approved", "approve", "lgtm":
+	}
+	switch normalizeVerdict(s) {
+	case "approved", "approve", "accept", "accepted", "lgtm", "ship", "shipit":
 		return VerdictApproved, true
 	case "commented", "comment":
 		return VerdictCommented, true
-	case "changes-requested", "changes_requested", "request-changes", "changes":
+	case "changesrequested", "requestchanges", "changes", "reject", "rejected":
 		return VerdictChangesRequested, true
 	}
 	return "", false
+}
+
+// normalizeVerdict folds a written verdict down to letters, so that case and
+// the separator someone reached for stop mattering.
+func normalizeVerdict(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range strings.ToLower(s) {
+		// unicode.IsSpace, not a list of the ASCII ones: a verdict pasted out
+		// of a terminal or an editor arrives padded with whatever that
+		// program uses, and on a Japanese keyboard the leading space is
+		// routinely U+3000.
+		if unicode.IsSpace(r) {
+			continue
+		}
+		switch r {
+		case '-', '_', '.':
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // Blocking reports whether the verdict says the change should not go ahead
