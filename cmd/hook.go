@@ -65,13 +65,16 @@ func init() {
 	// A removal and a registration asked for in the same command disagree
 	// about what the command is for, and the switch in runHook would settle
 	// it by order: the removal happens, the new hook is dropped without a
-	// word, and the user is left believing it is registered. Refusing the
-	// combination says so once. The flags are paired one by one rather than
-	// put in a single group of four: a hook may carry a command and a URL at
-	// once, and one group would forbid that too.
+	// word, and the user is left believing it is registered. --clear had
+	// the same trouble. Refusing the combinations says so once. The flags
+	// are paired one by one rather than put in a single group of four: a
+	// hook may carry a command and a URL at once, and one group would
+	// forbid that too.
 	hookCmd.MarkFlagsMutuallyExclusive("remove", "clear")
 	hookCmd.MarkFlagsMutuallyExclusive("remove", "on-review")
 	hookCmd.MarkFlagsMutuallyExclusive("remove", "on-review-url")
+	hookCmd.MarkFlagsMutuallyExclusive("clear", "on-review")
+	hookCmd.MarkFlagsMutuallyExclusive("clear", "on-review-url")
 }
 
 // hookAction is what a run of "sbnn hook" turns out to be.
