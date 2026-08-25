@@ -36,7 +36,13 @@ It is meant to be combined with other commands, so it says what it found in
 its exit status as well:
 
   $ sbnn comments --exit-code        # 1 when there is something to address
-  $ sbnn wait && sbnn comments -q && git commit   # commit if the review was clean`,
+  $ sbnn wait && sbnn comments -q && git commit   # commit if the review was clean
+
+--exit-code answers the same question sbnn wait and sbnn submit answer, and
+in the same way: what the reviewer decided outranks counting comments. A
+review that asked for changes exits 1; an approval exits 0 whatever it said
+along the way; a plain "commented" - and a round nobody has submitted yet -
+exits 1 only if a comment is left open.`,
 	Args:         cobra.NoArgs,
 	RunE:         runComments,
 	SilenceUsage: true,
@@ -52,7 +58,7 @@ func init() {
 	f.BoolVar(&commentsClear, "clear", false, "Remove the comments instead of printing them")
 	f.BoolVar(&commentsJSON, "json", false, "Shorthand for --format json")
 	f.BoolVar(&commentsExitCode, "exit-code", false,
-		"Exit 1 when there is a comment to address, 0 when there is none")
+		"Exit 1 when the review blocks the change, 0 when it does not")
 	f.BoolVarP(&commentsQuiet, "quiet", "q", false, "Print nothing; implies --exit-code")
 }
 
@@ -78,11 +84,7 @@ func runComments(cmd *cobra.Command, _ []string) error {
 
 	if commentsQuiet {
 		commentsExitCode = true
-		comments, err := c.Comments(ctx, group)
-		if err != nil {
-			return err
-		}
-		return exitWithComments(comments)
+		return exitReview(ctx, c, group)
 	}
 
 	format := commentsFormat
@@ -108,7 +110,7 @@ func runComments(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 		if commentsExitCode {
-			return exitWithComments(comments)
+			return exitReview(ctx, c, group)
 		}
 		return nil
 	case "prompt", "markdown":
@@ -118,11 +120,7 @@ func runComments(cmd *cobra.Command, _ []string) error {
 		}
 		fmt.Print(text)
 		if commentsExitCode {
-			comments, err := c.Comments(ctx, group)
-			if err != nil {
-				return err
-			}
-			return exitWithComments(comments)
+			return exitReview(ctx, c, group)
 		}
 		return nil
 	default:
