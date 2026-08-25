@@ -180,7 +180,7 @@ func init() {
 	f.BoolVar(&doRestart, "restart", false, "Restart the running server, keeping the session")
 	rootCmd.MarkFlagsMutuallyExclusive("shutdown", "restart")
 	f.BoolVar(&doClear, "clear", false, "Close the review: drop the diffs, comments and hooks of the group")
-	f.BoolVar(&clearAll, "all", false, "With --clear, close every review on the server")
+	f.BoolVar(&clearAll, "all", false, "Close every review on the server; only meaningful with --clear, and refused without it")
 	f.BoolVar(&assumeYes, "yes", false, "Skip the confirmation of --clear")
 	f.BoolVar(&jsonOutput, "json", false, "Print structured JSON on stdout")
 	f.StringVar(&moBin, "mo-bin", "mo", "mo executable used for mo's Markdown preview")
@@ -206,8 +206,28 @@ func moRunner() *mo.Runner {
 	return mo.New(moBin, moPort, moBind)
 }
 
+// validateClearFlags rejects --all on its own. clearAll is read inside
+// runClear and nowhere else, so sbnn --all used to fall through to the
+// ordinary "read stdin, add a diff, print the URL" path with the flag
+// ignored - a success message for something the user did not ask for, when
+// what they meant closes every review on the server.
+//
+// This is a hand check rather than cobra's "required together" pairing, which
+// reads "if one is given both are required" and would make plain sbnn
+// --clear, the ordinary way to close one review, an error.
+func validateClearFlags(doClear, clearAll bool) error {
+	if clearAll && !doClear {
+		return errors.New("--all only works with --clear (did you mean --clear --all?)")
+	}
+	return nil
+}
+
 func run(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
+	if err := validateClearFlags(doClear, clearAll); err != nil {
+		return err
+	}
+
 	group, err := groupName(target)
 	if err != nil {
 		return err
