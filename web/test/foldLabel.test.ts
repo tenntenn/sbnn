@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { foldLabel } from './foldLabel'
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
+import { foldLabel } from '../src/foldLabel'
 
 // The server writes foldReason itself; these are the two it writes.
 const collapsed = 'the sender asked for it (--collapse go.sum)'
@@ -13,13 +14,13 @@ describe('foldLabel', () => {
   // make.
   it('does not credit the sender for a fold the reader performed', () => {
     const got = foldLabel(true, undefined)
-    expect(got).toBe('Folded by you')
-    expect(got).not.toContain('the sender asked for it')
+    assert.equal(got, 'Folded by you')
+    assert.ok(!got.includes('the sender asked for it'))
   })
 
   it('gives the sender their reason when the sender folded it', () => {
-    expect(foldLabel(false, collapsed)).toBe(`Folded — ${collapsed}`)
-    expect(foldLabel(false, generated)).toBe(`Folded — ${generated}`)
+    assert.equal(foldLabel(false, collapsed), `Folded — ${collapsed}`)
+    assert.equal(foldLabel(false, generated), `Folded — ${generated}`)
   })
 
   // A file the sender folded can be opened by the reader and folded again by
@@ -27,19 +28,19 @@ describe('foldLabel', () => {
   // cannot recover from the page, so it stays.
   it('keeps the sender reason when the reader folds an already-folded file', () => {
     const got = foldLabel(true, collapsed)
-    expect(got).toContain(collapsed)
-    expect(got).toContain('you')
-    expect(got).toBe(`Folded by you — the sender had folded it too: ${collapsed}`)
+    assert.ok(got.includes(collapsed))
+    assert.ok(got.includes('you'))
+    assert.equal(got, `Folded by you — the sender had folded it too: ${collapsed}`)
   })
 
   // Should not arise: sbnn never folds a file on its own without a reason.
   // Say only what is certain rather than guessing at whose fold it is.
   it('says only what is certain when there is neither', () => {
-    expect(foldLabel(false, undefined)).toBe('Folded')
-    expect(foldLabel(false, '')).toBe('Folded')
+    assert.equal(foldLabel(false, undefined), 'Folded')
+    assert.equal(foldLabel(false, ''), 'Folded')
   })
 
   it('treats an empty reason as no reason', () => {
-    expect(foldLabel(true, '')).toBe('Folded by you')
+    assert.equal(foldLabel(true, ''), 'Folded by you')
   })
 })
