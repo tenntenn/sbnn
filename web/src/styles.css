@@ -1251,11 +1251,26 @@ button.ghost.danger:hover:not(:disabled) {
 /* Count: a number, not a word. Filled and unoutlined so it reads as a
    quantity, and tabular so a column of them lines up and can be compared
    without reading - the treatment .tab-count and .stat already use. Amber
-   because what is being counted is unresolved comments. */
+   because what is being counted is unresolved comments.
+
+   It also has to be round. --pill-min-width is a floor for a word, and a
+   word's inline padding is what kept a single digit from ever reaching it:
+   under border-box the label padding and the hairline already spend more
+   across than the whole pill is tall, so the floor could never bite and one
+   digit stayed an oval. A count is one character wide, so it takes the
+   smallest inline step, and its floor is the pill's own height rather than
+   a fixed 18px - derived from the same tokens the height is built from, so
+   the two cannot drift apart. One digit is then a circle, and a count wide
+   enough to pass the floor grows sideways into a stadium at unchanged
+   height. */
 .badge.sm.warn {
   border-color: transparent;
   background: var(--warn-bg);
   color: var(--warn-fg);
+  padding-inline: var(--space-2xs);
+  min-width: calc(
+    var(--text-2xs) + 2 * var(--pill-padding-block) + 2 * var(--border-width-hairline)
+  );
 }
 
 .empty {
