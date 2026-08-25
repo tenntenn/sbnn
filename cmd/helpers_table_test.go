@@ -74,7 +74,15 @@ func TestHelpersChosenVerdict(t *testing.T) {
 		},
 		{name: "surrounding space and case", verdict: "  Approved ", want: model.VerdictApproved},
 		{name: "a word nobody defined", verdict: "maybe", wantErr: true},
-		{name: "the verdict of another tool", verdict: "rejected", wantErr: true},
+		{
+			// A reviewer coming from another tool types the spelling
+			// that tool uses; ParseVerdict accepts it as changes
+			// requested rather than making them look it up.
+			name:    "the verdict of another tool",
+			verdict: "rejected",
+			want:    model.VerdictChangesRequested,
+		},
+		{name: "a word that is no spelling of any verdict", verdict: "zzz-nobody", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
