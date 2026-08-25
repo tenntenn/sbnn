@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { groupFromLocation } from './api'
 import { client } from './client'
-import { readSetting, writeSetting } from './storage'
+import { readSetting, readStringSet, writeSetting, writeStringSet } from './storage'
 import { isPreviewable, type Comment, type Diff, type FileDiff, type PreviewKind, type Status, type ViewMode, type Verdict } from './types'
 import { DiffFileSection } from './components/DiffFileSection'
 import { DiffStack, type DiffStackHandle, type ScrollFraction } from './components/DiffStack'
@@ -29,6 +29,10 @@ const SIDEBAR_STEP = 24
 const SIDEBAR_KEY = 'sbnn.sidebar.width'
 const SPLIT_KEY = 'sbnn.split'
 const PREVIEW_KIND_KEY = 'sbnn.preview.renderer'
+// Read marks are per review rather than per reader, so they hang off the
+// group name instead of living in one global setting: two reviews open in two
+// tabs keep their own place.
+const READ_KEY_PREFIX = 'sbnn.read.'
 
 function storedSplitRatio(): number {
   const stored = readSetting(SPLIT_KEY)
@@ -85,6 +89,12 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(storedTheme)
   const [query, setQuery] = useState('')
   const [previewKind, setPreviewKind] = useState<PreviewKind>(storedPreviewKind)
+  // readKeys is where the reader got to: the diffId:fileId pairs they have
+  // said they are done with. Keying on the pair rather than the fileId is
+  // what makes a new round arrive unread without anything having to expire
+  // the old marks - the round is part of the key, so a re-sent file is
+  // simply a key nobody has marked yet.
+  const [readKeys, setReadKeys] = useState<Set<string>>(() => readStringSet(READ_KEY_PREFIX + group))
   // Scrolling the diff moves the preview with it, to the same file and the
   // same fraction into that file's own section, rather than by line: the
   // two documents do not agree on lines, and pretending they do lands the
@@ -120,6 +130,10 @@ export function App() {
   useEffect(() => {
     writeSetting(PREVIEW_KIND_KEY, previewKind)
   }, [previewKind])
+
+  useEffect(() => {
+    writeStringSet(READ_KEY_PREFIX + group, readKeys)
+  }, [group, readKeys])
 
   const resizeSidebar = useCallback((clientX: number) => {
     const rect = bodyRef.current?.getBoundingClientRect()
@@ -175,6 +189,38 @@ export function App() {
     () => diffs.flatMap((d) => d.files.map((f) => sectionKey(d.id, f.id))),
     [diffs],
   )
+
+  // A removed round leaves marks behind that nothing can ever show again, so
+  // they are dropped once there is a file list to check them against. The
+  // empty case is skipped deliberately: the first render happens before the
+  // first load returns, and pruning against nothing would clear every mark
+  // the reader came back for. Returning the set unchanged when there is
+  // nothing to drop is what keeps this from looping.
+  useEffect(() => {
+    if (flatKeys.length === 0) return
+    setReadKeys((current) => {
+      if (current.size === 0) return current
+      const live = new Set(flatKeys)
+      const next = new Set([...current].filter((key) => live.has(key)))
+      return next.size === current.size ? current : next
+    })
+  }, [flatKeys])
+
+  const readCount = useMemo(
+    () => flatKeys.reduce((n, key) => (readKeys.has(key) ? n + 1 : n), 0),
+    [flatKeys, readKeys],
+  )
+
+  const setRead = useCallback((key: string, value: boolean) => {
+    setReadKeys((prev) => {
+      const next = new Set(prev)
+      if (value) next.add(key)
+      else next.delete(key)
+      return next
+    })
+  }, [])
+
+  const markAllUnread = useCallback(() => setReadKeys(new Set()), [])
 
   // Keep a file active: the newest diff is what the reviewer just sent. On
   // a wide screen this is only the starting point - scrolling the diff pane
@@ -406,6 +452,10 @@ export function App() {
       query={query}
       onQuery={setQuery}
       searchRef={searchRef}
+      readKeys={readKeys}
+      readCount={readCount}
+      onSetRead={setRead}
+      onMarkAllUnread={markAllUnread}
     />
   )
 
