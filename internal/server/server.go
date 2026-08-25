@@ -79,7 +79,11 @@ func New(opts Options) (*Server, error) {
 		shutdown: make(chan struct{}),
 	}
 	if err := s.store.Load(); err != nil {
+		// The background server's log lands in the state directory, where
+		// nobody is looking, so this also goes to stderr: losing a session
+		// is worth one line wherever the human is.
 		slog.Warn("could not restore session", "error", err)
+		fmt.Fprintf(os.Stderr, "sbnn: %v\n", err)
 	}
 	// Run replaces this with a previewer that knows the frame proxy.
 	s.prev = &previewer{mo: opts.Mo, cacheDir: opts.CacheDir}
@@ -279,6 +283,9 @@ type Status struct {
 	MoAvailable bool           `json:"moAvailable"`
 	MoError     string         `json:"moError,omitempty"`
 	Groups      []GroupSummary `json:"groups"`
+	// SessionError says why the session is not being written to disk. It is
+	// empty while the session file is up to date.
+	SessionError string `json:"sessionError,omitempty"`
 }
 
 func (s *Server) status() Status {
@@ -293,6 +300,9 @@ func (s *Server) status() Status {
 	}
 	if s.proxy != nil {
 		st.MoProxyURL = s.proxy.baseURL
+	}
+	if err := s.store.PersistError(); err != nil {
+		st.SessionError = err.Error()
 	}
 	if err := s.opts.Mo.Available(); err != nil {
 		st.MoError = err.Error()
