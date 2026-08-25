@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { stepToComment, type CommentStop } from './shortcuts'
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
+import { stepToComment, type CommentStop } from '../src/shortcuts'
 
 // The review of issue #61: three comments on file A, one on file B.
 const stops: CommentStop[] = [
@@ -34,39 +35,39 @@ describe('stepToComment', () => {
   // the search started from. So `n` landed on c2 and stayed there, and c3 and
   // c4 could not be reached with the keyboard at all.
   it('reaches every comment of a file that holds three', () => {
-    expect(press(1, 6)).toEqual(['c1', 'c2', 'c3', 'c4', 'c1', 'c2'])
+    assert.deepEqual(press(1, 6), ['c1', 'c2', 'c3', 'c4', 'c1', 'c2'])
   })
 
   it('walks backwards through them too', () => {
-    expect(press(-1, 6)).toEqual(['c3', 'c2', 'c1', 'c4', 'c3', 'c2'])
+    assert.deepEqual(press(-1, 6), ['c3', 'c2', 'c1', 'c4', 'c3', 'c2'])
   })
 
   it('has nowhere to go when there are no open comments', () => {
-    expect(stepToComment([], null, 'A', 1)).toBeNull()
-    expect(stepToComment([], 'c1', 'A', -1)).toBeNull()
+    assert.equal(stepToComment([], null, 'A', 1), null)
+    assert.equal(stepToComment([], 'c1', 'A', -1), null)
   })
 
   it('rejoins at the file being read when nothing has been visited', () => {
-    expect(stepToComment(stops, null, 'B', 1)).toEqual({ id: 'c4', key: 'B' })
-    expect(stepToComment(stops, null, 'B', -1)).toEqual({ id: 'c4', key: 'B' })
-    expect(stepToComment(stops, null, 'A', -1)).toEqual({ id: 'c3', key: 'A' })
+    assert.deepEqual(stepToComment(stops, null, 'B', 1), { id: 'c4', key: 'B' })
+    assert.deepEqual(stepToComment(stops, null, 'B', -1), { id: 'c4', key: 'B' })
+    assert.deepEqual(stepToComment(stops, null, 'A', -1), { id: 'c3', key: 'A' })
   })
 
   it('rejoins at the whole review when the file being read has no comments', () => {
-    expect(stepToComment(stops, null, 'Z', 1)).toEqual({ id: 'c1', key: 'A' })
-    expect(stepToComment(stops, null, 'Z', -1)).toEqual({ id: 'c4', key: 'B' })
+    assert.deepEqual(stepToComment(stops, null, 'Z', 1), { id: 'c1', key: 'A' })
+    assert.deepEqual(stepToComment(stops, null, 'Z', -1), { id: 'c4', key: 'B' })
   })
 
   // Resolving a comment takes it off the tour, so the recorded position is a
   // comment that is no longer in the list.
   it('rejoins when the comment it was standing on was resolved away', () => {
-    expect(stepToComment(stops, 'gone', 'A', 1)).toEqual({ id: 'c1', key: 'A' })
-    expect(stepToComment(stops, 'gone', 'B', -1)).toEqual({ id: 'c4', key: 'B' })
+    assert.deepEqual(stepToComment(stops, 'gone', 'A', 1), { id: 'c1', key: 'A' })
+    assert.deepEqual(stepToComment(stops, 'gone', 'B', -1), { id: 'c4', key: 'B' })
   })
 
   it('wraps around both ends', () => {
-    expect(stepToComment(stops, 'c4', null, 1)).toEqual({ id: 'c1', key: 'A' })
-    expect(stepToComment(stops, 'c1', null, -1)).toEqual({ id: 'c4', key: 'B' })
+    assert.deepEqual(stepToComment(stops, 'c4', null, 1), { id: 'c1', key: 'A' })
+    assert.deepEqual(stepToComment(stops, 'c1', null, -1), { id: 'c4', key: 'B' })
   })
 
   // Regression: the recorded comment used to be honoured only while it sat in
@@ -83,18 +84,18 @@ describe('stepToComment', () => {
       { id: 'b2', key: 'B' },
     ]
     // The reader pressed n and landed on b1; the observer then said "A".
-    expect(stepToComment(drifted, 'b1', 'A', 1)).toEqual({ id: 'b2', key: 'B' })
-    expect(stepToComment(drifted, 'b1', 'A', -1)).toEqual({ id: 'a1', key: 'A' })
+    assert.deepEqual(stepToComment(drifted, 'b1', 'A', 1), { id: 'b2', key: 'B' })
+    assert.deepEqual(stepToComment(drifted, 'b1', 'A', -1), { id: 'a1', key: 'A' })
   })
 
   it('steps from the recorded comment with no active file at all', () => {
-    expect(stepToComment(stops, 'c2', null, 1)).toEqual({ id: 'c3', key: 'A' })
-    expect(stepToComment(stops, 'c2', null, -1)).toEqual({ id: 'c1', key: 'A' })
+    assert.deepEqual(stepToComment(stops, 'c2', null, 1), { id: 'c3', key: 'A' })
+    assert.deepEqual(stepToComment(stops, 'c2', null, -1), { id: 'c1', key: 'A' })
   })
 
   it('stands still on a review with exactly one comment', () => {
     const one: CommentStop[] = [{ id: 'only', key: 'A' }]
-    expect(stepToComment(one, 'only', 'A', 1)).toEqual({ id: 'only', key: 'A' })
-    expect(stepToComment(one, 'only', 'A', -1)).toEqual({ id: 'only', key: 'A' })
+    assert.deepEqual(stepToComment(one, 'only', 'A', 1), { id: 'only', key: 'A' })
+    assert.deepEqual(stepToComment(one, 'only', 'A', -1), { id: 'only', key: 'A' })
   })
 })
