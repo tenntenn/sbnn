@@ -1469,3 +1469,143 @@ func TestSubmitReviewWithNoBodyAtAll(t *testing.T) {
 		t.Errorf("group = %+v, want a submitted review", g)
 	}
 }
+
+// sendNoBody performs a bodyless request and returns the response.
+func sendNoBody(t *testing.T, method, url string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+// rawGroupFields reads GET .../groups/{group} and returns its top-level
+// fields unparsed, so that null and [] can be told apart -- decoding into
+// model.Group turns both into a nil slice and hides the bug.
+func rawGroupFields(t *testing.T, url string) map[string]json.RawMessage {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %s, want 200", resp.Status)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&fields); err != nil {
+		t.Fatal(err)
+	}
+	return fields
+}
+
+// A group that exists but holds nothing marshalled its nil slices as
+// null, while the very same endpoint answered [] for a group that did not
+// exist at all. The shape of the response depended on how the group came
+// to be, which every consumer of the API would have to know about.
+func TestHandleGroupAlwaysReturnsArrays(t *testing.T) {
+	cases := []struct {
+		name string
+		// empty names the fields that must come back as [] for this
+		// group; a field holding something is checked separately.
+		empty []string
+		group string
+		setup func(t *testing.T, ts *httptest.Server, group string)
+	}{
+		{
+			name:  "a group that does not exist",
+			group: "never-made",
+			empty: []string{"diffs", "comments"},
+			setup: func(t *testing.T, ts *httptest.Server, group string) {},
+		},
+		{
+			name:  "a group created by a hook and nothing else",
+			group: "hooked",
+			empty: []string{"diffs", "comments"},
+			setup: func(t *testing.T, ts *httptest.Server, group string) {
+				resp := postJSON(t, ts.URL+"/_/api/groups/"+group+"/hooks",
+					model.Hook{Command: "echo hi"}, nil)
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("adding a hook: status = %s", resp.Status)
+				}
+			},
+		},
+		{
+			name:  "a group whose only diff was deleted",
+			group: "emptied",
+			empty: []string{"diffs", "comments"},
+			setup: func(t *testing.T, ts *httptest.Server, group string) {
+				var added AddDiffResponse
+				postJSON(t, ts.URL+"/_/api/groups/"+group+"/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+				resp := sendNoBody(t, http.MethodDelete,
+					ts.URL+"/_/api/groups/"+group+"/diffs/"+added.Diff.ID)
+				if resp.StatusCode != http.StatusNoContent {
+					t.Fatalf("deleting the diff: status = %s", resp.Status)
+				}
+			},
+		},
+		{
+			name: "a group whose comments were cleared",
+			// This one keeps its diff, so only comments must be [].
+			group: "cleared",
+			empty: []string{"comments"},
+			setup: func(t *testing.T, ts *httptest.Server, group string) {
+				var added AddDiffResponse
+				postJSON(t, ts.URL+"/_/api/groups/"+group+"/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+				postJSON(t, ts.URL+"/_/api/groups/"+group+"/comments", AddCommentRequest{
+					DiffID: added.Diff.ID, FileID: added.Diff.Files[0].ID, Path: added.Diff.Files[0].Path(),
+					Side: "new", StartLine: 1, EndLine: 1, Body: "hi",
+				}, nil)
+				resp := sendNoBody(t, http.MethodDelete, ts.URL+"/_/api/groups/"+group+"/comments")
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("clearing the comments: status = %s", resp.Status)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, _ := newTestServer(t)
+			tc.setup(t, ts, tc.group)
+
+			fields := rawGroupFields(t, ts.URL+"/_/api/groups/"+tc.group)
+			for _, key := range tc.empty {
+				got, ok := fields[key]
+				if !ok {
+					t.Errorf("the response has no %q field at all", key)
+					continue
+				}
+				if string(got) != "[]" {
+					t.Errorf("%q = %s, want []", key, got)
+				}
+			}
+		})
+	}
+}
+
+// A group that holds something still reports what it holds: the
+// normalisation must only replace a nil slice, never an occupied one.
+func TestHandleGroupKeepsWhatTheGroupHolds(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+		DiffID: added.Diff.ID, FileID: added.Diff.Files[0].ID, Path: added.Diff.Files[0].Path(),
+		Side: "new", StartLine: 1, EndLine: 1, Body: "hi",
+	}, nil)
+
+	var g model.Group
+	getJSON(t, ts.URL+"/_/api/groups/default", &g)
+	if len(g.Diffs) != 1 {
+		t.Errorf("diffs = %d, want 1", len(g.Diffs))
+	}
+	if len(g.Comments) != 1 {
+		t.Errorf("comments = %d, want 1", len(g.Comments))
+	}
+}

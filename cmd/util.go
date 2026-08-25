@@ -143,11 +143,8 @@ func exitWithComments(comments []*model.Comment) error {
 // on it is still an approval, and a review that asked for changes blocks
 // even if it pointed at no line in particular.
 func exitWithVerdict(v model.Verdict, comments []*model.Comment) error {
-	switch v {
-	case model.VerdictApproved:
-		return nil
-	case model.VerdictChangesRequested:
+	if model.Blocks(v, comments) {
 		os.Exit(ExitOpenComments)
 	}
-	return exitWithComments(comments)
+	return nil
 }
