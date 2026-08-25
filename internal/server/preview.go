@@ -131,8 +131,16 @@ func assetEntries(group string, d *model.Diff, f *model.File, content string) ma
 // or one that internal/asset refused, whether for leaving the tree or for
 // being too heavy to show - is a request for a file this endpoint does not
 // have.
+//
+// The gate is previewableMarkdown rather than previewableText because
+// resolving a relative image is a Markdown concern and nothing else: it is
+// what a document needs to be drawn, and /content lists assets for a
+// document only. previewableText now admits every text file - a .go, a .ts,
+// a config file - so sharing it here would have made any comment or string
+// literal anywhere in the tree that happens to spell out an image reference
+// into a way of asking the server for that file's bytes.
 func (p *previewer) asset(d *model.Diff, f *model.File, rel string) (data []byte, contentType string, err error) {
-	if err := previewableText(f); err != nil {
+	if err := previewableMarkdown(f); err != nil {
 		return nil, "", err
 	}
 	got := newSide(d, f)
