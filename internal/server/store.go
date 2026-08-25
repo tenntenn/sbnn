@@ -111,12 +111,25 @@ func (s *Store) Load() error {
 		// an empty session over the file we just declined to read. Seal the
 		// store instead, which keeps the bytes on disk intact and makes the
 		// advice below something the reader can still act on.
+		//
+		// Moving the file aside is advice for a stopped sbnn. A running one
+		// stays sealed whatever happens to the path, because it still cannot
+		// read what it refused and has nothing to merge a new session into,
+		// so the sentence says to restart rather than leaving the reader to
+		// find out that the diffs went nowhere.
+		refused := fmt.Errorf("session file %s was written by a newer sbnn (format version %d, this one understands %d): "+
+			"this session is not saved and the file is left untouched; "+
+			"upgrade sbnn, or move the file aside and restart sbnn to start a new session", s.path, p.Version, persistVersion)
 		s.mu.Lock()
 		s.sealed = true
+		// persist() returns before write() for a sealed store, so nothing
+		// after this ever sets persistErr. Status.SessionError is why the
+		// session is not on disk and is empty only while the file is up to
+		// date, so leaving it empty here would tell a reader the session was
+		// saved when it is in memory and nowhere else.
+		s.persistErr = refused
 		s.mu.Unlock()
-		return fmt.Errorf("session file %s was written by a newer sbnn (format version %d, this one understands %d): "+
-			"this session is not saved and the file is left untouched; "+
-			"upgrade sbnn, or move the file aside to start a new session", s.path, p.Version, persistVersion)
+		return refused
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

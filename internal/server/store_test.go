@@ -99,6 +99,93 @@ func TestARefusedSessionFileIsNotOverwritten(t *testing.T) {
 	}
 }
 
+// Not overwriting the file is only half of it. The session the server is
+// serving is in memory and nowhere else, and Status.SessionError is where a
+// reader is told so - it is defined as why the session is not on disk, and is
+// empty only while the session file is up to date. A sealed store never
+// reaches write(), so persist() has nothing to report and Load is the only
+// place the reason can come from.
+func TestARefusedSessionFileIsReportedAsAnUnsavedSession(t *testing.T) {
+	captureLogs(t)
+	path := filepath.Join(t.TempDir(), "session.json")
+	raw := []byte(`{"version":` + strconv.Itoa(persistVersion+1) + `,"seq":7,"groups":[` +
+		`{"name":"default","diffs":[{"id":"d7","title":"from the future"}]}]}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewStore(path)
+	loadErr := s.Load()
+	if loadErr == nil {
+		t.Fatal("Load() = nil for a file from a newer sbnn, want an error")
+	}
+	if err := s.PersistError(); err == nil {
+		t.Fatal("PersistError() = nil right after a refused load, want the refusal - the session is not on disk")
+	}
+
+	// Adding a diff is the moment the memory-only session stops matching the
+	// file, and the moment a reader would look at the status page.
+	s.AddDiff(DefaultGroup, &model.Diff{Title: "new"})
+	err := s.PersistError()
+	if err == nil {
+		t.Fatal("PersistError() = nil after a diff was added to a sealed store, want the refusal")
+	}
+	if err.Error() != loadErr.Error() {
+		t.Errorf("PersistError() = %q, want the refusal Load reported: %q", err, loadErr)
+	}
+}
+
+// The refusal is advice a reader acts on, so it has to be advice that works.
+// Moving the file aside under a running server does not start a new session:
+// the store stays sealed for as long as the process lives, and the next diff
+// goes nowhere. Saying to restart is what makes the sentence true.
+func TestARefusedSessionFileSaysToRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.json")
+	raw := []byte(`{"version":` + strconv.Itoa(persistVersion+1) + `,"seq":1,"groups":[]}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := NewStore(path).Load()
+	if err == nil {
+		t.Fatal("Load() = nil for a file from a newer sbnn, want an error")
+	}
+	for _, want := range []string{path, "restart", strconv.Itoa(persistVersion + 1)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Load() error = %q, want it to mention %q", err, want)
+		}
+	}
+}
+
+// The same thing a reader actually sees: the status API, over HTTP, on a
+// server that started on top of a file it refused.
+func TestStatusReportsARefusedSessionFile(t *testing.T) {
+	captureLogs(t)
+	path := filepath.Join(t.TempDir(), "session.json")
+	raw := []byte(`{"version":` + strconv.Itoa(persistVersion+1) + `,"seq":7,"groups":[` +
+		`{"name":"default","diffs":[{"id":"d7","title":"from the future"}]}]}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ts, _ := newTestServer(t, func(o *Options) { o.SessionFile = path })
+
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, nil)
+
+	var st Status
+	getJSON(t, ts.URL+"/_/api/status", &st)
+	if st.SessionError == "" {
+		t.Fatal("sessionError is empty although the session is only in memory and is lost on the next restart")
+	}
+	if !strings.Contains(st.SessionError, "newer sbnn") {
+		t.Errorf("sessionError = %q, want it to say the session file was written by a newer sbnn", st.SessionError)
+	}
+
+	// And the file itself is still the one this build refused to read.
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(raw) {
+		t.Fatalf("session file = %q, %v, want it untouched", got, err)
+	}
+}
+
 // Sealing must be limited to the store that refused its file: a store that
 // loaded normally still has to save.
 func TestALoadedSessionFileIsStillWritten(t *testing.T) {
