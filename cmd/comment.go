@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -233,12 +234,39 @@ func (l *flexLines) UnmarshalJSON(b []byte) error {
 		l.Start, l.End = start, end
 		return nil
 	}
-	var n int
-	if err := json.Unmarshal(b, &n); err != nil {
+	var num json.Number
+	if err := json.Unmarshal(b, &num); err != nil {
 		return fmt.Errorf("line must be a number or a string like \"12-18\": %w", err)
+	}
+	n, err := lineFromNumber(num)
+	if err != nil {
+		return err
 	}
 	l.Start, l.End = n, n
 	return nil
+}
+
+// lineFromNumber reads a JSON number as a line number. JSON has a single
+// numeric type, so 12 and 12.0 are the same number and both name line 12;
+// generators that do arithmetic (jq, Python, anything in JavaScript) emit the
+// second spelling for whole numbers. Only a real fraction is refused.
+func lineFromNumber(num json.Number) (int, error) {
+	text := num.String()
+	if strings.ContainsAny(text, ".eE") {
+		f, err := num.Float64()
+		if err != nil {
+			return 0, fmt.Errorf("line %s is not a line number", text)
+		}
+		if f != math.Trunc(f) {
+			return 0, fmt.Errorf("line must be a whole number, not %s", text)
+		}
+		text = strconv.FormatFloat(f, 'f', -1, 64)
+	}
+	n, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("line %s is out of range for a line number", text)
+	}
+	return n, nil
 }
 
 func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
