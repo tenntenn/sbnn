@@ -166,24 +166,73 @@ function createLiveClient(): SbnnClient {
  * here: a full quota, a private window or blocked site data would let someone
  * write a page of review and lose all of it without a word. The static client
  * therefore reads and writes through the path below, which says so instead.
+ *
+ * The three troubles are told apart because they are not the same news, and
+ * one of them must never stand in for another:
+ *
+ *   unreachable - the browser refuses the storage object itself, so nothing
+ *                 will be saved. Known at load, before there is anything to
+ *                 copy.
+ *   unreadable  - a stored entry could not be parsed. Writing still works, so
+ *                 the review carries on saving from here; what is gone is
+ *                 whatever that entry held.
+ *   unsaved     - a write was refused. This is the one that loses work that is
+ *                 already on the screen.
  */
-let storageWarned = false
+type StorageTrouble = 'unreachable' | 'unreadable' | 'unsaved'
 
-/** warnStorage reports, once, that the page cannot keep the reviewer's work. */
-function warnStorage(detail: string, err: unknown): void {
-  if (storageWarned) return
-  storageWarned = true
-  console.error(`sbnn: ${detail}`, err)
-  showStorageBanner(detail)
+const storageTrouble: Record<StorageTrouble, { lead: string; advice: string }> = {
+  unreachable: {
+    lead: 'This page cannot reach browser storage, so your comments will not be saved.',
+    advice: ' Use "Copy prompt" before closing the tab to keep whatever you write here.',
+  },
+  unreadable: {
+    lead: 'Comments saved on this page earlier could not be read back, so this is the review as it was exported.',
+    advice: ' What you write from here on is saved again, over the entry that could not be read.',
+  },
+  unsaved: {
+    lead: 'This browser refused to save your comments (private window, blocked site data, or a full quota).',
+    advice: ' Use "Copy prompt" now to keep a copy: nothing you write here will survive this tab.',
+  },
 }
+
+/**
+ * spoken remembers which of the three has been said, one flag each.
+ *
+ * One flag for all of them would let the least urgent silence the most: a
+ * page with site data blocked warns while it loads, when there is nothing to
+ * copy yet, and a reviewer who dismisses that would then write comments and
+ * have every refused write pass without a word - the very thing this is here
+ * to prevent.
+ */
+const spoken: Record<StorageTrouble, boolean> = {
+  unreachable: false,
+  unreadable: false,
+  unsaved: false,
+}
+
+/** warnStorage reports, once per trouble, what the page cannot keep. */
+function warnStorage(trouble: StorageTrouble, err: unknown): void {
+  if (spoken[trouble]) return
+  spoken[trouble] = true
+  console.error(`sbnn: ${storageTrouble[trouble].lead}`, err)
+  showStorageBanner(trouble)
+}
+
+/** banner is the one bar on screen, so a second warning replaces the first
+ * rather than stacking on top of it. */
+let banner: HTMLElement | null = null
 
 /**
  * showStorageBanner puts the warning on the page from outside React: the
  * static client is constructed before anything mounts and does not own App.
  * styles.css is not extended for it either, so the banner carries its own
- * style and borrows the app's custom properties where they are defined.
+ * style and borrows the app's custom properties, which are the ones that
+ * exist: --danger-fg and --danger-bg are defined for both themes, a bare
+ * --danger is not, and asking for a property nobody defines had the fallback
+ * paint dark red text on a dark background.
  */
-function showStorageBanner(detail: string): void {
+function showStorageBanner(trouble: StorageTrouble): void {
   if (typeof document === 'undefined' || !document.body) return
 
   const bar = document.createElement('div')
@@ -198,9 +247,9 @@ function showStorageBanner(detail: string): void {
     'gap: 0.75rem',
     'align-items: flex-start',
     'padding: 0.75rem 1rem',
-    'background: var(--bg, #fff)',
-    'color: var(--fg, #111)',
-    'border-top: 2px solid var(--danger, #b00020)',
+    'background: var(--danger-bg, #ffebe9)',
+    'color: var(--fg, #1f2328)',
+    'border-top: 2px solid var(--danger-fg, #a40e26)',
     'box-shadow: 0 -1px 4px rgb(0 0 0 / 0.25)',
     'line-height: 1.4',
   ].join(';')
@@ -208,11 +257,13 @@ function showStorageBanner(detail: string): void {
   const text = document.createElement('div')
   text.style.cssText = 'flex: 1'
   const lead = document.createElement('strong')
-  lead.style.cssText = 'color: var(--danger, #b00020)'
-  lead.textContent = detail
+  lead.style.cssText = 'color: var(--danger-fg, #a40e26)'
+  lead.textContent = storageTrouble[trouble].lead
   const advice = document.createElement('span')
-  advice.textContent =
-    ' Use "Copy prompt" now to keep a copy: nothing you write here will survive this tab.'
+  // Each trouble carries its own advice: telling a reviewer whose writes are
+  // still being saved that nothing will survive the tab is its own way of
+  // losing their trust, and the next warning that matters.
+  advice.textContent = storageTrouble[trouble].advice
   text.append(lead, advice)
 
   const close = document.createElement('button')
@@ -221,16 +272,21 @@ function showStorageBanner(detail: string): void {
   close.style.cssText = [
     'flex: none',
     'padding: 0.125rem 0.5rem',
-    'background: var(--bg-soft, transparent)',
-    'color: var(--fg-muted, #555)',
-    'border: 1px solid var(--border, #ccc)',
+    'background: var(--bg, transparent)',
+    'color: var(--fg-muted, #5a626c)',
+    'border: 1px solid var(--border, #d0d7de)',
     'border-radius: 4px',
     'cursor: pointer',
     'font: inherit',
   ].join(';')
-  close.addEventListener('click', () => bar.remove())
+  close.addEventListener('click', () => {
+    bar.remove()
+    if (banner === bar) banner = null
+  })
 
   bar.append(text, close)
+  banner?.remove()
+  banner = bar
   document.body.appendChild(bar)
 }
 
@@ -250,7 +306,7 @@ function createStaticClient(data: StaticPayload): SbnnClient {
     try {
       stored = window.localStorage.getItem(storageKey)
     } catch (err) {
-      warnStorage('This page cannot reach browser storage, so your comments are not being saved.', err)
+      warnStorage('unreachable', err)
       return data.comments ?? []
     }
     if (stored) {
@@ -259,11 +315,9 @@ function createStaticClient(data: StaticPayload): SbnnClient {
       } catch (err) {
         // Something else wrote there, or the entry was truncated. Falling back
         // to the exported comments quietly would drop the reviewer's work out
-        // from under them, so it is reported like a failed write.
-        warnStorage(
-          'Comments saved on this page earlier could not be read back, so this is the review as it was exported.',
-          err,
-        )
+        // from under them, so it is said out loud - but as its own trouble:
+        // storage is answering, so what comes next is saved.
+        warnStorage('unreadable', err)
       }
     }
     return data.comments ?? []
@@ -275,7 +329,7 @@ function createStaticClient(data: StaticPayload): SbnnClient {
       memory = null
     } catch (err) {
       memory = comments
-      warnStorage('This browser refused to save your comments (private window, blocked site data, or a full quota).', err)
+      warnStorage('unsaved', err)
     }
     listeners.forEach((fn) => fn())
   }
