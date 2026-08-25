@@ -90,6 +90,17 @@ func TestCollapsePatterns(t *testing.T) {
 		{"internal/*.go", "internal/a.go", true},
 		{"internal/*.go", "internal/deep/a.go", false}, // one star, one level
 		{"", "anything", false},
+
+		// issue #18: patterns with two or more "**"
+		{"**/testdata/**", "a/b/testdata/c/d.txt", true},
+		{"**/node_modules/**", "web/node_modules/x/y.js", true},
+		{"**/testdata/**", "testdata/a.txt", true},     // a leading ** spans no directory too
+		{"**/testdata/**", "a/b/testdata", false},      // the directory itself is not its contents
+		{"**/testdata/**", "a/testdataX/c.txt", false}, // and a segment matches whole, not in part
+		{"a/**/b/**/c.txt", "a/x/y/b/z/c.txt", true},   // two **, one in the middle
+		{"a/**/b/**/c.txt", "a/x/y/c.txt", false},      // the b in between is missing
+		{"**", "anything/at/all.txt", true},
+		{"**/x", "a/b/x", true},
 	}
 	for _, tc := range cases {
 		if _, got := matchAny([]string{tc.pattern}, tc.path); got != tc.want {
