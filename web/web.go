@@ -1,7 +1,8 @@
 // Package web embeds the built review UI.
 //
-// The assets are produced by "pnpm build" in this directory (see the
-// Makefile) and committed so that "go install" works without Node.
+// The assets are produced by "pnpm build" in this directory, which "task web"
+// runs (see Taskfile.yml), and committed so that "go install" works without
+// Node.
 package web
 
 import (

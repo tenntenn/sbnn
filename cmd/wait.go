@@ -117,11 +117,26 @@ func runWait(cmd *cobra.Command, _ []string) error {
 	return printReview(ctx, c, group, format)
 }
 
-// exitReview ends with the status the reviewer's verdict calls for.
+// exitReview ends with the status the reviewer's verdict calls for - as long
+// as the verdict is about the change that is there now.
+//
+// ReviewVerdict is written by a submit and cleared by nothing: not by
+// clearing the comments, not by the diff that starts the next round. So a
+// group whose newest diff arrived after the last submission still carries
+// the verdict of the round before it, and reading that one leaves the
+// pipeline the help recommends - sbnn wait && sbnn comments -q && git commit
+// - stepping over open comments after an approval, and refusing a round that
+// has nothing wrong with it after a request for changes. Group.Reviewed is
+// the same question sbnn wait asks before it decides to wait, which is why
+// the two commands agree once both ask it. Until the round is submitted the
+// older rule applies: what is still open blocks, and nothing else does.
 func exitReview(ctx context.Context, c *client.Client, group string) error {
 	g, err := c.Group(ctx, group)
 	if err != nil {
 		return err
+	}
+	if !g.Reviewed() {
+		return exitWithComments(g.Comments)
 	}
 	return exitWithVerdict(g.ReviewVerdict, g.Comments)
 }

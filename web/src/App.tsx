@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { groupFromLocation } from './api'
 import { client } from './client'
-import { readSetting, writeSetting } from './storage'
+import { readBoolSetting, readEnumSetting, readNumberSetting, readSetting, writeBoolSetting, writeSetting } from './storage'
 import { isPreviewable, type Comment, type Diff, type FileDiff, type PreviewKind, type Status, type ViewMode, type Verdict } from './types'
 import { DiffFileSection } from './components/DiffFileSection'
 import { DiffStack, resolveFolded, type DiffStackHandle, type ScrollFraction } from './components/DiffStack'
@@ -13,7 +13,7 @@ import { PreviewStack } from './components/PreviewStack'
 import { Sidebar } from './components/Sidebar'
 import { clampRatio, SplitPane, SPLIT_DEFAULT } from './components/SplitPane'
 import { useNarrowLayout } from './useMediaQuery'
-import { plainKey, shortcuts, typingInto } from './shortcuts'
+import { plainKey, shortcuts, stepToComment, typingInto } from './shortcuts'
 import { applyTheme, storedTheme, type Theme } from './theme'
 import { sectionKey } from './sectionKey'
 
@@ -26,29 +26,59 @@ const SIDEBAR_DEFAULT = 280
 const SIDEBAR_MAX = 720
 const SIDEBAR_SNAP = 48
 const SIDEBAR_STEP = 24
+// What survives a reload follows one rule, so that the answer is guessable
+// before it is tried: a reader's preference is remembered, and everything
+// about one particular review or one particular moment is not.
+//
+// Remembered (a preference - how this reader likes sbnn to look and behave):
+// the sidebar width, the split ratio, the preview renderer, the theme, the
+// sidebar layout, the split/unified default, and follow-the-diff scrolling.
+//
+// Not remembered (belongs to a review, or to right now): per-file view mode
+// and fold overrides, which rounds are shut, the path filter, an unsent
+// comment draft, and which file is in focus.
+//
+// Every key is 'sbnn.' + the name, and every one of them is read back through
+// storage.ts so that a stale or hand-edited value falls back to the default
+// rather than reaching the UI.
 const SIDEBAR_KEY = 'sbnn.sidebar.width'
 const SPLIT_KEY = 'sbnn.split'
 const PREVIEW_KIND_KEY = 'sbnn.preview.renderer'
+const VIEW_MODE_KEY = 'sbnn.viewmode'
+const SYNC_SCROLL_KEY = 'sbnn.sync'
 
 function storedSplitRatio(): number {
+  // Kept apart from readNumberSetting because the ends are not like the
+  // middle: 0 and 1 mean "one pane only" and have to survive as they are,
+  // where anything between them is held away from the edges by clampRatio.
   const stored = readSetting(SPLIT_KEY)
-  if (stored === null) return SPLIT_DEFAULT
+  if (stored === null || stored.trim() === '') return SPLIT_DEFAULT
   const ratio = Number(stored)
   if (!Number.isFinite(ratio) || ratio < 0 || ratio > 1) return SPLIT_DEFAULT
   return ratio === 0 || ratio === 1 ? ratio : clampRatio(ratio)
 }
 
 function storedSidebarWidth(): number {
-  // An unset entry reads as null, which Number() would happily turn into a
-  // collapsed sidebar, so the absence is checked before the value.
-  const stored = readSetting(SIDEBAR_KEY)
-  if (stored === null) return SIDEBAR_DEFAULT
-  const width = Number(stored)
-  return Number.isFinite(width) && width >= 0 && width <= SIDEBAR_MAX ? width : SIDEBAR_DEFAULT
+  // 0 is a real width here - it is the collapsed sidebar - so the range
+  // starts there, and it is readNumberSetting that keeps a missing or blank
+  // entry from arriving as one.
+  return readNumberSetting(SIDEBAR_KEY, 0, SIDEBAR_MAX, SIDEBAR_DEFAULT)
 }
 
 function storedPreviewKind(): PreviewKind {
-  return readSetting(PREVIEW_KIND_KEY) === 'mo' ? 'mo' : 'preview'
+  return readEnumSetting<PreviewKind>(PREVIEW_KIND_KEY, ['preview', 'mo'], 'preview')
+}
+
+// 'auto' is how "no default of my own" is written down, since it has to be
+// told apart from a key that was never set - both mean null here, but only
+// one of them can be written back.
+function storedViewModeDefault(): ViewMode | null {
+  const stored = readEnumSetting<ViewMode | 'auto'>(VIEW_MODE_KEY, ['split', 'unified', 'auto'], 'auto')
+  return stored === 'auto' ? null : stored
+}
+
+function storedSyncScroll(): boolean {
+  return readBoolSetting(SYNC_SCROLL_KEY, true)
 }
 
 export function App() {
@@ -58,6 +88,12 @@ export function App() {
   const [comments, setComments] = useState<Comment[]>([])
   const [reviewedAt, setReviewedAt] = useState<string | null>(null)
   const [reviewVerdict, setReviewVerdict] = useState<Verdict | null>(null)
+  // roundReviewed is whether the verdict still covers what is on the page.
+  // A live page reads that from the status summary; an exported one has no
+  // server to ask, so it is frozen into the payload - otherwise a page
+  // exported after a diff arrived would show the previous round's Approved
+  // against a diff nobody has looked at.
+  const [roundReviewed, setRoundReviewed] = useState<boolean | null>(null)
   const [status, setStatus] = useState<Status | null>(null)
   // activeKey is the file the reader is currently looking at: on a phone
   // the one file shown, on a wide screen whichever the diff pane has been
@@ -66,11 +102,14 @@ export function App() {
   // touch the same path as their Nth file share one.
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const [foldOverrides, setFoldOverrides] = useState<Map<string, boolean>>(() => new Map())
+  // Where `n` / `p` stand: the comment last stepped to, which is a position
+  // of its own and cannot be read back off the file being shown.
+  const [currentCommentId, setCurrentCommentId] = useState<string | null>(null)
   const [viewModeOverrides, setViewModeOverrides] = useState<Map<string, ViewMode>>(() => new Map())
   // viewModeDefault is every file's view mode until its own toggle says
   // otherwise; null respects each file's own server-picked default (added
   // files unified, most modified files split) rather than forcing one.
-  const [viewModeDefault, setViewModeDefault] = useState<ViewMode | null>(null)
+  const [viewModeDefault, setViewModeDefault] = useState<ViewMode | null>(storedViewModeDefault)
   const [scrollFraction, setScrollFraction] = useState<ScrollFraction | null>(null)
   const [splitRatio, setSplitRatio] = useState(storedSplitRatio)
   const [pane, setPane] = useState<Pane>('diff')
@@ -91,7 +130,7 @@ export function App() {
   // reader in the wrong place with more confidence. It is off the moment
   // the reader says so, and the reader says so simply by scrolling the
   // preview themselves.
-  const [syncScroll, setSyncScroll] = useState(true)
+  const [syncScroll, setSyncScroll] = useState(storedSyncScroll)
   const bodyRef = useRef<HTMLDivElement>(null)
   const diffScrollRef = useRef<HTMLDivElement>(null)
   const previewScrollRef = useRef<HTMLDivElement>(null)
@@ -121,6 +160,14 @@ export function App() {
     writeSetting(PREVIEW_KIND_KEY, previewKind)
   }, [previewKind])
 
+  useEffect(() => {
+    writeSetting(VIEW_MODE_KEY, viewModeDefault ?? 'auto')
+  }, [viewModeDefault])
+
+  useEffect(() => {
+    writeBoolSetting(SYNC_SCROLL_KEY, syncScroll)
+  }, [syncScroll])
+
   const resizeSidebar = useCallback((clientX: number) => {
     const rect = bodyRef.current?.getBoundingClientRect()
     if (!rect) return
@@ -147,6 +194,7 @@ export function App() {
       setComments(data.comments)
       setReviewedAt(data.reviewedAt ?? null)
       setReviewVerdict(data.reviewVerdict ?? null)
+      setRoundReviewed(data.reviewed ?? null)
       setStatus(data.status)
       setError(null)
     } catch (err) {
@@ -239,7 +287,7 @@ export function App() {
   // The review is what anything waiting on sbnn is waiting for, so saying "I
   // am done" is an explicit act rather than a guess from the last comment.
   const summary = status?.groups.find((g) => g.name === group)
-  const reviewed = summary ? summary.reviewed : reviewedAt !== null
+  const reviewed = summary ? summary.reviewed : (roundReviewed ?? reviewedAt !== null)
   const hooks = summary?.hooks ?? 0
 
   const submitReview = async (verdict: Verdict) => {
@@ -301,20 +349,25 @@ export function App() {
   // in another file, and going there is the point. Every file's comments
   // are on the page at once now, so landing on the right one is a direct
   // scrollIntoView rather than a guess at "the first .comment on screen".
+  //
+  // Where the tour stands is the comment it last visited, not the file:
+  // deriving it from the active file made every comment after the second in
+  // a file unreachable, because arriving at the second one left the reader
+  // in the same file the search started from.
   const stepComment = useCallback(
     (by: number) => {
-      const open = comments.filter((c) => !c.resolved)
-      if (open.length === 0) return
-      const at = activeKey ? open.findIndex((c) => sectionKey(c.diffId, c.fileId) === activeKey) : -1
-      const index = at < 0 ? (by > 0 ? 0 : open.length - 1) : at + by
-      const target = open[(index + open.length) % open.length]
+      const stops = comments
+        .filter((c) => !c.resolved)
+        .map((c) => ({ id: c.id, key: sectionKey(c.diffId, c.fileId) }))
+      const target = stepToComment(stops, currentCommentId, activeKey, by)
       if (!target) return
-      goToKey(sectionKey(target.diffId, target.fileId))
+      setCurrentCommentId(target.id)
+      goToKey(target.key)
       window.setTimeout(() => {
         document.getElementById(`comment-${target.id}`)?.scrollIntoView({ block: 'center' })
       }, 50)
     },
-    [comments, activeKey, goToKey],
+    [comments, currentCommentId, activeKey, goToKey],
   )
 
   // One place where every key is answered. Each is a single unmodified
@@ -436,6 +489,7 @@ export function App() {
           Boolean(activeEntry.file.folded),
           activeComments.length > 0,
         )}
+        foldedByReader={foldOverrides.get(activeKey!) === true}
         onSetFolded={(value) => setFolded(activeKey!, value)}
         viewMode={viewModeOverrides.get(activeKey!) ?? viewModeDefault ?? activeEntry.file.viewMode}
         onSetViewMode={(mode) => setViewModeFor(activeKey!, mode)}

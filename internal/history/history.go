@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -113,19 +114,35 @@ func FromGroup(g *model.Group) Record {
 
 // Append writes a record to the log, one JSON object per line so that the
 // file stays readable by anything, sbnn included.
+//
+// The log is one file for the whole machine while a session file is one
+// per port, so several servers appending at once is the ordinary case, not
+// a corner. O_APPEND alone only settles where a write starts, not that it
+// arrives in one piece: a record carrying comment bodies and their
+// snippets is far past any size a write is promised to be atomic at, and
+// two of them landing inside one another make a line that no longer
+// parses - a review that quietly vanishes from sbnn reviews, since Read
+// skips what it cannot read. So the write is made under an exclusive
+// advisory lock on the file.
 func Append(path string, rec Record) error {
 	if path == "" {
 		return nil
+	}
+	// Marshalled before the lock is taken: the lock is for the write.
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	b, err := json.Marshal(rec)
+	unlock, err := lockForAppend(f)
 	if err != nil {
-		return err
+		return fmt.Errorf("locking %s: %w", path, err)
 	}
+	defer unlock()
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		return err
 	}
@@ -339,6 +356,15 @@ type Stats struct {
 	Deletions   int `json:"deletions"`
 	// Silent is how many reviews were submitted with nothing to say.
 	Silent int `json:"silent"`
+	// Approved, Commented and ChangesRequested are how many reviews
+	// decided each way. Counting comments does not answer what a review
+	// decided - an approval can carry three comments and a request for
+	// changes can carry none - which is the whole reason a verdict is
+	// written down, so a summary that leaves it out cannot be read for the
+	// one thing each review was for.
+	Approved         int `json:"approved"`
+	Commented        int `json:"commented"`
+	ChangesRequested int `json:"changesRequested"`
 	// CommentsPerReview is the mean, kept as a float on purpose: 2.8 says
 	// more than 3.
 	CommentsPerReview float64 `json:"commentsPerReview"`
@@ -366,6 +392,17 @@ func Summarize(records []Record) Stats {
 		s.Deletions += rec.Deletions
 		if len(rec.Comments) == 0 {
 			s.Silent++
+		}
+		// A record written before the verdict was recorded has an empty
+		// one, which reads as "commented" - the default ParseVerdict and
+		// the API already apply - so an old log is counted, not dropped.
+		switch rec.Verdict {
+		case model.VerdictApproved:
+			s.Approved++
+		case model.VerdictChangesRequested:
+			s.ChangesRequested++
+		default:
+			s.Commented++
 		}
 		if s.First.IsZero() || rec.ReviewedAt.Before(s.First) {
 			s.First = rec.ReviewedAt
@@ -417,7 +454,7 @@ func median(values []time.Duration) time.Duration {
 	if len(values) == 0 {
 		return 0
 	}
-	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	slices.Sort(values)
 	mid := len(values) / 2
 	if len(values)%2 == 1 {
 		return values[mid]

@@ -329,8 +329,10 @@ func TestPreviewPrefersWorktreeFile(t *testing.T) {
 	}
 	dir := t.TempDir()
 	stub := filepath.Join(dir, "mo")
-	script := "#!/bin/sh\n" +
-		`printf '{"url":"http://localhost:6275","files":[]}\n'` + "\n"
+	script := `#!/bin/sh
+path=$(eval echo \${$#})
+printf '{"url":"http://localhost:6275","files":[{"url":"http://localhost:6275/sbnn-default?file=new","name":"new.md","path":"%s"}]}\n' "$path"
+`
 	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +341,10 @@ func TestPreviewPrefersWorktreeFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	real := filepath.Join(work, "docs", "new.md")
-	if err := os.WriteFile(real, []byte("# From the working tree\n"), 0o600); err != nil {
+	// The patch is applied here, so the working tree carries the new side
+	// and more of it than the diff does.
+	worktree := "# New\nbody\nonly in the working tree\n"
+	if err := os.WriteFile(real, []byte(worktree), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -353,6 +358,45 @@ func TestPreviewPrefersWorktreeFile(t *testing.T) {
 	getJSON(t, ts.URL+"/_/api/groups/default/diffs/"+added.Diff.ID+"/files/"+file.ID+"/preview", &preview)
 	if preview.Source != SourceWorktree || preview.Path != real {
 		t.Errorf("preview = %+v, want the working tree file %s", preview, real)
+	}
+}
+
+// A preview whose deep link mo never reported used to come back as 200 with
+// an empty moUrl: a blank frame beside the diff, and nothing on the server
+// saying the link failed. The reviewer has to be told, so the request fails.
+func TestPreviewReportsAMissingDeepLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stub mo is a shell script")
+	}
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "mo")
+	// mo ran, answered, and listed no page for the file it was given.
+	script := "#!/bin/sh\n" +
+		`printf '{"url":"http://localhost:6275","files":[]}\n'` + "\n"
+	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ts, _ := newTestServer(t, func(o *Options) {
+		o.Mo = mo.New(stub, 6275, "localhost")
+		o.CacheDir = t.TempDir()
+	})
+
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[1] // docs/new.md
+
+	// Decoded loosely on purpose: the answer this test guards against is a
+	// 200 PreviewResponse, whose fields are not all strings, and a decode
+	// error there would hide what actually came back.
+	var body map[string]any
+	resp := getJSON(t, ts.URL+"/_/api/groups/default/diffs/"+added.Diff.ID+"/files/"+file.ID+"/preview", &body)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %s with moUrl %q, want 500 when mo reported no page for the file",
+			resp.Status, body["moUrl"])
+	}
+	msg, _ := body["error"].(string)
+	if !strings.Contains(msg, "no URL") {
+		t.Errorf("error = %q, want it to say mo gave the file no URL", msg)
 	}
 }
 
@@ -1154,189 +1198,422 @@ func TestHandleAddCommentRejectsNonPositiveLines(t *testing.T) {
 	}
 }
 
-// A comment was accepted as soon as its snippet was non-empty, so a range
-// starting inside a hunk and ending past it was stored with an endLine the
-// diff never showed. The page draws a comment on the row for its endLine,
-// so such a comment was drawn on no row and the reviewer could not see it,
-// while sbnn comments claimed a range like "2-900".
-//
-// Every case runs through both shapes of the request. The page sends
-// diffId, fileId and a snippet it worked out itself; an agent on the
-// command line sends only a path. The clamp lived in the path branch
-// alone, so the shape the page actually uses kept storing endLine=900.
-func TestHandleAddCommentClampsEndLineToTheDiff(t *testing.T) {
+// The API used to fold every side that was not the literal "old" into
+// "new", so "OLD" attached the comment to the new side -- a different
+// file, on lines that mean something else -- and said 200. The CLI is
+// strict about the same field, so the two layers disagreed silently.
+func TestHandleAddCommentValidatesSide(t *testing.T) {
 	ts, _ := newTestServer(t)
 	var added AddDiffResponse
 	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[0]
 
-	// README.md covers new lines 1-3 and old lines 1-2; docs/new.md is a
-	// new file covering new lines 1-2.
 	cases := []struct {
-		name      string
-		path      string
-		side      string
-		startLine int
-		endLine   int
-		wantEnd   int
+		name     string
+		side     string
+		want     int
+		wantSide string // the side actually stored, checked when want is 200
 	}{
-		{"past the end of the only hunk", "README.md", "new", 2, 900, 3},
-		{"one line past the end", "README.md", "new", 2, 4, 3},
-		{"exactly the last line stays", "README.md", "new", 2, 3, 3},
-		{"a range well inside stays", "README.md", "new", 1, 2, 2},
-		{"a single line stays", "README.md", "new", 3, 3, 3},
-		{"the old side clamps to the old numbering", "README.md", "old", 1, 50, 2},
-		{"a new file clamps too", "docs/new.md", "new", 1, 99, 2},
+		{"lower case new", "new", http.StatusOK, "new"},
+		{"lower case old", "old", http.StatusOK, "old"},
+		{"empty means new", "", http.StatusOK, "new"},
+		{"upper case old is old, not new", "OLD", http.StatusOK, "old"},
+		{"mixed case old", "Old", http.StatusOK, "old"},
+		{"padded old", "  old  ", http.StatusOK, "old"},
+		{"upper case new", "NEW", http.StatusOK, "new"},
+		{"a different word", "left", http.StatusBadRequest, ""},
+		{"a typo", "NEWW", http.StatusBadRequest, ""},
+		{"nonsense", "sideways", http.StatusBadRequest, ""},
 	}
-	shapes := []struct {
-		name    string
-		request func(path, side string, start, end int, fileID string) AddCommentRequest
-	}{{
-		// What an agent on the command line sends: a path, nothing else.
-		name: "by path",
-		request: func(path, side string, start, end int, _ string) AddCommentRequest {
-			return AddCommentRequest{Path: path, Side: side, StartLine: start, EndLine: end, Body: "range"}
-		},
-	}, {
-		// What the page sends: the file named outright, and a snippet it
-		// captured itself, so the server never computes one.
-		name: "by fileId, with the snippet the page captured",
-		request: func(path, side string, start, end int, fileID string) AddCommentRequest {
-			return AddCommentRequest{
-				DiffID: added.Diff.ID, FileID: fileID, Path: path, Side: side,
-				StartLine: start, EndLine: end, Body: "range", Snippet: "captured by the page",
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := AddCommentRequest{
+				DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(), Side: tc.side,
+				StartLine: 1, EndLine: 1, Body: "hi",
 			}
-		},
-	}, {
-		// The same shape with no snippet: it is the file, not the
-		// snippet, that says where the range stops.
-		name: "by fileId, without a snippet",
-		request: func(path, side string, start, end int, fileID string) AddCommentRequest {
-			return AddCommentRequest{
-				DiffID: added.Diff.ID, FileID: fileID, Path: path, Side: side,
-				StartLine: start, EndLine: end, Body: "range",
+			if tc.want != http.StatusOK {
+				resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", req, nil)
+				if resp.StatusCode != tc.want {
+					t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+				}
+				return
 			}
-		},
-	}}
-
-	for _, shape := range shapes {
-		t.Run(shape.name, func(t *testing.T) {
-			for _, tc := range cases {
-				t.Run(tc.name, func(t *testing.T) {
-					fileID, ok := fileIDForPath(added.Diff, tc.path)
-					if !ok {
-						t.Fatalf("the sample diff has no %s", tc.path)
-					}
-					var comment model.Comment
-					resp := postJSON(t, ts.URL+"/_/api/groups/default/comments",
-						shape.request(tc.path, tc.side, tc.startLine, tc.endLine, fileID), &comment)
-					if resp.StatusCode != http.StatusOK {
-						t.Fatalf("status = %s, want 200", resp.Status)
-					}
-					// The status was 200 before the fix too. What was
-					// wrong was the range that got stored.
-					if comment.StartLine != tc.startLine {
-						t.Errorf("stored startLine = %d, want %d", comment.StartLine, tc.startLine)
-					}
-					if comment.EndLine != tc.wantEnd {
-						t.Errorf("stored endLine = %d, want %d", comment.EndLine, tc.wantEnd)
-					}
-					if comment.Snippet == "" {
-						t.Error("stored an empty snippet")
-					}
-					if comment.FileID != fileID {
-						t.Errorf("stored fileId = %q, want %q", comment.FileID, fileID)
-					}
-				})
+			var comment model.Comment
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", req, &comment)
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+			}
+			// A 200 is not enough: the point of the bug was that the
+			// wrong side was stored while the status looked fine.
+			if comment.Side != tc.wantSide {
+				t.Errorf("stored side = %q, want %q", comment.Side, tc.wantSide)
 			}
 		})
 	}
 
-	// No stored comment may claim a line the page has no row for, however
-	// it was sent.
+	// Nothing refused reached the store, and every stored side is canonical.
 	var comments []*model.Comment
 	getJSON(t, ts.URL+"/_/api/groups/default/comments", &comments)
-	if len(comments) != len(cases)*len(shapes) {
-		t.Fatalf("stored %d comment(s), want %d", len(comments), len(cases)*len(shapes))
+	if len(comments) != 7 {
+		t.Errorf("stored %d comments, want 7", len(comments))
 	}
 	for _, c := range comments {
-		f, ok := findFileForComment(added.Diff, c)
-		if !ok {
-			t.Fatalf("comment on no file of the diff: %+v", c)
-		}
-		if last := lastCoveredLine(f, c.Side, c.StartLine, c.EndLine); last != c.EndLine {
-			t.Errorf("comment %s ends at line %d, but the diff stops at %d", c.ID, c.EndLine, last)
+		if c.Side != "new" && c.Side != "old" {
+			t.Errorf("stored comment with a non-canonical side: %+v", c)
 		}
 	}
 }
 
-// TestHandleAddCommentByFileIDFillsTheSnippet pins the other half of what
-// the fileId branch used to skip: a client that names the file but sends
-// no snippet was stored with an empty one, so the comment carried no code
-// with it into sbnn comments or the review prompt.
-func TestHandleAddCommentByFileIDFillsTheSnippet(t *testing.T) {
+// A suggestion replaces lines of the new file, so it cannot sit on the
+// old side however that side was spelled. The check used to run before
+// the side was folded, so "OLD" slipped past it.
+func TestHandleAddCommentRejectsSuggestionOnFoldedOldSide(t *testing.T) {
 	ts, _ := newTestServer(t)
 	var added AddDiffResponse
 	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
-	fileID, ok := fileIDForPath(added.Diff, "README.md")
-	if !ok {
-		t.Fatal("the sample diff has no README.md")
+	file := added.Diff.Files[0]
+
+	for _, side := range []string{"old", "OLD", " Old "} {
+		t.Run(side, func(t *testing.T) {
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+				DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(), Side: side,
+				StartLine: 1, EndLine: 1, Body: "try this", Suggestion: "replacement",
+			}, nil)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %s, want 400", resp.Status)
+			}
+		})
+	}
+}
+
+// GET /_/api/groups/{group} returns the whole group, and the page refetches it
+// on every change event, so its size is paid again for each edit - measured at
+// 6.61 MB for a 500-file review. Diff.Raw is the original diff text and no
+// client reads it: it is declared in web/src/types.ts and used nowhere, and
+// export.Build already drops it. The store must keep it, since an export or a
+// re-parse still wants it.
+func TestGroupResponseOmitsRawDiffText(t *testing.T) {
+	ts, srv := newTestServer(t)
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs",
+		AddDiffRequest{Title: "first", Content: sampleDiff}, nil)
+
+	resp, err := http.Get(ts.URL + "/_/api/groups/default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "diff --git") {
+		t.Errorf("the group response still carries the raw diff text: %s", body)
 	}
 
-	var comment model.Comment
-	resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
-		DiffID: added.Diff.ID, FileID: fileID, Path: "README.md", Side: "new",
-		StartLine: 2, EndLine: 3, Body: "range",
-	}, &comment)
+	// The parsed files - what the UI actually renders - are still there.
+	var g model.Group
+	if err := json.Unmarshal(body, &g); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Diffs) != 1 || len(g.Diffs[0].Files) != 2 {
+		t.Fatalf("group = %+v, want the parsed files intact", g)
+	}
+	if g.Diffs[0].Raw != "" {
+		t.Errorf("Raw = %q, want it dropped from the response", g.Diffs[0].Raw)
+	}
+
+	// The store keeps it.
+	stored, ok := srv.Store().Group(DefaultGroup)
+	if !ok {
+		t.Fatal("the group is gone from the store")
+	}
+	if !strings.Contains(stored.Diffs[0].Raw, "diff --git") {
+		t.Errorf("the store lost the raw diff text: %q", stored.Diffs[0].Raw)
+	}
+}
+
+// The saving this buys, on the endpoint the page refetches on every event.
+func BenchmarkGroupResponseSize(b *testing.B) {
+	srv, err := New(Options{SessionFile: filepath.Join(b.TempDir(), "s.json"), Version: "test"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	raw := strings.Repeat(sampleDiff, 100)
+	srv.Store().AddDiff(DefaultGroup, &model.Diff{Raw: raw, Files: diff.Parse(raw)})
+
+	g, _ := srv.Store().Group(DefaultGroup)
+	with, err := json.MarshalIndent(g, "", "  ")
+	if err != nil {
+		b.Fatal(err)
+	}
+	g, _ = srv.Store().Group(DefaultGroup)
+	without, err := json.MarshalIndent(withoutRawDiffs(g), "", "  ")
+	if err != nil {
+		b.Fatal(err)
+	}
+	for b.Loop() {
+		g, _ := srv.Store().Group(DefaultGroup)
+		if _, err := json.MarshalIndent(withoutRawDiffs(g), "", "  "); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ReportMetric(float64(len(with)), "bytes-with-raw")
+	b.ReportMetric(float64(len(without)), "bytes-without-raw")
+	b.ReportMetric(100*float64(len(with)-len(without))/float64(len(with)), "%-saved")
+}
+
+// postChunked sends body with no Content-Length, the way curl does with
+// -H "Transfer-Encoding: chunked" and the way many HTTP/2 clients send.
+// Wrapping the reader hides its length from net/http, so the request goes
+// out chunked and the server sees ContentLength == -1.
+func postChunked(t *testing.T, url, body string, out any) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, url, io.NopCloser(strings.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	if req.ContentLength != 0 {
+		t.Fatalf("the request carried a Content-Length of %d, so it is not the case under test", req.ContentLength)
+	}
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return resp
+}
+
+// A review submitted with an unknown Content-Length used to have its body
+// thrown away without an error, so "approved" and "changes-requested"
+// were both recorded as a plain "commented" with no note. sbnn wait
+// --exit-code and sbnn submit --exit-code act on that value, so the
+// verdict arrived downstream as the opposite of what was decided.
+func TestSubmitReviewReadsAChunkedBody(t *testing.T) {
+	cases := []struct {
+		name        string
+		body        string
+		want        int
+		wantVerdict model.Verdict
+		wantNote    string
+	}{
+		{"approved", `{"verdict":"approved","note":"looks right"}`, http.StatusOK, model.VerdictApproved, "looks right"},
+		{"changes requested", `{"verdict":"changes-requested","note":"not yet"}`, http.StatusOK, model.VerdictChangesRequested, "not yet"},
+		{"commented", `{"verdict":"commented","note":"a thought"}`, http.StatusOK, model.VerdictCommented, "a thought"},
+		{"a note with no verdict", `{"note":"just a note"}`, http.StatusOK, model.VerdictCommented, "just a note"},
+		{"an empty object", `{}`, http.StatusOK, model.VerdictCommented, ""},
+		{"a genuinely empty body is not an error", ``, http.StatusOK, model.VerdictCommented, ""},
+		{"a bad verdict is still refused", `{"verdict":"lgtm-ish"}`, http.StatusBadRequest, "", ""},
+		{"malformed json is still refused", `{"verdict":`, http.StatusBadRequest, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, _ := newTestServer(t)
+			postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, nil)
+
+			var g model.Group
+			out := any(nil)
+			if tc.want == http.StatusOK {
+				out = &g
+			}
+			resp := postChunked(t, ts.URL+"/_/api/groups/default/review", tc.body, out)
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+			}
+			if tc.want != http.StatusOK {
+				return
+			}
+			// The status was 200 before the fix as well. What was lost
+			// was the verdict and the note.
+			if g.ReviewVerdict != tc.wantVerdict {
+				t.Errorf("verdict = %q, want %q", g.ReviewVerdict, tc.wantVerdict)
+			}
+			if g.ReviewNote != tc.wantNote {
+				t.Errorf("note = %q, want %q", g.ReviewNote, tc.wantNote)
+			}
+			// And it must be what the store kept, not just what came back.
+			var reread model.Group
+			getJSON(t, ts.URL+"/_/api/groups/default", &reread)
+			if reread.ReviewVerdict != tc.wantVerdict || reread.ReviewNote != tc.wantNote {
+				t.Errorf("stored verdict/note = %q/%q, want %q/%q",
+					reread.ReviewVerdict, reread.ReviewNote, tc.wantVerdict, tc.wantNote)
+			}
+		})
+	}
+}
+
+// A request with no body at all still submits a commented review, which
+// is what a reviewer who did not choose is saying.
+func TestSubmitReviewWithNoBodyAtAll(t *testing.T) {
+	ts, _ := newTestServer(t)
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, nil)
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/_/api/groups/default/review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %s, want 200", resp.Status)
 	}
-	want := diff.Snippet(fileOf(t, added.Diff, fileID), "new", 2, 3)
-	if want == "" {
-		t.Fatal("the sample diff gives no snippet for README.md:2-3")
+	var g model.Group
+	if err := json.NewDecoder(resp.Body).Decode(&g); err != nil {
+		t.Fatal(err)
 	}
-	if comment.Snippet != want {
-		t.Errorf("stored snippet = %q, want the one the path shape gets, %q", comment.Snippet, want)
+	if g.ReviewVerdict != model.VerdictCommented {
+		t.Errorf("verdict = %q, want %q", g.ReviewVerdict, model.VerdictCommented)
 	}
-
-	// A snippet the client did send is still its own.
-	var kept model.Comment
-	postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
-		DiffID: added.Diff.ID, FileID: fileID, Path: "README.md", Side: "new",
-		StartLine: 2, EndLine: 3, Body: "range", Snippet: "captured by the page",
-	}, &kept)
-	if kept.Snippet != "captured by the page" {
-		t.Errorf("stored snippet = %q, want the one the client sent", kept.Snippet)
+	if !g.Reviewed() {
+		t.Errorf("group = %+v, want a submitted review", g)
 	}
 }
 
-// fileIDForPath returns the id the diff gave the file at path.
-func fileIDForPath(d *model.Diff, path string) (string, bool) {
-	for _, f := range d.Files {
-		if f.Path() == path || f.OldPath == path {
-			return f.ID, true
-		}
-	}
-	return "", false
-}
-
-// fileOf returns the file of the diff with this id.
-func fileOf(t *testing.T, d *model.Diff, fileID string) *model.File {
+// sendNoBody performs a bodyless request and returns the response.
+func sendNoBody(t *testing.T, method, url string) *http.Response {
 	t.Helper()
-	for _, f := range d.Files {
-		if f.ID == fileID {
-			return f
-		}
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatalf("the diff has no file %q", fileID)
-	return nil
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
 }
 
-// findFileForComment returns the file of the diff a comment points at.
-func findFileForComment(d *model.Diff, c *model.Comment) (*model.File, bool) {
-	for _, f := range d.Files {
-		if f.ID == c.FileID {
-			return f, true
-		}
+// rawGroupFields reads GET .../groups/{group} and returns its top-level
+// fields unparsed, so that null and [] can be told apart -- decoding into
+// model.Group turns both into a nil slice and hides the bug.
+func rawGroupFields(t *testing.T, url string) map[string]json.RawMessage {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return nil, false
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %s, want 200", resp.Status)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&fields); err != nil {
+		t.Fatal(err)
+	}
+	return fields
+}
+
+// A group that exists but holds nothing marshalled its nil slices as
+// null, while the very same endpoint answered [] for a group that did not
+// exist at all. The shape of the response depended on how the group came
+// to be, which every consumer of the API would have to know about.
+func TestHandleGroupAlwaysReturnsArrays(t *testing.T) {
+	cases := []struct {
+		name string
+		// empty names the fields that must come back as [] for this
+		// group; a field holding something is checked separately.
+		empty []string
+		group string
+		setup func(t *testing.T, ts *httptest.Server, group string)
+	}{
+		{
+			name:  "a group that does not exist",
+			group: "never-made",
+			empty: []string{"diffs", "comments"},
+			setup: func(t *testing.T, ts *httptest.Server, group string) {},
+		},
+		{
+			name:  "a group created by a hook and nothing else",
+			group: "hooked",
+			empty: []string{"diffs", "comments"},
+			setup: func(t *testing.T, ts *httptest.Server, group string) {
+				resp := postJSON(t, ts.URL+"/_/api/groups/"+group+"/hooks",
+					model.Hook{Command: "echo hi"}, nil)
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("adding a hook: status = %s", resp.Status)
+				}
+			},
+		},
+		{
+			name:  "a group whose only diff was deleted",
+			group: "emptied",
+			empty: []string{"diffs", "comments"},
+			setup: func(t *testing.T, ts *httptest.Server, group string) {
+				var added AddDiffResponse
+				postJSON(t, ts.URL+"/_/api/groups/"+group+"/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+				resp := sendNoBody(t, http.MethodDelete,
+					ts.URL+"/_/api/groups/"+group+"/diffs/"+added.Diff.ID)
+				if resp.StatusCode != http.StatusNoContent {
+					t.Fatalf("deleting the diff: status = %s", resp.Status)
+				}
+			},
+		},
+		{
+			name: "a group whose comments were cleared",
+			// This one keeps its diff, so only comments must be [].
+			group: "cleared",
+			empty: []string{"comments"},
+			setup: func(t *testing.T, ts *httptest.Server, group string) {
+				var added AddDiffResponse
+				postJSON(t, ts.URL+"/_/api/groups/"+group+"/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+				postJSON(t, ts.URL+"/_/api/groups/"+group+"/comments", AddCommentRequest{
+					DiffID: added.Diff.ID, FileID: added.Diff.Files[0].ID, Path: added.Diff.Files[0].Path(),
+					Side: "new", StartLine: 1, EndLine: 1, Body: "hi",
+				}, nil)
+				resp := sendNoBody(t, http.MethodDelete, ts.URL+"/_/api/groups/"+group+"/comments")
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("clearing the comments: status = %s", resp.Status)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, _ := newTestServer(t)
+			tc.setup(t, ts, tc.group)
+
+			fields := rawGroupFields(t, ts.URL+"/_/api/groups/"+tc.group)
+			for _, key := range tc.empty {
+				got, ok := fields[key]
+				if !ok {
+					t.Errorf("the response has no %q field at all", key)
+					continue
+				}
+				if string(got) != "[]" {
+					t.Errorf("%q = %s, want []", key, got)
+				}
+			}
+		})
+	}
+}
+
+// A group that holds something still reports what it holds: the
+// normalisation must only replace a nil slice, never an occupied one.
+func TestHandleGroupKeepsWhatTheGroupHolds(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+		DiffID: added.Diff.ID, FileID: added.Diff.Files[0].ID, Path: added.Diff.Files[0].Path(),
+		Side: "new", StartLine: 1, EndLine: 1, Body: "hi",
+	}, nil)
+
+	var g model.Group
+	getJSON(t, ts.URL+"/_/api/groups/default", &g)
+	if len(g.Diffs) != 1 {
+		t.Errorf("diffs = %d, want 1", len(g.Diffs))
+	}
+	if len(g.Comments) != 1 {
+		t.Errorf("comments = %d, want 1", len(g.Comments))
+	}
 }
