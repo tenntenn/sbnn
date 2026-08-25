@@ -290,7 +290,7 @@ func (p *parser) readHunk() {
 			p.i++
 			continue
 		}
-		if oldLeft <= 0 && newLeft <= 0 {
+		if oldLeft <= 0 && newLeft <= 0 && !p.continuesHunk() {
 			break
 		}
 		var kind model.LineKind
@@ -331,6 +331,35 @@ func (p *parser) readHunk() {
 		p.i++
 	}
 	f.Hunks = append(f.Hunks, h)
+}
+
+// continuesHunk reports whether the line the parser is sitting on still
+// belongs to the hunk being read, even though the header's counts have already
+// run out.
+//
+// The counts used to be trusted absolutely, so a header that promised fewer
+// lines than its body carried - a patch cut short by a pipe, a mail client
+// that reflowed it, a generator that miscounted - had its surplus lines
+// dropped without a word. That is the worst thing a review tool can do with
+// input it was handed: the reviewer approves the change they were shown, and
+// the change they were shown was smaller than the one that arrived.
+//
+// Past the counts only an unambiguous body line is taken. A bare empty line is
+// trailing whitespace at least as often as it is an empty context line, and a
+// "--- / +++" pair begins the next file of a plain diff even though it starts
+// with the same character as a deletion.
+func (p *parser) continuesHunk() bool {
+	l := p.lines[p.i]
+	if l == "" {
+		return false
+	}
+	switch l[0] {
+	case ' ', '+', '-':
+	default:
+		return false
+	}
+	return !(strings.HasPrefix(l, "--- ") && p.i+1 < len(p.lines) &&
+		strings.HasPrefix(p.lines[p.i+1], "+++ "))
 }
 
 func (p *parser) readCombinedHunk() {

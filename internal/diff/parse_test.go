@@ -471,3 +471,134 @@ func describe(files []*model.File) string {
 	}
 	return b.String()
 }
+
+// A hunk header that promises fewer lines than its body carries must not have
+// the surplus thrown away: the reviewer would approve a smaller change than
+// the one they were handed.
+func TestParseKeepsHunkLinesBeyondTheHeaderCount(t *testing.T) {
+	src := `--- a/a.txt
++++ b/a.txt
+@@ -1,1 +1,1 @@
+-a
++b
+-c
++d
+`
+	files := diff.Parse(src)
+	if len(files) != 1 || len(files[0].Hunks) != 1 {
+		t.Fatalf("want 1 file with 1 hunk, got:\n%s", describe(files))
+	}
+	f := files[0]
+	if f.Additions != 2 || f.Deletions != 2 {
+		t.Errorf("got +%d -%d, want +2 -2", f.Additions, f.Deletions)
+	}
+	var got []string
+	for _, l := range f.Hunks[0].Lines {
+		got = append(got, string(l.Kind)+":"+l.Content)
+	}
+	want := []string{"delete:a", "add:b", "delete:c", "add:d"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("lines = %v, want %v", got, want)
+	}
+}
+
+// Reading past the counts must not run one file's hunk into the next file, nor
+// swallow the blank line a diff may end with.
+func TestParseSurplusHunkLinesStopAtTheNextFile(t *testing.T) {
+	tests := []struct {
+		name      string
+		src       string
+		files     int
+		firstLine int
+	}{
+		{
+			name: "plain diff header pair ends the hunk",
+			src: `--- a.txt
++++ a.txt
+@@ -1 +1 @@
+-a
++A
+-x
+--- b.txt
++++ b.txt
+@@ -1 +1 @@
+-b
++B
+`,
+			files:     2,
+			firstLine: 3,
+		},
+		{
+			name: "git header ends the hunk",
+			src: `diff --git a/a.txt b/a.txt
+--- a/a.txt
++++ b/a.txt
+@@ -1,1 +1,1 @@
+-a
++b
+-x
+diff --git a/b.txt b/b.txt
+--- a/b.txt
++++ b/b.txt
+@@ -1,1 +1,1 @@
+-c
++d
+`,
+			files:     2,
+			firstLine: 3,
+		},
+		{
+			name: "next hunk ends the hunk",
+			src: `--- a/a.txt
++++ b/a.txt
+@@ -1,1 +1,1 @@
+-a
++b
+-x
+@@ -9,1 +9,1 @@
+-c
++d
+`,
+			files:     1,
+			firstLine: 3,
+		},
+		{
+			name:      "a trailing blank line is not an extra context line",
+			src:       "--- a/a.txt\n+++ b/a.txt\n@@ -1,1 +1,1 @@\n-a\n+b\n\n",
+			files:     1,
+			firstLine: 2,
+		},
+		{
+			name:      "trailing prose is not an extra line",
+			src:       "--- a/a.txt\n+++ b/a.txt\n@@ -1,1 +1,1 @@\n-a\n+b\n2 files changed\n",
+			files:     1,
+			firstLine: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files := diff.Parse(tt.src)
+			if len(files) != tt.files {
+				t.Fatalf("got %d file(s), want %d:\n%s", len(files), tt.files, describe(files))
+			}
+			if n := len(files[0].Hunks[0].Lines); n != tt.firstLine {
+				t.Errorf("first hunk has %d line(s), want %d", n, tt.firstLine)
+			}
+		})
+	}
+}
+
+// The opposite mismatch - a header promising more lines than the body has -
+// still parses what is there, and stops at the end of the body.
+func TestParseShortHunkBodyReadsWhatIsThere(t *testing.T) {
+	files := diff.Parse("--- a/a.txt\n+++ b/a.txt\n@@ -1,9 +1,9 @@\n-a\n+b\n")
+	if len(files) != 1 || len(files[0].Hunks) != 1 {
+		t.Fatalf("want 1 file with 1 hunk, got:\n%s", describe(files))
+	}
+	if n := len(files[0].Hunks[0].Lines); n != 2 {
+		t.Errorf("hunk has %d line(s), want 2", n)
+	}
+	if f := files[0]; f.Additions != 1 || f.Deletions != 1 {
+		t.Errorf("got +%d -%d, want +1 -1", f.Additions, f.Deletions)
+	}
+}
