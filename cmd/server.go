@@ -106,13 +106,11 @@ func spawnServer(ctx context.Context, c *client.Client) (*server.Status, error) 
 	}
 	// The server is the one that writes the log, so it has to be told where
 	// this invocation wants it.
-	if resolved, err := historyFile(historyPath); err == nil {
-		if resolved == "" {
-			args = append(args, "--history-file", "off")
-		} else {
-			args = append(args, "--history-file", resolved)
-		}
+	history, err := historyFileArgs(historyPath)
+	if err != nil {
+		return nil, err
 	}
+	args = append(args, history...)
 	if allowRemote {
 		args = append(args, "--dangerously-allow-remote-access")
 	}
@@ -150,6 +148,28 @@ func spawnServer(ctx context.Context, c *client.Client) (*server.Status, error) 
 	}
 	fmt.Fprintf(os.Stderr, "sbnn: serving at %s (pid %d)\n", st.URL, st.PID)
 	return st, nil
+}
+
+// historyFileArgs is the --history-file the background server is started with.
+// The server writes the log, so it has to be told what this invocation
+// resolved: the flag it was given, or $SBNN_HISTORY, or the state directory.
+//
+// A value historyFile refuses is reported here rather than dropped. Passing no
+// --history-file used to be the fallback, which sent the server off to its own
+// default and let reviews pile up in a file the caller never asked for - the
+// silent log this refusal exists to prevent. It also left the server to fail on
+// $SBNN_HISTORY by itself, with nothing to show for it but a readiness timeout.
+func historyFileArgs(flag string) ([]string, error) {
+	resolved, err := historyFile(flag)
+	if err != nil {
+		return nil, err
+	}
+	if resolved == "" {
+		// The server parses this string the same way, so send a word it knows
+		// rather than an empty value, which would mean "use the default".
+		return []string{"--history-file", HistoryOffWords[0]}, nil
+	}
+	return []string{"--history-file", resolved}, nil
 }
 
 // checkAddrFree reports whether a server can still be started on addr. The
@@ -219,7 +239,7 @@ func serverLogError(path string, offset int64) string {
 // the one Execute prints on its way out. Everything else in the log is
 // slog's, and slog is used for what does not stop the server.
 func logError(out string) string {
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "sbnn: ")
 		if !ok || rest == "" || strings.HasPrefix(rest, "serving at ") {
 			continue

@@ -1,0 +1,23 @@
+# Review comments (sbnn group "default")
+
+The reviewer asked for changes; the change should not go ahead as it is.
+
+The reviewer wrote:
+
+The error path is wrong, see below.
+
+1 comment(s) to address.
+
+## 1. main.go:4
+
+Diff: first
+
+```
+_ = do()
+```
+
+This swallows the error.
+
+---
+
+Address every comment above. A suggestion block replaces the lines it names, verbatim. When a comment is not worth acting on, say why instead of changing the code.

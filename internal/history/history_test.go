@@ -497,3 +497,33 @@ func TestParseSince(t *testing.T) {
 		}
 	}
 }
+
+// A summary that leaves out what the reviews decided cannot be read for the
+// one thing each review was for: counting comments does not answer it, since
+// an approval can carry three and a request for changes can carry none.
+func TestSummarizeCountsTheVerdicts(t *testing.T) {
+	verdict := func(name string, v model.Verdict) history.Record {
+		g := group(name, "")
+		g.ReviewVerdict = v
+		return history.FromGroup(g)
+	}
+	records := []history.Record{
+		verdict("api", model.VerdictApproved),
+		verdict("web", model.VerdictChangesRequested),
+		verdict("cli", model.VerdictCommented),
+		// A record written before the verdict was recorded at all. It
+		// reads as "commented", the default ParseVerdict and the API
+		// already apply, so an old log is counted rather than dropped.
+		verdict("old", ""),
+	}
+	s := history.Summarize(records)
+	if s.Approved != 1 || s.Commented != 2 || s.ChangesRequested != 1 {
+		t.Errorf("Summarize counted %d approved, %d commented, %d changes requested; want 1, 2, 1",
+			s.Approved, s.Commented, s.ChangesRequested)
+	}
+	// The three add up to the pile: a verdict spelled some other way must
+	// not fall out of the tally entirely.
+	if total := s.Approved + s.Commented + s.ChangesRequested; total != s.Reviews {
+		t.Errorf("the verdicts add up to %d of %d review(s)", total, s.Reviews)
+	}
+}
