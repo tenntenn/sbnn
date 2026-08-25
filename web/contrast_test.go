@@ -24,11 +24,36 @@ const contrastStylesheet = "src/styles.css"
 // contrastMinAA is the WCAG 2.x AA ratio for text at normal size.
 const contrastMinAA = 4.5
 
-// The foregrounds, and the surfaces they get painted on.
+// The text colours, and the surfaces they get painted on. Every combination
+// of the two is measured: any of these colours can end up on any of these
+// surfaces, because the surface is chosen by where a row sits (hovered,
+// selected, added, deleted) and the text colour by what the row says.
 var (
-	contrastForegrounds = []string{"--fg", "--fg-muted", "--accent", "--warn", "--danger"}
-	contrastBackgrounds = []string{"--bg", "--bg-soft", "--bg-inset", "--selected", "--add-bg", "--del-bg"}
+	contrastForegrounds = []string{
+		"--fg", "--fg-muted", "--accent-fg", "--warn-fg", "--danger-fg", "--ok-fg",
+	}
+	contrastBackgrounds = []string{
+		"--bg", "--bg-soft", "--bg-inset", "--bg-elevated",
+		"--surface-hover", "--surface-selected",
+		"--add-bg", "--del-bg", "--accent-subtle",
+	}
 )
+
+// contrastFills are the pairs where a colour is a fill and the text on it is
+// fixed, so the cross product above does not describe them: white on the
+// accent fill is a pair, white on the page is not. This is the case #122
+// calls out separately -- a token can clear AA as text and miss it as a
+// fill, which is why the two are now separate tokens.
+var contrastFills = []struct{ fg, bg string }{
+	{"--accent-on-fill", "--accent-fill"},
+	{"--ok-fg", "--ok-bg"},
+	{"--warn-fg", "--warn-bg"},
+	{"--danger-fg", "--danger-bg"},
+	{"--status-added-fg", "--status-added-bg"},
+	{"--status-removed-fg", "--status-removed-bg"},
+	{"--status-modified-fg", "--status-modified-bg"},
+	{"--status-renamed-fg", "--status-renamed-bg"},
+}
 
 // contrastTheme names a block of token definitions in the stylesheet.
 type contrastTheme struct {
@@ -65,14 +90,14 @@ type contrastPair struct {
 // tokens into separate text and fill colours: the same token clears AA on
 // one surface and misses it on another because it is being asked to do two
 // jobs.
-var contrastKnownLow = map[contrastPair]float64{
-	// #116: --warn on the inset surface.
-	{theme: "light", fg: "--warn", bg: "--bg-inset"}: 4.29,
-	// #116: --warn on a deleted line.
-	{theme: "light", fg: "--warn", bg: "--del-bg"}: 4.24,
-	// #116: --danger on the selected-line highlight.
-	{theme: "dark", fg: "--danger", bg: "--selected"}: 4.32,
-}
+//
+// It is empty today. The entries it held were the three pairs #116 was
+// filed for, and the token split that issue asked for has landed: the
+// colour that used to be text and fill at once is now --accent-fg and
+// --accent-fill, and every pair measured below clears AA. An entry is added
+// back only for a pair that is genuinely below AA and cannot be fixed in
+// the same change.
+var contrastKnownLow = map[contrastPair]float64{}
 
 var contrastDeclPattern = regexp.MustCompile(`(?m)^\s*(--[A-Za-z0-9_-]+)\s*:\s*([^;]+);`)
 
@@ -101,13 +126,24 @@ func contrastBlock(css, selector string) (string, bool) {
 	return rest[:end], true
 }
 
-// contrastTokens returns the colour tokens defined in a block.
+// contrastTokens returns the colour tokens defined in a block, with each
+// value folded to its canonical form by contrastCanonical.
 func contrastTokens(block string) map[string]string {
 	out := make(map[string]string)
 	for _, m := range contrastDeclPattern.FindAllStringSubmatch(block, -1) {
-		out[m[1]] = strings.TrimSpace(m[2])
+		out[m[1]] = contrastCanonical(m[2])
 	}
 	return out
+}
+
+// contrastCanonical folds a declaration value to the form the browser reads.
+// A value long enough to wrap -- --shadow-overlay is two shadows -- is
+// written across several lines, and how far its continuation lines are
+// indented is a matter of where in the file the block sits. CSS treats any
+// run of whitespace as one space, so the tests do too: otherwise reindenting
+// a block, which changes nothing anyone can see, reads as a changed value.
+func contrastCanonical(v string) string {
+	return strings.Join(strings.Fields(v), " ")
 }
 
 // contrastParseHex turns #rgb or #rrggbb into three channels in 0..1.
@@ -170,6 +206,55 @@ func contrastRound(v float64) float64 {
 	return math.Round(v*100) / 100
 }
 
+// contrastCheck measures one foreground on one background and reports what
+// the ratio means for the pair.
+//
+// A token that is not defined is a failure, not a skip. These names are the
+// whole subject of the test: if a rename can quietly take a token out of the
+// matrix, the matrix stops measuring anything and still passes -- which is
+// how this file came to be checking two of its five foregrounds. Renaming a
+// token means renaming it here too, and the failure says so.
+func contrastCheck(t *testing.T, theme string, tokens map[string]string, fg, bg string, seen map[contrastPair]bool) {
+	t.Helper()
+
+	fgv, ok := tokens[fg]
+	if !ok {
+		t.Errorf("%s: %s is not defined in %s", theme, fg, contrastStylesheet)
+		return
+	}
+	bgv, ok := tokens[bg]
+	if !ok {
+		t.Errorf("%s: %s is not defined in %s", theme, bg, contrastStylesheet)
+		return
+	}
+	ratio, ok := contrastRatio(fgv, bgv)
+	if !ok {
+		// Not every surface is a flat hex: a translucent overlay has no
+		// single ratio without knowing what is behind it.
+		t.Logf("%s: %s (%s) on %s (%s) is not a plain hex colour; skipped",
+			theme, fg, fgv, bg, bgv)
+		return
+	}
+
+	pair := contrastPair{theme: theme, fg: fg, bg: bg}
+	seen[pair] = true
+	got := contrastRound(ratio)
+	known, isKnown := contrastKnownLow[pair]
+
+	switch {
+	case !isKnown && got < contrastMinAA:
+		t.Errorf("%s: %s on %s is %.2f:1, below AA (%.1f:1)",
+			theme, fg, bg, got, contrastMinAA)
+	case isKnown && got >= contrastMinAA:
+		t.Logf("%s: %s on %s is %.2f:1 and clears AA now "+
+			"(was %.2f:1); it can come off contrastKnownLow",
+			theme, fg, bg, got, known)
+	case isKnown && got < known:
+		t.Errorf("%s: %s on %s fell to %.2f:1, worse than the "+
+			"known %.2f:1", theme, fg, bg, got, known)
+	}
+}
+
 func TestContrastTokens(t *testing.T) {
 	css := contrastReadCSS(t)
 	seen := make(map[contrastPair]bool)
@@ -183,46 +268,11 @@ func TestContrastTokens(t *testing.T) {
 
 		for _, fg := range contrastForegrounds {
 			for _, bg := range contrastBackgrounds {
-				// The web-tokens work is renaming and adding tokens in
-				// parallel with this. A token this test does not find is
-				// reported and skipped rather than failed: a legitimate
-				// rename must not be blocked by a test that has not caught
-				// up with it yet.
-				fgv, hasFg := tokens[fg]
-				if !hasFg {
-					t.Logf("%s: %s is not defined; skipped", theme.name, fg)
-					continue
-				}
-				bgv, hasBg := tokens[bg]
-				if !hasBg {
-					t.Logf("%s: %s is not defined; skipped", theme.name, bg)
-					continue
-				}
-				ratio, ok := contrastRatio(fgv, bgv)
-				if !ok {
-					t.Logf("%s: %s (%s) on %s (%s) is not a plain hex colour; skipped",
-						theme.name, fg, fgv, bg, bgv)
-					continue
-				}
-
-				pair := contrastPair{theme: theme.name, fg: fg, bg: bg}
-				seen[pair] = true
-				got := contrastRound(ratio)
-				known, isKnown := contrastKnownLow[pair]
-
-				switch {
-				case !isKnown && got < contrastMinAA:
-					t.Errorf("%s: %s on %s is %.2f:1, below AA (%.1f:1)",
-						theme.name, fg, bg, got, contrastMinAA)
-				case isKnown && got >= contrastMinAA:
-					t.Logf("%s: %s on %s is %.2f:1 and clears AA now "+
-						"(was %.2f:1); it can come off contrastKnownLow",
-						theme.name, fg, bg, got, known)
-				case isKnown && got < known:
-					t.Errorf("%s: %s on %s fell to %.2f:1, worse than the "+
-						"known %.2f:1", theme.name, fg, bg, got, known)
-				}
+				contrastCheck(t, theme.name, tokens, fg, bg, seen)
 			}
+		}
+		for _, fill := range contrastFills {
+			contrastCheck(t, theme.name, tokens, fill.fg, fill.bg, seen)
 		}
 	}
 
@@ -296,6 +346,14 @@ func TestContrastReport(t *testing.T) {
 			if len(row) > 0 {
 				t.Logf("%-5s %-10s: %s", theme.name, fg, strings.Join(row, "  "))
 			}
+		}
+		for _, fill := range contrastFills {
+			ratio, ok := contrastRatio(tokens[fill.fg], tokens[fill.bg])
+			if !ok {
+				continue
+			}
+			t.Logf("%-5s %-10s: on %s %.2f", theme.name, fill.fg,
+				strings.TrimPrefix(fill.bg, "--"), ratio)
 		}
 	}
 }
