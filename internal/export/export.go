@@ -11,12 +11,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/tenntenn/sbnn/internal/asset"
 	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/model"
 	"github.com/tenntenn/sbnn/internal/source"
@@ -38,6 +40,13 @@ type Preview struct {
 	Source   string `json:"source"`
 	Complete bool   `json:"complete"`
 	Path     string `json:"path,omitempty"`
+	// Assets is the sibling images the Markdown points at, keyed by the
+	// reference as the document wrote it. An exported page has no server to
+	// fetch "diagram.png" from, so the picture travels with it as a data
+	// URL - or, when it is too heavy to carry, as the reason it did not.
+	// See internal/asset, which makes that call for the live page too so
+	// that the two render the same document the same way.
+	Assets map[string]asset.Entry `json:"assets,omitempty"`
 }
 
 // Image is one image file's content, frozen at export time as a data URL so
@@ -126,12 +135,16 @@ func Build(g *model.Group, sbnnVersion string, now time.Time) *Payload {
 				if strings.TrimSpace(got.Content) == "" {
 					continue
 				}
-				p.Previews[key] = Preview{
+				prev := Preview{
 					Content:  got.Content,
 					Source:   string(got.Kind),
 					Complete: got.Complete,
 					Path:     got.Path,
 				}
+				if f.IsMarkdown {
+					prev.Assets = freezeAssets(d.BaseDir, f.Path(), got.Content)
+				}
+				p.Previews[key] = prev
 			case f.IsImage && f.Status != model.StatusDeleted:
 				got := source.NewSide(d.BaseDir, f)
 				if got.Kind != source.FromWorktree || got.Content == "" {
@@ -146,6 +159,39 @@ func Build(g *model.Group, sbnnVersion string, now time.Time) *Payload {
 		}
 	}
 	return p
+}
+
+// freezeAssets turns the images a Markdown file points at into data URLs, so
+// that a page mailed to someone days later still draws them.
+//
+// Which references are carried is decided by internal/asset, not here: the
+// live page asks the same question of the same document and has to get the
+// same answer, or the reader of the exported page sees a different review
+// from the one on screen. What is added here is only the reading of the
+// bytes, which the live page does not need to do up front.
+func freezeAssets(baseDir, filePath, content string) map[string]asset.Entry {
+	refs := asset.Refs(baseDir, filePath, content)
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make(map[string]asset.Entry, len(refs))
+	for _, r := range refs {
+		e := asset.Entry{Path: r.Label(), Status: r.Status, Size: r.Size}
+		if r.Status == asset.StatusOK {
+			b, err := os.ReadFile(r.Path)
+			if err != nil {
+				// It was there a moment ago. Saying so is better than an
+				// <img> that points at nothing.
+				e.Status = asset.StatusMissing
+				e.Size = 0
+			} else {
+				e.URL = "data:" + diff.ImageContentType(r.Rel) + ";base64," +
+					base64.StdEncoding.EncodeToString(b)
+			}
+		}
+		out[r.Src] = e
+	}
+	return out
 }
 
 // Options tunes the generated page.

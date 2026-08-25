@@ -1,3 +1,4 @@
+import type { PreviewAssets } from './markdown'
 import type { Comment, Group, Preview, Status, Verdict } from './types'
 
 /** groupFromLocation reads the group name out of the URL path. */
@@ -45,6 +46,9 @@ export interface FileContent {
   source: 'worktree' | 'reconstructed'
   complete: boolean
   content: string
+  /** assets is where the images this file points at really are, since a
+   * relative src in the preview resolves against the server root instead. */
+  assets?: PreviewAssets
 }
 
 export function getFileContent(

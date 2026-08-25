@@ -1,6 +1,6 @@
 import * as api from './api'
 import type { Comment, Diff, Status, Verdict } from './types'
-import { renderMarkdown } from './markdown'
+import { renderMarkdown, type PreviewAssets } from './markdown'
 import { renderNotebook } from './notebook'
 import { buildPrompt } from './prompt'
 import { suggestions } from './suggestion'
@@ -119,7 +119,20 @@ export interface StaticPayload {
   /** reviewed is false again once a diff arrived after that review, the way
    * the live status summary reports it. */
   reviewed?: boolean
-  previews: Record<string, { content: string; source: string; complete: boolean; path?: string }>
+  previews: Record<
+    string,
+    {
+      content: string
+      source: string
+      complete: boolean
+      path?: string
+      /** assets is the images the Markdown points at, frozen into the page
+       * as data URLs - or, where one was too heavy to carry, the reason it
+       * was not. There is no server behind an exported page to fetch a
+       * "diagram.png" from. */
+      assets?: PreviewAssets
+    }
+  >
   images: Record<string, { dataUrl: string; path?: string }>
 }
 
@@ -192,7 +205,7 @@ function createLiveClient(): SbnnClient {
       const file = await api.getFileContent(group, diffId, fileId)
       return {
         kind: 'html',
-        html: renderMarkdown(file.content),
+        html: renderMarkdown(file.content, file.assets),
         path: file.path,
         source: file.source,
         complete: file.complete,
@@ -484,7 +497,7 @@ function createStaticClient(data: StaticPayload): SbnnClient {
       if (!entry) throw new Error('this page carries no preview for that file')
       return {
         kind: 'html',
-        html: renderMarkdown(entry.content),
+        html: renderMarkdown(entry.content, entry.assets),
         path: entry.path ?? '',
         source: entry.source,
         complete: entry.complete,

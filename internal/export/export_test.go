@@ -11,6 +11,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/tenntenn/sbnn/internal/asset"
 	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/export"
 	"github.com/tenntenn/sbnn/internal/model"
@@ -580,4 +581,128 @@ func payloadJSON(t *testing.T, page string) []byte {
 		t.Fatal("payload is not terminated")
 	}
 	return []byte(payload)
+}
+
+// siblingDiff adds a Markdown file that draws a picture sitting next to it,
+// which the diff itself never mentions.
+const siblingDiff = `diff --git a/docs/guide.md b/docs/guide.md
+new file mode 100644
+--- /dev/null
++++ b/docs/guide.md
+@@ -0,0 +1,5 @@
++# Guide
++
++![the shape of it](diagram.png)
++![the whole thing](../overview.png)
++![what is out there](../../secret.png)
+`
+
+func siblingGroup(baseDir string) *model.Group {
+	files := diff.Parse(siblingDiff)
+	return &model.Group{
+		Name: "default",
+		Diffs: []*model.Diff{{
+			ID:      "d1",
+			Title:   "first",
+			BaseDir: baseDir,
+			Raw:     siblingDiff,
+			Files:   files,
+		}},
+	}
+}
+
+func writeFile(t *testing.T, path string, n int) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, make([]byte, n), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// previewAssets is the frozen asset table of the only Markdown file of a
+// sibling group.
+func previewAssets(t *testing.T, p *export.Payload, g *model.Group) map[string]asset.Entry {
+	t.Helper()
+	md := g.Diffs[0].Files[0]
+	prev, ok := p.Previews["d1:"+md.ID]
+	if !ok {
+		t.Fatalf("no preview for %s", md.Path())
+	}
+	return prev.Assets
+}
+
+func TestBuildFreezesTheImagesTheMarkdownPointsAt(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "docs", "diagram.png"), 8)
+	writeFile(t, filepath.Join(dir, "overview.png"), 16)
+
+	g := siblingGroup(dir)
+	assets := previewAssets(t, export.Build(g, "test", time.Now()), g)
+
+	near, ok := assets["diagram.png"]
+	if !ok {
+		t.Fatalf("no asset for diagram.png: %+v", assets)
+	}
+	want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(make([]byte, 8))
+	if near.URL != want {
+		t.Errorf("diagram.png url = %q, want the bytes frozen in as %q", near.URL, want)
+	}
+	if near.Status != asset.StatusOK {
+		t.Errorf("diagram.png status = %q, want ok", near.Status)
+	}
+	if up := assets["../overview.png"]; up.Status != asset.StatusOK || up.URL == "" {
+		t.Errorf("../overview.png = %+v, want a file above the document to be carried too", up)
+	}
+}
+
+func TestBuildRefusesAnImageOutsideTheDiffDirectory(t *testing.T) {
+	dir := t.TempDir()
+	// The file is really there, one level above what the diff was sent from.
+	writeFile(t, filepath.Join(filepath.Dir(dir), "secret.png"), 8)
+	t.Cleanup(func() { os.Remove(filepath.Join(filepath.Dir(dir), "secret.png")) })
+
+	g := siblingGroup(dir)
+	assets := previewAssets(t, export.Build(g, "test", time.Now()), g)
+
+	out, ok := assets["../../secret.png"]
+	if !ok {
+		t.Fatalf("no entry for ../../secret.png: %+v", assets)
+	}
+	if out.Status != asset.StatusOutside {
+		t.Errorf("../../secret.png status = %q, want outside", out.Status)
+	}
+	if out.URL != "" {
+		t.Errorf("../../secret.png was carried into the page as %q", firstBytes(out.URL))
+	}
+}
+
+func TestBuildLeavesAnOversizedImageOutButNamesIt(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "docs", "diagram.png"), asset.MaxBytes+1)
+
+	g := siblingGroup(dir)
+	assets := previewAssets(t, export.Build(g, "test", time.Now()), g)
+
+	big := assets["diagram.png"]
+	if big.Status != asset.StatusTooLarge {
+		t.Errorf("status = %q, want too-large", big.Status)
+	}
+	if big.URL != "" {
+		t.Error("an image past the cap must not be frozen into the page")
+	}
+	if big.Path != "docs/diagram.png" {
+		t.Errorf("path = %q, want the file to stay nameable on the page", big.Path)
+	}
+	if big.Size != asset.MaxBytes+1 {
+		t.Errorf("size = %d, want the real size so the page can say how big it was", big.Size)
+	}
+}
+
+func firstBytes(s string) string {
+	if len(s) > 40 {
+		return s[:40] + "..."
+	}
+	return s
 }
