@@ -62,3 +62,66 @@ func TestLoadChecksTheFormatVersion(t *testing.T) {
 		})
 	}
 }
+
+// A refused session file is the only copy of a session this build cannot
+// read. The server logs the refusal and carries on, so the store has to make
+// sure the next write does not land on top of those bytes.
+func TestARefusedSessionFileIsNotOverwritten(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.json")
+	raw := []byte(`{"version":` + strconv.Itoa(persistVersion+1) + `,"seq":7,"groups":[` +
+		`{"name":"default","diffs":[{"id":"d7","title":"from the future"}],` +
+		`"comments":[{"id":"c1","group":"default","diffId":"d7","body":"keep me"}]}]}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewStore(path)
+	if err := s.Load(); err == nil {
+		t.Fatal("Load() = nil for a file from a newer sbnn, want an error")
+	}
+
+	// Everything a running server may do after the refusal was logged.
+	s.AddDiff(DefaultGroup, &model.Diff{Title: "new"})
+	if _, err := s.AddComment(&model.Comment{Group: DefaultGroup, DiffID: "d1", Body: "new"}); err != nil {
+		t.Logf("AddComment: %v", err)
+	}
+	s.DeleteAllGroups()
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(raw) {
+		t.Errorf("session file after a refused load =\n%s\nwant it untouched:\n%s", got, raw)
+	}
+}
+
+// Sealing must be limited to the store that refused its file: a store that
+// loaded normally still has to save.
+func TestALoadedSessionFileIsStillWritten(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.json")
+	b, err := json.Marshal(persisted{Version: persistVersion, Seq: 1, Groups: []*model.Group{{Name: DefaultGroup}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := NewStore(path)
+	if err := s.Load(); err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	s.AddDiff(DefaultGroup, &model.Diff{Title: "new"})
+
+	var p persisted
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(got, &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Groups) != 1 || len(p.Groups[0].Diffs) != 1 {
+		t.Errorf("persisted session = %s, want the added diff", got)
+	}
+}

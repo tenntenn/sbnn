@@ -36,6 +36,10 @@ type Store struct {
 	path   string
 	groups []*model.Group
 	seq    int
+	// sealed is set when Load refused the session file. The bytes on disk
+	// are the only copy of a session this build cannot read, so nothing may
+	// write over them.
+	sealed bool
 }
 
 // NewStore returns a store persisting to path. An empty path disables
@@ -74,7 +78,16 @@ func (s *Store) Load() error {
 	// a format change into silently missing diffs and comments, so refuse it
 	// and say which version wrote it.
 	if p.Version > persistVersion {
+		// Refusing the file is only half the job: the server logs the error
+		// and keeps running, so the very first diff would otherwise persist
+		// an empty session over the file we just declined to read. Seal the
+		// store instead, which keeps the bytes on disk intact and makes the
+		// advice below something the reader can still act on.
+		s.mu.Lock()
+		s.sealed = true
+		s.mu.Unlock()
 		return fmt.Errorf("session file %s was written by a newer sbnn (format version %d, this one understands %d): "+
+			"this session is not saved and the file is left untouched; "+
 			"upgrade sbnn, or move the file aside to start a new session", s.path, p.Version, persistVersion)
 	}
 	s.mu.Lock()
@@ -86,7 +99,7 @@ func (s *Store) Load() error {
 
 // persist writes the session to disk. The caller must hold the lock.
 func (s *Store) persist() {
-	if s.path == "" {
+	if s.path == "" || s.sealed {
 		return
 	}
 	b, err := json.Marshal(persisted{Version: persistVersion, Seq: s.seq, Groups: s.groups})
