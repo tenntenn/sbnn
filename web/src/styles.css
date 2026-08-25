@@ -622,20 +622,23 @@ body.resizing iframe {
 }
 
 /* The ellipsis belongs at the start of a truncated path, because the tail is
-   the part that identifies the file. An RTL box gets that for free, but it
-   also flips the bidi paragraph direction, and every neutral character at
-   either end of the string - a leading dot, a bracket run - is then resolved
-   against RTL and painted on the wrong side. unicode-bidi: plaintext puts the
-   direction back under the control of the string's own first strong
-   character, so the path reads LTR inside a box that still clips from the
-   left. */
+   the part that identifies the file, and an RTL box is what puts it there.
+   That also flips the bidi paragraph direction, though, and every neutral
+   character at either end of the string - a leading dot, a bracket run - is
+   then resolved against RTL and painted on the wrong side.
+
+   The direction has to be given back to the string without being taken away
+   from the box, so the string is isolated instead: Sidebar.tsx wraps the path
+   in a <bdi>, which resolves its own direction from its own first strong
+   character. unicode-bidi: plaintext here would do the isolating and the
+   clipping both, and clipping is the half that must stay RTL - it moved the
+   ellipsis to the end of the path, hiding the file name. */
 .file-path {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   direction: rtl;
-  unicode-bidi: plaintext;
   text-align: left;
 }
 

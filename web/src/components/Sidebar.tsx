@@ -282,7 +282,9 @@ export function Sidebar({
                   >
                     <span className={`dot status-${file.status}`} title={file.status} />
                     <span className="file-path" title={filePath(file)}>
-                      {filePath(file)}
+                      {/* The box clips from the left; the path inside it
+                          reads in its own direction. See .file-path. */}
+                      <bdi>{filePath(file)}</bdi>
                     </span>
                     {folded && (
                       <span className="badge sm" title={file.foldReason}>
