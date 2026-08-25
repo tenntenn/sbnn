@@ -114,16 +114,15 @@ func contrastReadCSS(t *testing.T) string {
 // contrastBlock returns the body of the rule introduced by selector: from
 // the selector to the first closing brace in the first column.
 func contrastBlock(css, selector string) (string, bool) {
-	i := strings.Index(css, selector)
-	if i < 0 {
+	_, rest, ok := strings.Cut(css, selector)
+	if !ok {
 		return "", false
 	}
-	rest := css[i+len(selector):]
-	end := strings.Index(rest, "\n}")
-	if end < 0 {
+	body, _, ok := strings.Cut(rest, "\n}")
+	if !ok {
 		return "", false
 	}
-	return rest[:end], true
+	return body, true
 }
 
 // contrastTokens returns the colour tokens defined in a block, with each
