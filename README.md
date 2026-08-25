@@ -194,19 +194,29 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   agent.
 - Split and unified views can be switched per file; new, deleted and binary
   files stay unified.
-- **Filter the file list by path.** Press `/` and type: every
-  whitespace-separated term has to appear somewhere in the path, so
-  `server go` and `internal/server` both find `internal/server/server.go`.
-  Enter opens the first path still standing, Escape clears. Nothing turns up
-  that does not contain what you typed — a list you are scanning is the wrong
-  place for clever matching.
+- **Search the file list by path and by what the diff says.** Press `/` and
+  type: every whitespace-separated term has to appear, case ignored, either
+  somewhere in the path or all together inside one diff line — so `server go`
+  and `internal/server` both find `internal/server/server.go` by its path,
+  and `handleHealthz` finds whatever file the diff mentions it in. The two
+  sides are not pooled: a term found in the path and a term found in a line
+  do not add up to a match, because neither side holds both. Each row says
+  where it was hit — `path`, `2 lines`, or `path + 3 lines` — and the box
+  counts `2 of 3`, with `, 2 lines` on the end once a line has matched too.
+  Every line the diff carries is read, added, removed and unchanged alike.
+  Enter opens the first file still standing, which may be one that only its
+  content matched, and takes you to the file rather than to the line; Escape
+  clears. Nothing turns up that does not contain what you typed — a list you
+  are scanning is the wrong place for clever matching. Past 200,000 lines the
+  content scan stops and says so, and the paths go on being searched in full.
 - Each round of a review — each diff sent to the group — gets its own
   heading in the file list. Click it to shut that round — the heading keeps
   saying how many files and how many open comments are inside — or switch
-  the list to **tabs** to see one round at a time. Filtering by path
-  searches the tabs too: a round with nothing matching drops out of the
-  strip, the rest say how many paths they hold, and the search never takes
-  you out of the layout you chose.
+  the list to **tabs** to see one round at a time. Searching goes through the
+  tabs too: a round with nothing matching drops out of the strip — one whose
+  only tie to what you typed is a line of its content stays — the rest say
+  how many of their files matched, and the search never takes you out of the
+  layout you chose.
 - Every pane is resizable and can be minimised away: drag the edge between
   two panes, double click it to reset (or to put the file list away), or use
   the **Files**, **Diff** and **Preview** switches in the header. Dragging an
@@ -231,7 +241,7 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   another origin, where a page may not touch its scrolling.
 - Press `?` for the keyboard shortcuts: `j`/`k` move between files, `n`/`p`
   between comments, `f` folds, `v` switches split and unified, `s` toggles
-  the scroll sync, `r` opens the review box, `/` filters the file list. None
+  the scroll sync, `r` opens the review box, `/` searches the file list. None
   of them fires while you are typing.
 - The header switch cycles **Auto / Light / Dark**: Auto follows the system
   (or whatever host an exported page is read in), and a choice is remembered
