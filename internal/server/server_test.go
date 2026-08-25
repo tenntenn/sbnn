@@ -975,3 +975,94 @@ func TestSubmitReviewWithoutABrowser(t *testing.T) {
 		t.Errorf("flattened = %+v", got)
 	}
 }
+
+// A body over the limit used to be cut mid-JSON by an io.LimitReader, which
+// does not say it truncated. The decoder then blamed the JSON, so a large but
+// perfectly valid request came back as "400 invalid request: unexpected EOF" -
+// the user is told they sent something malformed, nothing names the limit, and
+// nothing says a limit was involved. The CLI already words it properly on the
+// same value; every other client (curl, an MCP server, an editor extension)
+// got the obscure one.
+func TestOversizedBodyNamesTheLimit(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[0]
+
+	// A review note with a large stack trace pasted into it.
+	huge := strings.Repeat("x", maxBodySize+(1<<10))
+	body, err := json.Marshal(AddCommentRequest{
+		DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(),
+		Side: "new", StartLine: 2, Body: huge,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(ts.URL+"/_/api/groups/default/comments",
+		"application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %s, want 413: %s", resp.Status, got)
+	}
+	if strings.Contains(string(got), "unexpected EOF") {
+		t.Errorf("body = %q, want the limit named rather than the JSON blamed", got)
+	}
+	if !strings.Contains(string(got), "too large") || !strings.Contains(string(got), "1MB") {
+		t.Errorf("body = %q, want it to name the limit", got)
+	}
+}
+
+// The two failures have to stay distinguishable: an overrun is 413 and names
+// the limit, genuinely malformed JSON under the limit is still 400.
+func TestDecodeBodySeparatesOverrunFromBadJSON(t *testing.T) {
+	cases := []struct {
+		name     string
+		body     string
+		limit    int64
+		want     int
+		contains string
+	}{
+		{"a body over the limit", `{"content":"` + strings.Repeat("x", 128) + `"}`, 32,
+			http.StatusRequestEntityTooLarge, "too large"},
+		{"malformed JSON under the limit", `{"content":`, 1 << 20,
+			http.StatusBadRequest, "invalid request"},
+		{"a body that fits", `{"content":"ok"}`, 1 << 20, http.StatusOK, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+			var dst AddDiffRequest
+			if decodeBody(w, r, tc.limit, "the diff", &dst) {
+				if tc.want != http.StatusOK {
+					t.Fatalf("decodeBody accepted %q, want %d", tc.body, tc.want)
+				}
+				return
+			}
+			if w.Code != tc.want {
+				t.Errorf("status = %d, want %d: %s", w.Code, tc.want, w.Body)
+			}
+			if !strings.Contains(w.Body.String(), tc.contains) {
+				t.Errorf("body = %q, want it to contain %q", w.Body, tc.contains)
+			}
+		})
+	}
+}
+
+// The command line and the server bound a diff by the same number. They used
+// to be separate constants with the same value in two packages, free to drift.
+func TestMaxDiffSizeIsExported(t *testing.T) {
+	if MaxDiffSize != 32<<20 {
+		t.Errorf("MaxDiffSize = %d, want 32MB", MaxDiffSize)
+	}
+	if megabytes(MaxDiffSize) != "32MB" {
+		t.Errorf("megabytes(MaxDiffSize) = %q, want 32MB", megabytes(MaxDiffSize))
+	}
+}

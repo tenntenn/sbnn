@@ -25,8 +25,13 @@ import (
 	"github.com/tenntenn/sbnn/internal/model"
 )
 
-// maxDiffSize bounds a single diff sent to the server.
-const maxDiffSize = 32 << 20 // 32MB
+// MaxDiffSize bounds a single diff sent to the server. It is exported so the
+// command line can bound stdin by the same number instead of keeping its own
+// copy, which could drift.
+const MaxDiffSize = 32 << 20 // 32MB
+
+// maxBodySize bounds the small JSON bodies: a comment, a review note, a hook.
+const maxBodySize = 1 << 20 // 1MB
 
 // Options configures a Server.
 type Options struct {
@@ -407,8 +412,7 @@ func (s *Server) handleAddDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req AddDiffRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxDiffSize)).Decode(&req); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+	if !decodeBody(w, r, MaxDiffSize, "the diff", &req) {
 		return
 	}
 	if strings.TrimSpace(req.Content) == "" {
@@ -568,8 +572,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req AddCommentRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+	if !decodeBody(w, r, maxBodySize, "the comment", &req) {
 		return
 	}
 	body := model.WithSuggestion(req.Body, req.Suggestion)
@@ -649,8 +652,7 @@ func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req UpdateCommentRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+	if !decodeBody(w, r, maxBodySize, "the comment", &req) {
 		return
 	}
 	c, found := s.store.UpdateComment(name, r.PathValue("id"), CommentPatch{
@@ -723,8 +725,7 @@ func (s *Server) handleSubmitReview(w http.ResponseWriter, r *http.Request) {
 	}
 	var req SubmitReviewRequest
 	if r.ContentLength > 0 {
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-			http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+		if !decodeBody(w, r, maxBodySize, "the review", &req) {
 			return
 		}
 	}
@@ -766,8 +767,7 @@ func (s *Server) handleAddHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var h model.Hook
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&h); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+	if !decodeBody(w, r, maxBodySize, "the hook", &h) {
 		return
 	}
 	added, err := s.store.AddHook(name, &model.Hook{Command: h.Command, URL: h.URL})
@@ -854,6 +854,37 @@ func (s *Server) notify(group string) {
 		return
 	}
 	s.broker.publish(msg)
+}
+
+// decodeBody decodes a JSON request body under a size limit, answering the
+// client itself when it cannot.
+//
+// The limit used to be an io.LimitReader, which does not report that it
+// truncated - it simply ends the stream. The decoder then met a body cut
+// mid-JSON and blamed the JSON, so a large but perfectly valid diff came back
+// as "400 invalid request: unexpected EOF": nothing named the limit, and
+// nothing said a limit was involved. http.MaxBytesReader reports the overrun
+// as *http.MaxBytesError, which lets us say what actually happened, and it
+// stops the upload instead of letting the client finish sending a body that
+// is already rejected.
+func decodeBody(w http.ResponseWriter, r *http.Request, limit int64, what string, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, fmt.Sprintf("%s is too large (max %s)", what, megabytes(limit)),
+				http.StatusRequestEntityTooLarge)
+			return false
+		}
+		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// megabytes renders a limit the way the command line words it: "32MB".
+func megabytes(n int64) string {
+	return strconv.FormatInt(n>>20, 10) + "MB"
 }
 
 func (s *Server) groupParam(w http.ResponseWriter, r *http.Request) (string, bool) {
