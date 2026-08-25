@@ -76,6 +76,14 @@ func runWait(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	// Everything the flags alone can decide is decided here, before the
+	// server is contacted and long before the wait begins: a wait that runs
+	// for hours and then refuses to print what it waited for is the review
+	// gone, not just an error message.
+	format, err := resolveFormat(waitFormat, waitJSON)
+	if err != nil {
+		return err
+	}
 	c := client.New(addr(), 10*time.Second)
 	if _, err := c.Status(ctx); err != nil {
 		return fmt.Errorf("no sbnn server found on %s", c.Addr)
@@ -87,7 +95,7 @@ func runWait(cmd *cobra.Command, _ []string) error {
 	}
 	if g.Reviewed() {
 		// The review landed before anyone started waiting for it.
-		return printReview(ctx, c, group)
+		return printReview(ctx, c, group, format)
 	}
 
 	if waitTimeout > 0 {
@@ -106,7 +114,7 @@ func runWait(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "sbnn: review submitted, %d open comment(s)\n", notice.Comments)
-	return printReview(ctx, c, group)
+	return printReview(ctx, c, group, format)
 }
 
 // exitReview ends with the status the reviewer's verdict calls for.
@@ -118,14 +126,11 @@ func exitReview(ctx context.Context, c *client.Client, group string) error {
 	return exitWithVerdict(g.ReviewVerdict, g.Comments)
 }
 
-// printReview writes the review the same way `sbnn comments` does.
-func printReview(ctx context.Context, c *client.Client, group string) error {
+// printReview writes the review the same way `sbnn comments` does. The
+// format has already been resolved and checked by runWait.
+func printReview(ctx context.Context, c *client.Client, group, format string) error {
 	if waitQuiet {
 		return exitReview(ctx, c, group)
-	}
-	format := waitFormat
-	if waitJSON {
-		format = "json"
 	}
 	switch format {
 	case "json":
@@ -157,6 +162,7 @@ func printReview(ctx context.Context, c *client.Client, group string) error {
 		}
 		return nil
 	default:
+		// Unreachable: runWait resolves the format before waiting.
 		return fmt.Errorf("unknown format %q: use prompt, markdown or json", format)
 	}
 }
