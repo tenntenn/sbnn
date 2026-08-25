@@ -16,6 +16,7 @@ var (
 	hookCommand string
 	hookURL     string
 	hookClear   bool
+	hookRemove  string
 )
 
 var hookCmd = &cobra.Command{
@@ -31,6 +32,7 @@ review", with nobody waiting in between.
   $ sbnn hook --on-review 'claude -p "$(sbnn comments)"'
   $ sbnn hook --on-review-url http://localhost:9000/reviews
   $ sbnn hook                       # what is registered
+  $ sbnn hook --remove h2           # forget one of them
   $ sbnn hook --clear               # forget it
 
 The command runs through the shell with the review prompt on its stdin and
@@ -57,6 +59,7 @@ func init() {
 	f.StringVar(&hookCommand, "on-review", "", "Shell command to run when a review is submitted")
 	f.StringVar(&hookURL, "on-review-url", "", "URL to POST to when a review is submitted")
 	f.BoolVar(&hookClear, "clear", false, "Remove the hooks of the group")
+	f.StringVar(&hookRemove, "remove", "", "Remove one hook by ID (sbnn hook lists the IDs)")
 	f.BoolVar(&jsonOutput, "json", false, "Print structured JSON on stdout")
 }
 
@@ -66,12 +69,30 @@ func runHook(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	// --clear and --remove disagree about how much to take, so refuse the
+	// pair rather than letting the order of the switch decide silently.
+	if hookRemove != "" && hookClear {
+		return fmt.Errorf("--remove and --clear cannot be used together")
+	}
 	c := client.New(addr(), 5*time.Second)
 	if _, err := c.Status(ctx); err != nil {
 		return fmt.Errorf("no sbnn server found on %s", c.Addr)
 	}
 
 	switch {
+	case hookRemove != "":
+		removed, err := c.DeleteHook(ctx, group, hookRemove)
+		if err != nil {
+			return err
+		}
+		// The server answers an unknown ID with a count of 0 rather than
+		// an error, so without this the user is told a hook went that was
+		// never there.
+		if removed == 0 {
+			return fmt.Errorf("no hook %q on group %q", hookRemove, group)
+		}
+		fmt.Fprintf(os.Stderr, "sbnn: removed hook %q from group %q\n", hookRemove, group)
+		return nil
 	case hookClear:
 		removed, err := c.DeleteHooks(ctx, group)
 		if err != nil {
