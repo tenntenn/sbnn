@@ -1,0 +1,38 @@
+# Review comments (sbnn group "docs")
+
+The reviewer asked for changes; the change should not go ahead as it is.
+
+1 comment(s) to address.
+
+## 1. README.md:3-5 (old)
+
+Diff: docs: rewrite the intro
+
+From: claude
+
+````
+Run it like this:
+
+```
+sbnn export
+```
+````
+
+Two edits here.
+
+```suggestion
+first replacement
+```
+
+and
+
+```suggestion
+second replacement
+```
+
+The suggestion block above replaces README.md:3-5 (old).
+(2 suggestion blocks: apply them in order.)
+
+---
+
+Address every comment above. A suggestion block replaces the lines it names, verbatim. When a comment is not worth acting on, say why instead of changing the code.
