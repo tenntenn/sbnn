@@ -117,6 +117,28 @@ func TestParseVerdict(t *testing.T) {
 		{"reject", model.VerdictChangesRequested, true},
 		{"nope", "", false},
 		{"changes requested?", "", false},
+
+		// Padding is whatever the program the verdict was pasted out of
+		// used, not the four spaces ASCII has. U+3000 in particular is what
+		// a Japanese keyboard produces, so it turns up in front of anything
+		// typed there.
+		{"approved\v", model.VerdictApproved, true},
+		{"approved\f", model.VerdictApproved, true},
+		{"approved\u00a0", model.VerdictApproved, true}, // no-break space
+		{"\u3000approved", model.VerdictApproved, true}, // ideographic space
+		{"approved\u2007", model.VerdictApproved, true}, // figure space
+		{"\u3000changes\u3000requested\u3000", model.VerdictChangesRequested, true},
+		{"\u3000", model.VerdictCommented, true}, // padding only is still empty
+
+		// Separators are dropped before matching, so these fold down to the
+		// empty string - but they are typos, not an omitted verdict. Reading
+		// one as "commented" would confirm the review, write it to the
+		// history and fire the hook.
+		{"-", "", false},
+		{"_", "", false},
+		{"...", "", false},
+		{"-_-", "", false},
+		{". - _", "", false},
 	} {
 		t.Run(tt.in, func(t *testing.T) {
 			got, ok := model.ParseVerdict(tt.in)
