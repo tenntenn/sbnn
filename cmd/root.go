@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -40,6 +41,7 @@ var (
 	doRestart   bool
 	doClear     bool
 	clearAll    bool
+	assumeYes   bool
 	jsonOutput  bool
 	moBin       string
 	moPort      int
@@ -178,7 +180,8 @@ func init() {
 	f.BoolVar(&doRestart, "restart", false, "Restart the running server, keeping the session")
 	rootCmd.MarkFlagsMutuallyExclusive("shutdown", "restart")
 	f.BoolVar(&doClear, "clear", false, "Close the review: drop the diffs, comments and hooks of the group")
-	f.BoolVar(&clearAll, "all", false, "With --clear, close every review on the server")
+	f.BoolVar(&clearAll, "all", false, "Close every review on the server; only meaningful with --clear, and refused without it")
+	f.BoolVar(&assumeYes, "yes", false, "Skip the confirmation of --clear")
 	f.BoolVar(&jsonOutput, "json", false, "Print structured JSON on stdout")
 	f.StringVar(&moBin, "mo-bin", "mo", "mo executable used for mo's Markdown preview")
 	f.IntVar(&moPort, "mo-port", mo.DefaultPort, "Port of the mo server")
@@ -203,8 +206,28 @@ func moRunner() *mo.Runner {
 	return mo.New(moBin, moPort, moBind)
 }
 
+// validateClearFlags rejects --all on its own. clearAll is read inside
+// runClear and nowhere else, so sbnn --all used to fall through to the
+// ordinary "read stdin, add a diff, print the URL" path with the flag
+// ignored - a success message for something the user did not ask for, when
+// what they meant closes every review on the server.
+//
+// This is a hand check rather than cobra's "required together" pairing, which
+// reads "if one is given both are required" and would make plain sbnn
+// --clear, the ordinary way to close one review, an error.
+func validateClearFlags(doClear, clearAll bool) error {
+	if clearAll && !doClear {
+		return errors.New("--all only works with --clear (did you mean --clear --all?)")
+	}
+	return nil
+}
+
 func run(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
+	if err := validateClearFlags(doClear, clearAll); err != nil {
+		return err
+	}
+
 	group, err := groupName(target)
 	if err != nil {
 		return err
@@ -370,10 +393,20 @@ func runRestart(ctx context.Context) error {
 
 func runClear(ctx context.Context, group string) error {
 	c := client.New(addr(), 2*time.Second)
-	if _, err := c.Status(ctx); err != nil {
+	// The status already carries what is about to be lost, which is what the
+	// confirmation is built from - no new endpoint needed.
+	st, err := c.Status(ctx)
+	if err != nil {
 		return fmt.Errorf("no sbnn server found on %s", c.Addr)
 	}
 	if clearAll {
+		ok, err := askBeforeClear(clearAllQuestion(st.Groups))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errCancelled
+		}
 		removed, err := c.DeleteAllGroups(ctx)
 		if err != nil {
 			return err
@@ -381,11 +414,97 @@ func runClear(ctx context.Context, group string) error {
 		fmt.Fprintf(os.Stderr, "sbnn: closed %d review(s)\n", removed)
 		return nil
 	}
+	ok, err := askBeforeClear(clearGroupQuestion(st.Groups, group))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errCancelled
+	}
 	if err := c.DeleteGroup(ctx, group); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "sbnn: closed the review of %q\n", group)
 	return nil
+}
+
+// errCancelled ends a --clear that the user declined. Nothing was dropped,
+// which is not a failure, but it is not the job the caller asked for either:
+// a script that pipes an answer in, or runs into a prompt it cannot answer,
+// has to be able to tell "closed" from "left alone", and a status of 0 makes
+// the no-op invisible. Execute prints it as "sbnn: cancelled" and exits 1.
+var errCancelled = errors.New("cancelled")
+
+// stdinIsTerminal reports whether there is somebody there to answer. It is a
+// variable so a test can drive the prompt: stdin under "go test" is never a
+// terminal, and the answer to a destructive question is the thing worth
+// testing.
+var stdinIsTerminal = func() bool { return isTerminal(os.Stdin) }
+
+// askBeforeClear puts a question to the user before something is dropped. An
+// empty question means there is nothing to lose and so nothing to ask.
+// --yes skips it on purpose, and so does a stdin that is not a terminal: a
+// pipeline or a job has nobody there to answer, and blocking one on a prompt
+// would break the scripts that clear a review today.
+func askBeforeClear(question string) (bool, error) {
+	if question == "" || assumeYes || !stdinIsTerminal() {
+		return true, nil
+	}
+	return confirm(os.Stdin, os.Stderr, question)
+}
+
+// clearAllQuestion names every review --clear --all is about to close, with
+// what each one holds, so the count of open comments is in front of the user
+// before they answer. It returns "" when the server holds nothing, because
+// there is then nothing to lose by going ahead.
+func clearAllQuestion(groups []server.GroupSummary) string {
+	if len(groups) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("sbnn: this will close every review on the server:\n")
+	for _, g := range groups {
+		fmt.Fprintf(&b, "  %-16s %d diff(s), %d comment(s), %d open\n",
+			g.Name, g.Diffs, g.Comments, g.Unresolved)
+	}
+	fmt.Fprintf(&b, "Close all %d review(s)? [y/N]: ", len(groups))
+	return b.String()
+}
+
+// clearGroupQuestion asks about one review the way the browser does, and only
+// where the browser does: when comments are still open. An unknown group is
+// already empty, so it returns "" and the clear goes ahead as before.
+func clearGroupQuestion(groups []server.GroupSummary, group string) string {
+	for _, g := range groups {
+		if g.Name != group {
+			continue
+		}
+		if g.Unresolved == 0 {
+			return ""
+		}
+		return fmt.Sprintf("Close the review of %q? %d comment(s) are still open and will go with it. [y/N]: ",
+			group, g.Unresolved)
+	}
+	return ""
+}
+
+// confirm writes the question to out and reads the answer from in. Only "y"
+// and "yes" mean yes; a blank line, an EOF, or anything else means no, so the
+// default of a destructive prompt is to keep what is there. An EOF is an
+// answer, not a failure.
+func confirm(in io.Reader, out io.Writer, question string) (bool, error) {
+	if _, err := fmt.Fprint(out, question); err != nil {
+		return false, err
+	}
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	}
+	return false, nil
 }
 
 func waitForDown(ctx context.Context, c *client.Client, timeout time.Duration) error {
