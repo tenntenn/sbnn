@@ -161,10 +161,12 @@ git diff | sbnn export --target <topic> review.html   # a file they can open
 git diff | sbnn export --fragment --target <topic>    # the body, on stdout
 ```
 
-`--fragment` with no filename writes the page body to stdout, which is the
-form to use when the review goes inside something that brings its own
-`<html>` — an artifact, a message that renders HTML, a mail. With a filename,
-or without `--fragment`, you get a whole page.
+`--fragment` decides what you get; the filename only decides where it goes.
+With `--fragment` you get the page body alone — written to the file you name,
+or to stdout if you name none. Without it you get a whole self-contained page,
+again to a file or to stdout. Reach for `--fragment` only when the review is
+going inside something that brings its own `<html>` — an artifact, a message
+that renders HTML, a mail. Hand a human a whole page.
 
 The user can also just ask. If they want a file, an artifact, or something
 they can read on their phone, export one whether or not the URL would have
