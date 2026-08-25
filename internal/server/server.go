@@ -804,8 +804,15 @@ func (s *Server) handleSubmitReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req SubmitReviewRequest
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+	// ContentLength is -1 when the length is unknown, which is what a
+	// chunked request and many HTTP/2 clients send. Only 0 promises there
+	// is no body, so decode for anything else: a verdict dropped here is
+	// recorded as a plain "commented", and --exit-code downstream then
+	// reports the opposite of what the reviewer decided.
+	if r.ContentLength != 0 {
+		// io.EOF means the body really was empty, which is not an error:
+		// the fields are all optional and default to a commented review.
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
 			return
 		}

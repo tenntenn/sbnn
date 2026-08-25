@@ -1318,3 +1318,118 @@ func BenchmarkGroupResponseSize(b *testing.B) {
 	b.ReportMetric(float64(len(without)), "bytes-without-raw")
 	b.ReportMetric(100*float64(len(with)-len(without))/float64(len(with)), "%-saved")
 }
+
+// postChunked sends body with no Content-Length, the way curl does with
+// -H "Transfer-Encoding: chunked" and the way many HTTP/2 clients send.
+// Wrapping the reader hides its length from net/http, so the request goes
+// out chunked and the server sees ContentLength == -1.
+func postChunked(t *testing.T, url, body string, out any) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, url, io.NopCloser(strings.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	if req.ContentLength != 0 {
+		t.Fatalf("the request carried a Content-Length of %d, so it is not the case under test", req.ContentLength)
+	}
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return resp
+}
+
+// A review submitted with an unknown Content-Length used to have its body
+// thrown away without an error, so "approved" and "changes-requested"
+// were both recorded as a plain "commented" with no note. sbnn wait
+// --exit-code and sbnn submit --exit-code act on that value, so the
+// verdict arrived downstream as the opposite of what was decided.
+func TestSubmitReviewReadsAChunkedBody(t *testing.T) {
+	cases := []struct {
+		name        string
+		body        string
+		want        int
+		wantVerdict model.Verdict
+		wantNote    string
+	}{
+		{"approved", `{"verdict":"approved","note":"looks right"}`, http.StatusOK, model.VerdictApproved, "looks right"},
+		{"changes requested", `{"verdict":"changes-requested","note":"not yet"}`, http.StatusOK, model.VerdictChangesRequested, "not yet"},
+		{"commented", `{"verdict":"commented","note":"a thought"}`, http.StatusOK, model.VerdictCommented, "a thought"},
+		{"a note with no verdict", `{"note":"just a note"}`, http.StatusOK, model.VerdictCommented, "just a note"},
+		{"an empty object", `{}`, http.StatusOK, model.VerdictCommented, ""},
+		{"a genuinely empty body is not an error", ``, http.StatusOK, model.VerdictCommented, ""},
+		{"a bad verdict is still refused", `{"verdict":"lgtm-ish"}`, http.StatusBadRequest, "", ""},
+		{"malformed json is still refused", `{"verdict":`, http.StatusBadRequest, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, _ := newTestServer(t)
+			postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, nil)
+
+			var g model.Group
+			out := any(nil)
+			if tc.want == http.StatusOK {
+				out = &g
+			}
+			resp := postChunked(t, ts.URL+"/_/api/groups/default/review", tc.body, out)
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+			}
+			if tc.want != http.StatusOK {
+				return
+			}
+			// The status was 200 before the fix as well. What was lost
+			// was the verdict and the note.
+			if g.ReviewVerdict != tc.wantVerdict {
+				t.Errorf("verdict = %q, want %q", g.ReviewVerdict, tc.wantVerdict)
+			}
+			if g.ReviewNote != tc.wantNote {
+				t.Errorf("note = %q, want %q", g.ReviewNote, tc.wantNote)
+			}
+			// And it must be what the store kept, not just what came back.
+			var reread model.Group
+			getJSON(t, ts.URL+"/_/api/groups/default", &reread)
+			if reread.ReviewVerdict != tc.wantVerdict || reread.ReviewNote != tc.wantNote {
+				t.Errorf("stored verdict/note = %q/%q, want %q/%q",
+					reread.ReviewVerdict, reread.ReviewNote, tc.wantVerdict, tc.wantNote)
+			}
+		})
+	}
+}
+
+// A request with no body at all still submits a commented review, which
+// is what a reviewer who did not choose is saying.
+func TestSubmitReviewWithNoBodyAtAll(t *testing.T) {
+	ts, _ := newTestServer(t)
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, nil)
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/_/api/groups/default/review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %s, want 200", resp.Status)
+	}
+	var g model.Group
+	if err := json.NewDecoder(resp.Body).Decode(&g); err != nil {
+		t.Fatal(err)
+	}
+	if g.ReviewVerdict != model.VerdictCommented {
+		t.Errorf("verdict = %q, want %q", g.ReviewVerdict, model.VerdictCommented)
+	}
+	if !g.Reviewed() {
+		t.Errorf("group = %+v, want a submitted review", g)
+	}
+}
