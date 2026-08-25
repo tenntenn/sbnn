@@ -3,6 +3,7 @@ package export_test
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,8 +171,24 @@ func TestBuildPrefersWorktree(t *testing.T) {
 	}
 }
 
+func indexHTML(refs ...string) []byte {
+	var b strings.Builder
+	b.WriteString("<!doctype html>\n<html lang=\"en\">\n<head>\n")
+	for _, ref := range refs {
+		switch {
+		case strings.HasSuffix(ref, ".css"):
+			fmt.Fprintf(&b, "<link rel=\"stylesheet\" crossorigin href=%q>\n", ref)
+		default:
+			fmt.Fprintf(&b, "<script type=\"module\" crossorigin src=%q></script>\n", ref)
+		}
+	}
+	b.WriteString("</head>\n<body>\n<div id=\"root\"></div>\n</body>\n</html>\n")
+	return []byte(b.String())
+}
+
 func assets() fstest.MapFS {
 	return fstest.MapFS{
+		"index.html":       {Data: indexHTML("/assets/index.js", "/assets/index.css")},
 		"assets/index.css": {Data: []byte(".diff{color:red}")},
 		"assets/index.js":  {Data: []byte("console.log('sbnn')")},
 	}
@@ -251,5 +268,104 @@ func TestRenderNeedsBuiltUI(t *testing.T) {
 	p := export.Build(group(t, ""), "test", time.Now())
 	if _, err := export.Render(p, fstest.MapFS{}, export.Options{}); err == nil {
 		t.Fatal("want an error when the UI is not built into the binary")
+	}
+}
+
+// TestRenderRejectsCodeSplitBuild pins the day Vite emits a second chunk:
+// the chunks used to be concatenated in name order into one module, which
+// produces a page that is silently blank in the browser.
+func TestRenderRejectsCodeSplitBuild(t *testing.T) {
+	tests := []struct {
+		name  string
+		fs    fstest.MapFS
+		wants []string
+	}{
+		{
+			name: "chunk imported by the entry",
+			fs: fstest.MapFS{
+				"index.html":           {Data: indexHTML("/assets/index-aaa.js", "/assets/index-aaa.css")},
+				"assets/index-aaa.css": {Data: []byte(".diff{color:red}")},
+				"assets/index-aaa.js":  {Data: []byte("import './vendor-bbb.js';console.log('sbnn')")},
+				"assets/vendor-bbb.js": {Data: []byte("export const react = 1")},
+			},
+			wants: []string{"assets/index-aaa.js", "assets/vendor-bbb.js"},
+		},
+		{
+			name: "two entries in index.html",
+			fs: fstest.MapFS{
+				"index.html":  {Data: indexHTML("/assets/a.js", "/assets/b.js")},
+				"assets/a.js": {Data: []byte("console.log('a')")},
+				"assets/b.js": {Data: []byte("console.log('b')")},
+			},
+			wants: []string{"assets/a.js", "assets/b.js"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := export.Build(group(t, ""), "test", time.Now())
+			page, err := export.Render(p, tt.fs, export.Options{})
+			if err == nil {
+				t.Fatalf("Render succeeded on a code split build; page = %q", page)
+			}
+			for _, want := range tt.wants {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not name %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestRenderFollowsIndexHTML checks that the entry module and the stylesheet
+// order come from index.html, not from the name order of assets/.
+func TestRenderFollowsIndexHTML(t *testing.T) {
+	fsys := fstest.MapFS{
+		"index.html":         {Data: indexHTML("/assets/zz-entry.js", "/assets/zz.css", "/assets/aa.css")},
+		"assets/zz-entry.js": {Data: []byte("console.log('entry')")},
+		"assets/zz.css":      {Data: []byte(".second{}")},
+		"assets/aa.css":      {Data: []byte(".first{}")},
+		// Not referenced and not a script: no reason to inline it.
+		"assets/font.woff2": {Data: []byte("woff")},
+	}
+	p := export.Build(group(t, ""), "test", time.Now())
+	page, err := export.Render(p, fsys, export.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(page, "console.log('entry')") {
+		t.Error("the entry module was not inlined")
+	}
+	second, first := strings.Index(page, ".second{}"), strings.Index(page, ".first{}")
+	if second < 0 || first < 0 {
+		t.Fatalf("stylesheets missing: .second at %d, .first at %d", second, first)
+	}
+	if second > first {
+		t.Error("stylesheets are not in index.html order")
+	}
+	if strings.Contains(page, "woff") {
+		t.Error("a font was inlined as CSS or script")
+	}
+}
+
+func TestRenderReportsMissingAsset(t *testing.T) {
+	fsys := fstest.MapFS{
+		"index.html": {Data: indexHTML("/assets/gone.js")},
+	}
+	p := export.Build(group(t, ""), "test", time.Now())
+	if _, err := export.Render(p, fsys, export.Options{}); err == nil {
+		t.Fatal("want an error when index.html references a script that is not embedded")
+	} else if !strings.Contains(err.Error(), "gone.js") {
+		t.Errorf("error %q does not name the missing asset", err)
+	}
+}
+
+func TestRenderNeedsAScript(t *testing.T) {
+	fsys := fstest.MapFS{
+		"index.html":       {Data: indexHTML("/assets/index.css")},
+		"assets/index.css": {Data: []byte(".diff{}")},
+	}
+	p := export.Build(group(t, ""), "test", time.Now())
+	if _, err := export.Render(p, fsys, export.Options{}); err == nil {
+		t.Fatal("want an error when index.html loads no script")
 	}
 }

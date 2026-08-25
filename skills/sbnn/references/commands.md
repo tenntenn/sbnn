@@ -1,8 +1,9 @@
 # Command reference: the commands and flags this workflow uses
 
-This table is scoped on purpose: it carries every flag the steps above tell
-you to pass, and nothing else. When you want a flag the workflow never asks
-for, `sbnn <command> --help` is the complete list.
+This table is scoped on purpose: it carries every flag the steps in
+[`../SKILL.md`](../SKILL.md) tell you to pass, and nothing else. When you want
+a flag the workflow never asks for, `sbnn <command> --help` is the complete
+list.
 
 | Command | What it does |
 | --- | --- |

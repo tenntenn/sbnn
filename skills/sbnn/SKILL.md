@@ -158,8 +158,8 @@ one of these — never poll `sbnn comments` in a loop:
   sbnn hook --target <topic> --on-review '<command that resumes the work>'
   ```
 
-  The command gets the review prompt on its stdin and six variables in its
-  environment:
+  The command gets the review prompt on its stdin and the variables below in
+  its environment:
 
   - `SBNN_GROUP` — the group that was reviewed: the name you passed to
     `--target`, or `default` when you passed none.
@@ -173,6 +173,16 @@ one of these — never poll `sbnn comments` in a loop:
     count, not the comments themselves; read those with `sbnn comments`.
   - `SBNN_REVIEW_NOTE` — what the reviewer said about the change as a whole,
     which is empty when they said nothing.
+  - `SBNN_VERDICT` — the verdict of the review as a whole, spelled the way the
+    JSON event spells it: `approved`, `commented` or `changes-requested`. It is
+    empty for a review that has none, so pick your own default rather than
+    reading one into it.
+  - `SBNN_BLOCKING` — `1` or `0`, the answer to "may the change go ahead?".
+    This is the same rule as `wait --exit-code` and `submit --exit-code`, so a
+    hook that branches on it agrees with a pipeline that branches on sbnn's
+    exit status. It is not the verdict: a review that only commented still
+    blocks while a comment of it is open, so branch on this rather than on
+    `SBNN_VERDICT`.
 
   Ask the user what that command should be for their setup rather than
   guessing; if they do not want one, tell them to run `sbnn comments` and
@@ -199,7 +209,10 @@ it is, and the reader is told plainly rather than guessing.
 `--suggest` appends the replacement to the comment as a ` ```suggestion `
 block, so the human sees it as a proposed change and can copy it:
 
-```
+```suggestion
+if err != nil {
+    return fmt.Errorf("read config: %w", err)
+}
 ```
 
 Use it for what is genuinely worth a human's attention — a decision you had
@@ -219,12 +232,23 @@ range, the reviewed code and the comment body. For programmatic handling:
 sbnn comments --target <topic> --format json
 ```
 
-Every JSON entry has `id`, `path`, `author`, `side` (`new` or `old`),
-`startLine`, `endLine`, `body`, `snippet`, `suggestions`, `question` and
-`resolved`. Line
-numbers refer to the side named by `side`. `author` is empty for the comments
-the human wrote in the browser and set for the ones posted from the command
-line — including your own, so skip those when working through the list.
+Every JSON entry has `id`, `group`, `diffId`, `fileId`, `path`, `side` (`new`
+or `old`), `startLine`, `endLine`, `body`, `snippet`, `resolved`, `createdAt`
+and `updatedAt`. Line numbers refer to the side named by `side`, and `diffId`
+says which round the comment came from, which is how you tell an old comment
+from one left on the diff you just sent.
+
+Three more keys appear only when they are set, so read them with a default
+instead of by subscript — a missing key is the normal case, not an error:
+
+- `author` — who left the comment. It is **missing** for the comments the
+  human wrote in the browser, and present for the ones posted from the
+  command line, including your own, so skip those when working through the
+  list.
+- `question` — present only as `true`; missing means the comment asks for a
+  change rather than an answer.
+- `suggestions` — present only when the body carries a suggestion block;
+  missing means there is nothing to apply.
 
 A comment may carry suggested replacements, written as fenced
 ` ```suggestion ` blocks inside the comment itself, the same convention
@@ -240,8 +264,9 @@ for a change, and replace the named lines exactly as written where a comment
 carries a suggestion; when you disagree or a comment cannot be acted on, say
 so explicitly in your reply to the user rather than silently skipping it.
 
-A comment marked as a **question** (`"question": true`, and "This one is a
-question: answer it." in the Markdown output) is asking for an answer.
+A comment marked as a **question** (`"question": true` — the key is absent on
+every other comment, and "This one is a question: answer it." in the Markdown
+output) is asking for an answer.
 Answer it in words in your reply, and change the code only if your own
 answer says it should change. Rewriting code in place of answering is the
 one response that leaves the reviewer having to ask again.
