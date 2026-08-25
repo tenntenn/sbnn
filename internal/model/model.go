@@ -191,44 +191,98 @@ func Suggestions(body string) []string {
 			continue
 		}
 		block := make([]string, 0, 4)
+		// inner is the fence of the code block nested inside the
+		// suggestion while the scan is inside one. Its lines are the
+		// replacement text, not Markdown to be read, so a suggestion
+		// may propose a file that itself contains a code block.
+		inner := ""
 		i++
+	scan:
 		for ; i < len(lines); i++ {
-			if closesFence(lines[i], fence) {
-				break
+			line := lines[i]
+			switch {
+			case endsSuggestion(line, fence, inner):
+				break scan
+			case inner != "":
+				if closesFence(line, inner) {
+					inner = ""
+				}
+			default:
+				if f, _, ok := openFence(line); ok {
+					inner = f
+				}
 			}
-			block = append(block, strings.TrimSuffix(lines[i], "\r"))
+			block = append(block, strings.TrimSuffix(line, "\r"))
 		}
 		out = append(out, strings.Join(block, "\n"))
 	}
 	return out
 }
 
+// endsSuggestion reports whether a line ends a suggestion block opened with
+// fence, given the fence of the code block nested inside it - empty when the
+// scan is not inside one.
+//
+// Inside a nested block only that block's own closing fence is read, which is
+// what keeps a proposed code block whole. The exception is a run longer than
+// the nested fence: a close never has to be longer than the fence it closes,
+// while the suggestion's fence is lengthened precisely to hold shorter ones,
+// so the longer run belongs to the suggestion.
+func endsSuggestion(line, fence, inner string) bool {
+	if !closesFence(line, fence) {
+		return false
+	}
+	if inner == "" {
+		return true
+	}
+	run, _ := fenceRun(line)
+	return !closesFence(line, inner) || len(run) > len(inner)
+}
+
 // suggestionFence reports whether a line opens a suggestion block, and with
 // which fence.
 func suggestionFence(line string) (fence string, ok bool) {
-	trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-	for _, marker := range []byte{'`', '~'} {
-		n := 0
-		for n < len(trimmed) && trimmed[n] == marker {
-			n++
-		}
-		if n < 3 {
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(trimmed[n:]), "suggestion") {
-			return trimmed[:n], true
-		}
+	fence, info, ok := openFence(line)
+	if !ok || !strings.EqualFold(info, "suggestion") {
+		return "", false
 	}
-	return "", false
+	return fence, true
 }
 
-// closesFence reports whether a line closes a block opened with fence.
-func closesFence(line, fence string) bool {
-	trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-	if len(trimmed) < len(fence) {
-		return false
+// openFence reports whether a line opens a fenced block, with which fence and
+// with which info string. A backtick fence may not carry a backtick in its
+// info string, so a line of prose holding two code spans opens nothing.
+func openFence(line string) (fence, info string, ok bool) {
+	fence, info = fenceRun(line)
+	if len(fence) < 3 {
+		return "", "", false
 	}
-	return strings.Trim(trimmed, fence[:1]) == "" && strings.HasPrefix(trimmed, fence)
+	if fence[0] == '`' && strings.Contains(info, "`") {
+		return "", "", false
+	}
+	return fence, info, true
+}
+
+// closesFence reports whether a line closes a block opened with fence: the
+// same character, at least as long, and nothing else on the line.
+func closesFence(line, fence string) bool {
+	run, rest := fenceRun(line)
+	return rest == "" && len(run) >= len(fence) && run[0] == fence[0]
+}
+
+// fenceRun splits a line, once its surrounding space is gone, into the run of
+// fence characters it begins with and what follows. run is empty when the
+// line does not begin with a run of ` or ~.
+func fenceRun(line string) (run, rest string) {
+	trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+	if trimmed == "" || (trimmed[0] != '`' && trimmed[0] != '~') {
+		return "", ""
+	}
+	n := 0
+	for n < len(trimmed) && trimmed[n] == trimmed[0] {
+		n++
+	}
+	return trimmed[:n], strings.TrimSpace(trimmed[n:])
 }
 
 // WithSuggestion appends a suggestion block to a comment body, which is how
