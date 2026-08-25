@@ -340,7 +340,7 @@ func runHelp(t *testing.T, bin string, args ...string) string {
 func section(help, heading string) []string {
 	var out []string
 	in := false
-	for _, line := range strings.Split(help, "\n") {
+	for line := range strings.SplitSeq(help, "\n") {
 		switch {
 		case strings.TrimSpace(line) == heading:
 			in = true
@@ -449,7 +449,7 @@ var shellSeparator = regexp.MustCompile(`\|\||&&|[|;]`)
 func sbnnInvocations(text string) [][]string {
 	var out [][]string
 	fenced := false
-	for _, raw := range strings.Split(text, "\n") {
+	for raw := range strings.SplitSeq(text, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(raw), "```") {
 			fenced = !fenced
 			continue
