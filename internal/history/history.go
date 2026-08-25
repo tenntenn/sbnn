@@ -9,6 +9,7 @@ package history
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -139,49 +140,145 @@ type Filter struct {
 	Limit int
 }
 
-// Load reads the log, oldest first, applying a filter.
+// MaxRecordBytes is how long a line may be and still be read as a record.
+// A review of a generated file, where every comment carries its snippet,
+// can run to megabytes; past this the line is skipped, the way an
+// unparseable one is.
+const MaxRecordBytes = 8 << 20
+
+// Skipped is what a read had to leave out. A log is worth reading even
+// when part of it cannot be, so these are counted and handed back rather
+// than raised: the reader gets the records that are there, plus something
+// honest to say about the ones that are not.
+type Skipped struct {
+	// Broken is lines that were not a record.
+	Broken int
+	// Long is lines that ran past MaxRecordBytes.
+	Long int
+}
+
+// Any reports whether anything was left out.
+func (s Skipped) Any() bool { return s.Broken > 0 || s.Long > 0 }
+
+// String says what was left out, ready to put in a notice.
+func (s Skipped) String() string {
+	var parts []string
+	if s.Broken > 0 {
+		parts = append(parts, fmt.Sprintf("%d unreadable line(s)", s.Broken))
+	}
+	if s.Long > 0 {
+		parts = append(parts, fmt.Sprintf("%d line(s) over %d MiB", s.Long, MaxRecordBytes>>20))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// Load reads the log, oldest first, applying a filter. Lines it cannot use
+// are skipped; LoadSkipped says how many there were.
 func Load(path string, f Filter) ([]Record, error) {
+	records, _, err := LoadSkipped(path, f)
+	return records, err
+}
+
+// LoadSkipped is Load, also reporting what it had to skip.
+func LoadSkipped(path string, f Filter) ([]Record, Skipped, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, Skipped{}, nil
 		}
-		return nil, err
+		return nil, Skipped{}, err
 	}
 	defer file.Close()
-	return Read(file, f)
+	return ReadSkipped(file, f)
 }
 
-// Read parses a log.
+// Read parses a log, skipping the lines it cannot use.
 func Read(r io.Reader, f Filter) ([]Record, error) {
+	records, _, err := ReadSkipped(r, f)
+	return records, err
+}
+
+// ReadSkipped is Read, also reporting what it had to skip. Only a failure
+// of the underlying reader is an error: a line that is not a record, or is
+// too long to be one, costs that line and nothing else.
+func ReadSkipped(r io.Reader, f Filter) ([]Record, Skipped, error) {
 	var records []Record
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64<<10), 8<<20)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+	var skipped Skipped
+	br := bufio.NewReaderSize(r, 64<<10)
+	for {
+		line, long, err := readLine(br)
+		switch {
+		case long:
+			skipped.Long++
+		case len(bytes.TrimSpace(line)) == 0:
+			// A blank line is not a record and not a complaint.
+		default:
+			var rec Record
+			if jerr := json.Unmarshal(bytes.TrimSpace(line), &rec); jerr != nil {
+				skipped.Broken++
+			} else if keep(rec, f) {
+				records = append(records, rec)
+			}
 		}
-		var rec Record
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			// A broken line is skipped rather than losing the whole log.
-			continue
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, skipped, err
 		}
-		if f.Group != "" && rec.Group != f.Group {
-			continue
-		}
-		if !f.Since.IsZero() && rec.ReviewedAt.Before(f.Since) {
-			continue
-		}
-		records = append(records, rec)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
 	}
 	if f.Limit > 0 && len(records) > f.Limit {
 		records = records[len(records)-f.Limit:]
 	}
-	return records, nil
+	return records, skipped, nil
+}
+
+// keep says whether a record survives the filter.
+func keep(rec Record, f Filter) bool {
+	if f.Group != "" && rec.Group != f.Group {
+		return false
+	}
+	if !f.Since.IsZero() && rec.ReviewedAt.Before(f.Since) {
+		return false
+	}
+	return true
+}
+
+var newline = []byte("\n")
+
+// readLine reads one newline-terminated line. A line past MaxRecordBytes is
+// drained to its end and reported with long set, so that the lines after it
+// are still read - which bufio.Scanner cannot do, since it stops the whole
+// scan at the first line that outgrows its buffer.
+func readLine(br *bufio.Reader) (line []byte, long bool, err error) {
+	for {
+		chunk, rerr := br.ReadSlice('\n')
+		if rerr == bufio.ErrBufferFull {
+			// ReadSlice hands back the buffer itself, so keeping any of it
+			// means copying it out.
+			if !long && len(line)+len(chunk) <= MaxRecordBytes {
+				line = append(line, chunk...)
+				continue
+			}
+			long, line = true, nil
+			continue
+		}
+		if !long {
+			line = append(line, chunk...)
+			// The terminator is not part of the record.
+			if len(bytes.TrimSuffix(line, newline)) > MaxRecordBytes {
+				long, line = true, nil
+			}
+		}
+		if rerr != nil {
+			// io.EOF, with whatever came before it, or a read failure.
+			if rerr == io.EOF && !long && len(line) == 0 {
+				return nil, false, io.EOF
+			}
+			return line, long, rerr
+		}
+		return line, long, nil
+	}
 }
 
 // CommentRecord is one comment standing on its own: what was said, plus as
@@ -342,7 +439,8 @@ func tally(counts map[string]int) []Count {
 	return out
 }
 
-// ParseSince reads "7d", "36h", "90m" or an RFC3339 date as a starting point.
+// ParseSince reads "7d", "36h", "90m" or an RFC3339 date as a starting
+// point. A date without a zone is read in the local zone.
 func ParseSince(s string, now time.Time) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -358,7 +456,11 @@ func ParseSince(s string, now time.Time) (time.Time, error) {
 		return now.Add(-d), nil
 	}
 	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
-		if t, err := time.Parse(layout, s); err == nil {
+		// In the reviewer's own zone: everything the reviews output shows
+		// is formatted with .Local(), so a bare date has to start where
+		// that date starts on their clock, not nine hours into it. An
+		// RFC3339 string carries its own offset and is unaffected.
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
 			return t, nil
 		}
 	}

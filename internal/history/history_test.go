@@ -1,6 +1,8 @@
 package history_test
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,6 +102,148 @@ func TestAppendAndLoad(t *testing.T) {
 	}
 }
 
+// TestReadSkipsWhatItCannotUse pins the promise the skip comment makes: a
+// line the reader cannot use costs that line and nothing else. An
+// over-long one used to take the rest of the log with it, because
+// bufio.Scanner stops the whole scan at the first line past its buffer.
+func TestReadSkipsWhatItCannotUse(t *testing.T) {
+	huge := `{"group":"generated","note":"` + strings.Repeat("x", history.MaxRecordBytes) + `"}`
+	first := `{"group":"api","reviewedAt":"2026-08-16T10:00:00Z"}`
+	last := `{"group":"web","reviewedAt":"2026-08-16T11:00:00Z"}`
+
+	for _, tt := range []struct {
+		name    string
+		log     string
+		want    []string
+		skipped history.Skipped
+	}{
+		{
+			name: "an over-long line in the middle",
+			log:  first + "\n" + huge + "\n" + last + "\n",
+			want: []string{"api", "web"},
+			// This is the case that used to return nothing at all.
+			skipped: history.Skipped{Long: 1},
+		},
+		{
+			name:    "an over-long line first",
+			log:     huge + "\n" + first + "\n",
+			want:    []string{"api"},
+			skipped: history.Skipped{Long: 1},
+		},
+		{
+			name:    "an over-long line last, with no newline after it",
+			log:     first + "\n" + huge,
+			want:    []string{"api"},
+			skipped: history.Skipped{Long: 1},
+		},
+		{
+			name:    "two over-long lines back to back",
+			log:     huge + "\n" + huge + "\n" + last + "\n",
+			want:    []string{"web"},
+			skipped: history.Skipped{Long: 2},
+		},
+		{
+			name:    "broken and over-long together",
+			log:     "{not json}\n" + first + "\n" + huge + "\n" + last + "\n",
+			want:    []string{"api", "web"},
+			skipped: history.Skipped{Broken: 1, Long: 1},
+		},
+		{
+			name: "blank lines are not a complaint",
+			log:  "\n" + first + "\n   \n" + last + "\n\n",
+			want: []string{"api", "web"},
+		},
+		{
+			name: "a record right at the limit is still a record",
+			log: `{"group":"big","note":"` +
+				strings.Repeat("x", history.MaxRecordBytes-len(`{"group":"big","note":""}`)) +
+				`"}` + "\n",
+			want: []string{"big"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			records, skipped, err := history.ReadSkipped(strings.NewReader(tt.log), history.Filter{})
+			if err != nil {
+				t.Fatalf("ReadSkipped = %v", err)
+			}
+			var got []string
+			for _, rec := range records {
+				got = append(got, rec.Group)
+			}
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("read %v, want %v", got, tt.want)
+			}
+			if skipped != tt.skipped {
+				t.Errorf("skipped %+v, want %+v", skipped, tt.skipped)
+			}
+			if skipped.Any() != (tt.skipped != history.Skipped{}) {
+				t.Errorf("Any() = %v for %+v", skipped.Any(), skipped)
+			}
+			// Read is the same read, without the count.
+			plain, err := history.Read(strings.NewReader(tt.log), history.Filter{})
+			if err != nil {
+				t.Fatalf("Read = %v", err)
+			}
+			if len(plain) != len(records) {
+				t.Errorf("Read got %d record(s), ReadSkipped %d", len(plain), len(records))
+			}
+		})
+	}
+}
+
+func TestSkippedString(t *testing.T) {
+	for _, tt := range []struct {
+		in   history.Skipped
+		want string
+	}{
+		{history.Skipped{}, ""},
+		{history.Skipped{Broken: 2}, "2 unreadable line(s)"},
+		{history.Skipped{Long: 1}, "1 line(s) over 8 MiB"},
+		{history.Skipped{Broken: 1, Long: 3}, "1 unreadable line(s), 3 line(s) over 8 MiB"},
+	} {
+		if got := tt.in.String(); got != tt.want {
+			t.Errorf("Skipped%+v.String() = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestLoadSkipsOverLongLine is the same promise through the file path, the
+// one "sbnn reviews" actually takes.
+func TestLoadSkipsOverLongLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reviews.jsonl")
+	if err := history.Append(path, history.Record{Group: "api", ReviewedAt: at(0)}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"group":"generated","note":"` +
+		strings.Repeat("x", history.MaxRecordBytes) + `"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := history.Append(path, history.Record{Group: "web", ReviewedAt: at(60)}); err != nil {
+		t.Fatal(err)
+	}
+
+	records, skipped, err := history.LoadSkipped(path, history.Filter{})
+	if err != nil {
+		t.Fatalf("LoadSkipped = %v", err)
+	}
+	if len(records) != 2 || records[0].Group != "api" || records[1].Group != "web" {
+		t.Errorf("LoadSkipped kept %+v, want the two readable records", records)
+	}
+	if want := (history.Skipped{Long: 1}); skipped != want {
+		t.Errorf("skipped %+v, want %+v", skipped, want)
+	}
+	if got := skipped.String(); got != "1 line(s) over 8 MiB" {
+		t.Errorf("skipped.String() = %q", got)
+	}
+}
+
 func TestCommentsFlattensReviews(t *testing.T) {
 	records := []history.Record{
 		history.FromGroup(group("api", "",
@@ -168,6 +312,43 @@ func TestSummarize(t *testing.T) {
 	}
 }
 
+// TestParseSinceDateIsLocal pins the bare-date form to the reviewer's own
+// zone. time.Local is fixed when the process starts, so the only way to
+// read a date in a zone other than the test runner's is to run this test
+// again in one.
+func TestParseSinceDateIsLocal(t *testing.T) {
+	const zone = "Asia/Tokyo"
+	if os.Getenv("SBNN_TEST_IN_TZ") == "" {
+		if _, err := time.LoadLocation(zone); err != nil {
+			t.Skipf("no zone info for %s: %v", zone, err)
+		}
+		cmd := exec.Command(os.Args[0], "-test.run", "^"+t.Name()+"$", "-test.v")
+		cmd.Env = append(os.Environ(), "SBNN_TEST_IN_TZ=1", "TZ="+zone)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("in TZ=%s: %v\n%s", zone, err, out)
+		}
+		return
+	}
+	if time.Local.String() != zone {
+		t.Skipf("TZ was not honoured: time.Local is %s", time.Local)
+	}
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	got, err := history.ParseSince("2026-01-31", now)
+	if err != nil {
+		t.Fatalf("ParseSince = %v", err)
+	}
+	want := time.Date(2026, 1, 31, 0, 0, 0, 0, time.Local)
+	if !got.Equal(want) {
+		t.Errorf("ParseSince(\"2026-01-31\") = %s, want %s", got, want)
+	}
+	// The nine hours a UTC reading would have dropped are reviews the
+	// reviewer sees listed under 2026-01-31, so they have to be kept.
+	early := time.Date(2026, 1, 31, 0, 30, 0, 0, time.Local)
+	if early.Before(got) {
+		t.Errorf("a review at %s is before the start of its own day, %s", early, got)
+	}
+}
+
 func TestParseSince(t *testing.T) {
 	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	for _, tt := range []struct {
@@ -177,7 +358,8 @@ func TestParseSince(t *testing.T) {
 		{"7d", now.AddDate(0, 0, -7)},
 		{"36h", now.Add(-36 * time.Hour)},
 		{"90m", now.Add(-90 * time.Minute)},
-		{"2026-08-01", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+		{"2026-08-01", time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)},
+		{"2026-08-01T05:00:00+09:00", time.Date(2026, 8, 1, 5, 0, 0, 0, time.FixedZone("", 9*60*60))},
 		{"", time.Time{}},
 	} {
 		got, err := history.ParseSince(tt.in, now)
