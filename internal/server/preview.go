@@ -234,6 +234,13 @@ func newSide(d *model.Diff, f *model.File) source.Result {
 // number the hunk gives it, counting from Hunk.NewStart. One line out of
 // place is enough to conclude that the patch was never applied here.
 //
+// The question can also have no answer. A hunk that carries no new-side
+// numbering says nothing about where its lines belong, and a diff made only
+// of such hunks leaves the working tree neither confirmed nor contradicted.
+// Not knowing is not the same as knowing it is wrong, so an unanswerable
+// check reports a match and the working tree is used, exactly as it was
+// before this check existed.
+//
 // Binary files and files without hunks are accepted as they are: there is
 // nothing in the diff to check them against.
 func worktreeMatchesNewSide(content string, f *model.File) bool {
@@ -242,6 +249,16 @@ func worktreeMatchesNewSide(content string, f *model.File) bool {
 	}
 	lines := strings.Split(content, "\n")
 	for _, h := range f.Hunks {
+		if h.NewStart < 1 {
+			// A combined diff - what "git show <merge>" prints for a
+			// merge commit - has "@@@ -1,2 -1,2 +1,2 @@@" headers that
+			// this parser deliberately does not read numbers out of,
+			// because they do not describe a two-way view. NewStart is
+			// then 0 and there is no line to compare against any line.
+			// A deleted file's "+0,0" hunk lands here too, and has no
+			// new side to check either.
+			continue
+		}
 		num := h.NewStart
 		for _, l := range h.Lines {
 			if l.Kind == model.LineDelete {

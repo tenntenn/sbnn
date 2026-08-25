@@ -8,6 +8,7 @@ import (
 
 	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/model"
+	"github.com/tenntenn/sbnn/internal/source"
 )
 
 // previewRel is the path of the file every case of TestPreviewResolve
@@ -224,5 +225,121 @@ func TestWorktreeMatchesNewSide(t *testing.T) {
 				t.Errorf("worktreeMatchesNewSide(%q) = %v, want %v", tt.disk, got, tt.want)
 			}
 		})
+	}
+}
+
+// combinedDiff is what "git show <merge>" prints for a file that both sides
+// of a merge touched. Its "@@@" headers carry two old ranges and a new one,
+// and this parser deliberately reads no numbers out of them, because they do
+// not describe the two-way view sbnn shows. Every hunk therefore arrives
+// with NewStart 0 and every line with no number at all.
+const combinedDiff = `diff --cc docs/guide.md
+index 1111111,2222222..3333333
+--- a/docs/guide.md
++++ b/docs/guide.md
+@@@ -1,4 -1,4 +1,5 @@@
+  alpha
+  bravo
+ -charlie
+ +charlie merged
+  delta
++ echo
+`
+
+// TestCombinedDiffKeepsTheWorkingTreeFile is the regression test for a
+// combined diff being read as proof that the working tree is wrong.
+//
+// worktreeMatchesNewSide walks each hunk from Hunk.NewStart. A combined hunk
+// has no NewStart, so the walk began at line 0, the first comparison was out
+// of range, and the answer was "does not match" - for every combined diff,
+// whatever was on disk. A merge shown with "git show <merge>" is exactly the
+// case where the working tree does hold the new side, so sbnn threw away the
+// right file and served a partial rebuild of it instead.
+//
+// A check that cannot be run has to say so rather than convict.
+func TestCombinedDiffKeepsTheWorkingTreeFile(t *testing.T) {
+	files := diff.Parse(combinedDiff)
+	if len(files) != 1 {
+		t.Fatalf("parsed %d file(s), want 1", len(files))
+	}
+	f := files[0]
+	f.ID, f.IsMarkdown = "f1", true
+	if len(f.Hunks) == 0 {
+		t.Fatal("the combined diff parsed to no hunks")
+	}
+	// The premise of the bug, pinned so that the test keeps testing it: a
+	// combined hunk carries no new-side numbering.
+	for i, h := range f.Hunks {
+		if h.NewStart != 0 {
+			t.Fatalf("hunk %d has NewStart %d; combined hunks are parsed without one, "+
+				"so this test no longer covers what it was written for", i, h.NewStart)
+		}
+	}
+
+	// The merged file, as it really is on disk after the merge.
+	const merged = "alpha\nbravo\ncharlie merged\ndelta\necho\n"
+
+	base := t.TempDir()
+	onDisk := filepath.Join(base, filepath.FromSlash(previewRel))
+	if err := os.MkdirAll(filepath.Dir(onDisk), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(onDisk, []byte(merged), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := &model.Diff{ID: "d1", BaseDir: base, Files: []*model.File{f}}
+	p := &previewer{cacheDir: t.TempDir()}
+
+	path, src, complete, err := p.resolve("default", d, f)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if src != SourceWorktree {
+		t.Errorf("resolve served %q, want %q: a combined diff cannot show the working tree is stale",
+			src, SourceWorktree)
+	}
+	if path != onDisk {
+		t.Errorf("path = %q, want the working tree file %q", path, onDisk)
+	}
+	if !complete {
+		t.Error("the working tree file was reported partial")
+	}
+
+	// And the content handed to the preview is the file on disk, not a
+	// rebuild that drops whatever the hunks did not mention.
+	got := newSide(d, f)
+	if got.Kind != source.FromWorktree {
+		t.Errorf("newSide read from %v, want the working tree", got.Kind)
+	}
+	if got.Content != merged {
+		t.Errorf("newSide content = %q, want the merged file %q", got.Content, merged)
+	}
+}
+
+// A combined diff says nothing about the working tree, so nothing on disk
+// can be contradicted by one - but a file that is genuinely absent is still
+// rebuilt, and the ordinary two-way check still convicts.
+func TestWorktreeMatchesNewSideWithoutNewSideNumbers(t *testing.T) {
+	files := diff.Parse(combinedDiff)
+	f := files[0]
+	for _, tt := range []struct {
+		name string
+		disk string
+	}{
+		{"the merged file", "alpha\nbravo\ncharlie merged\ndelta\necho\n"},
+		{"one of the parents", "alpha\nbravo\ncharlie\ndelta\n"},
+		{"something else entirely", "nothing like it\n"},
+		{"empty", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if !worktreeMatchesNewSide(tt.disk, f) {
+				t.Error("a combined diff was read as proof that the working tree is wrong")
+			}
+		})
+	}
+
+	// The two-way check is untouched: it still rejects the old side.
+	if worktreeMatchesNewSide(oldSideOnDisk, appliedFile()) {
+		t.Error("an unapplied two-way patch is no longer caught")
 	}
 }
