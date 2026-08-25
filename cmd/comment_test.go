@@ -71,11 +71,67 @@ func TestCommentStdinReaders(t *testing.T) {
 
 // TestCommentHelpNamesBulkDefaults keeps the help honest about which
 // single-comment flags reach a --json entry, which is otherwise guesswork.
+//
+// The strings looked for are ones only the bulk paragraph can supply: --author,
+// --diff and --question appear in the flag list on their own, so matching those
+// alone would still pass with the paragraph deleted.
 func TestCommentHelpNamesBulkDefaults(t *testing.T) {
 	help := commentCmd.Long
-	for _, want := range []string{"--author", "--diff", "--question"} {
+	for _, want := range []string{
+		// The JSON field names, which nothing else in the help mentions.
+		`"author"`,
+		`"diffId"`,
+		`"question"`,
+		// That the three act as defaults, and that the side does not.
+		"act as defaults",
+		"the side is taken from the entry alone",
+		// And that the text-carrying flags are refused rather than ignored.
+		"--message, --suggest and --suggest-file",
+		"refused next to --json",
+	} {
 		if !strings.Contains(help, want) {
-			t.Errorf("the help does not say what %s does for --json entries", want)
+			t.Errorf("the help of --json does not mention %q", want)
 		}
+	}
+}
+
+// TestBulkCommentQuestionDefault pins down that --question fills in the entries
+// that leave "question" out and nothing else: an entry saying false stays a
+// plain comment. It used to be OR-ed in, so --question turned every entry into
+// a question whatever the entry said.
+func TestBulkCommentQuestionDefault(t *testing.T) {
+	tests := map[string]struct {
+		entry string
+		flag  bool
+		want  bool
+	}{
+		"omitted, no flag": {entry: `{"path":"main.go","line":4,"body":"x"}`, want: false},
+		"omitted, flag":    {entry: `{"path":"main.go","line":4,"body":"x"}`, flag: true, want: true},
+		"false, no flag":   {entry: `{"path":"main.go","line":4,"question":false,"body":"x"}`, want: false},
+		"false beats flag": {entry: `{"path":"main.go","line":4,"question":false,"body":"x"}`, flag: true, want: false},
+		"true, no flag":    {entry: `{"path":"main.go","line":4,"question":true,"body":"x"}`, want: true},
+		"true, flag":       {entry: `{"path":"main.go","line":4,"question":true,"body":"x"}`, flag: true, want: true},
+		"null falls back":  {entry: `{"path":"main.go","line":4,"question":null,"body":"x"}`, flag: true, want: true},
+		"null, no flag":    {entry: `{"path":"main.go","line":4,"question":null,"body":"x"}`, want: false},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			resetCommentFlags(t)
+			t.Cleanup(func() { resetCommentFlags(t) })
+			commentQuestion = test.flag
+
+			requests, err := readBulkComments(strings.NewReader("[" + test.entry + "]"))
+			if err != nil {
+				t.Fatalf("reading %s failed: %v", test.entry, err)
+			}
+			if len(requests) != 1 {
+				t.Fatalf("read %d comments from %s, want 1", len(requests), test.entry)
+			}
+			if requests[0].Question != test.want {
+				t.Errorf("%s with --question=%t stored question=%t, want %t",
+					test.entry, test.flag, requests[0].Question, test.want)
+			}
+		})
 	}
 }

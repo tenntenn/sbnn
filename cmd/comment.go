@@ -220,9 +220,12 @@ type bulkComment struct {
 	Side       string    `json:"side"`
 	Body       string    `json:"body"`
 	Suggestion string    `json:"suggestion"`
-	Question   bool      `json:"question"`
-	Author     string    `json:"author"`
-	DiffID     string    `json:"diffId"`
+	// Question is a pointer so an entry that says "question": false keeps its
+	// false even when --question sets the default for the entries that leave
+	// the field out, the same way an empty "author" falls back to --author.
+	Question *bool  `json:"question"`
+	Author   string `json:"author"`
+	DiffID   string `json:"diffId"`
 }
 
 // flexLines accepts "12", "12-18" and 12 alike.
@@ -290,6 +293,10 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 		if diffID == "" {
 			diffID = commentDiffID
 		}
+		question := commentQuestion
+		if e.Question != nil {
+			question = *e.Question
+		}
 		requests = append(requests, server.AddCommentRequest{
 			DiffID:     diffID,
 			Path:       e.Path,
@@ -298,7 +305,7 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 			StartLine:  start,
 			EndLine:    end,
 			Body:       e.Body,
-			Question:   e.Question || commentQuestion,
+			Question:   question,
 			Suggestion: e.Suggestion,
 		})
 	}
