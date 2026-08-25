@@ -931,6 +931,60 @@ func TestCrossOriginRequestsAreRefused(t *testing.T) {
 	}
 }
 
+// --dangerously-allow-remote-access binds sbnn somewhere other than loopback,
+// and the browser then reports the address the user actually typed. That
+// address is not opts.Bind and it is not loopback, so matching Origin against
+// either one refuses every write and leaves a read-only page behind a flag
+// that advertises a working one. What identifies the page in that setup is
+// the browser's own same-origin verdict, and failing that, the Host the
+// request was dialled at.
+func TestCrossOriginUnderRemoteBind(t *testing.T) {
+	_, srv := newTestServer(t, func(o *Options) {
+		o.Bind = "0.0.0.0"
+		o.Port = 6280
+		o.AllowRemote = true
+	})
+
+	const lan = "192.168.1.5:6280"
+	cases := []struct {
+		name    string
+		host    string
+		headers map[string]string
+		want    bool // refused as cross-origin
+	}{
+		{"the page the user typed, named by the browser", lan,
+			map[string]string{"Origin": "http://" + lan, "Sec-Fetch-Site": "same-origin"}, false},
+		{"the page the user typed, on a browser too old for Sec-Fetch-Site", lan,
+			map[string]string{"Origin": "http://" + lan}, false},
+		{"the address bar", lan,
+			map[string]string{"Sec-Fetch-Site": "none"}, false},
+		{"loopback still counts", "localhost:6280",
+			map[string]string{"Origin": "http://localhost:6280"}, false},
+		{"another site, named by the browser", lan,
+			map[string]string{"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}, true},
+		{"another site, as a simple request with no Sec-Fetch-Site", lan,
+			map[string]string{"Origin": "https://evil.example"}, true},
+		{"another port on the same machine", lan,
+			map[string]string{"Origin": "http://192.168.1.5:1"}, true},
+		{"a sandboxed page, which sends Origin: null", lan,
+			map[string]string{"Origin": "null"}, true},
+		{"the command line, which names no origin", lan, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/_/api/groups/default/review", strings.NewReader(`{}`))
+			r.Host = tc.host
+			for k, v := range tc.headers {
+				r.Header.Set(k, v)
+			}
+			reason, got := srv.crossOrigin(r)
+			if got != tc.want {
+				t.Errorf("crossOrigin() = %v (%q), want %v", got, reason, tc.want)
+			}
+		})
+	}
+}
+
 // A review submitted over the API is a review like any other: it wakes what
 // is waiting, and it is written into the log. That is what lets a reviewer
 // who is not a person - `sbnn submit` - end a round.
