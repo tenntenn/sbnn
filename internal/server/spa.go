@@ -10,6 +10,13 @@ import (
 	"github.com/tenntenn/sbnn/web"
 )
 
+// uiNotBuiltMessage is served when the review UI was not built into this
+// binary. It is the one moment the reader most needs a command that works,
+// so it names the build system the repository actually has: there is no
+// Makefile, and Taskfile.yml defines the "build" task.
+const uiNotBuiltMessage = "the sbnn web UI is not built into this binary.\n" +
+	"Run `task build` (it runs `pnpm build` in web/) and reinstall sbnn.\n"
+
 // spaAssets returns the built review UI and whether it was built into this
 // binary at all. It is a variable so that a test can serve the handler a
 // known set of files instead of whatever the last "pnpm build" produced.
@@ -23,8 +30,7 @@ func (s *Server) spaHandler() http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			io.WriteString(w, "the sbnn web UI is not built into this binary.\n"+
-				"Run `make build` (it runs `pnpm build` in web/) and reinstall sbnn.\n")
+			io.WriteString(w, uiNotBuiltMessage)
 		})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

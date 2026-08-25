@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/pkg/browser"
@@ -51,6 +53,28 @@ func groupName(flag string) (string, error) {
 	return server.ValidateGroupName(flag)
 }
 
+// outputFormats are the shapes a review can be printed in, in the order the
+// flag help lists them.
+var outputFormats = []string{"prompt", "markdown", "json"}
+
+// resolveFormat folds --format and the --json shorthand into one name, and
+// says so straight away when the name is not one sbnn knows. It is meant to
+// be called before a command does any work: "sbnn wait" blocks for as long
+// as the review takes, and a format it cannot print is worth knowing about
+// before the wait rather than after it.
+//
+// --format is checked even when --json overrides it, because a --format
+// nobody reads is a typo either way.
+func resolveFormat(format string, asJSON bool) (string, error) {
+	if !slices.Contains(outputFormats, format) {
+		return "", fmt.Errorf("unknown format %q: use prompt, markdown or json", format)
+	}
+	if asJSON {
+		return "json", nil
+	}
+	return format, nil
+}
+
 func jsonEncoder(w io.Writer) *json.Encoder {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -68,13 +92,35 @@ func browserOpen(url string) error {
 
 // isTerminal reports whether a stream is attached to a terminal. sbnn is meant
 // to sit in a pipeline as much as in a shell, and a pipeline has nobody to
-// open a browser for.
+// open a browser for or to answer a question.
+//
+// A character device is not enough on its own: the null device is one, so
+// "sbnn --clear --all < /dev/null" - the shape a cron job, a systemd unit or
+// a CI step reaches for to say "there is nobody here" - was read as a
+// terminal, and the caller got a prompt answered by the EOF it could not see.
+// Asking the kernel with an ioctl (golang.org/x/term) would settle it exactly,
+// but the null device is the one character device that turns up as a stream in
+// practice, and ruling it out costs no dependency.
 func isTerminal(f *os.File) bool {
 	fi, err := f.Stat()
 	if err != nil {
 		return false
 	}
-	return fi.Mode()&os.ModeCharDevice != 0
+	if fi.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	return !isDevNull(fi)
+}
+
+// isDevNull reports whether fi describes the null device. It compares the
+// file itself rather than its name, so /dev/stdin and the other paths that
+// lead to it are caught too.
+func isDevNull(fi os.FileInfo) bool {
+	null, err := os.Stat(os.DevNull)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(fi, null)
 }
 
 // ExitOpenComments is the status of a command that found comments to
