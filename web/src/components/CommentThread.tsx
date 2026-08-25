@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import type { Comment } from '../types'
 import { client } from '../client'
-import { originalLines, parseBody, suggestionBlock, suggestions } from '../suggestion'
+import { insertSuggestion, originalLines, parseBody, suggestionBlock, suggestions } from '../suggestion'
 
 interface ThreadProps {
   group: string
@@ -260,13 +260,11 @@ function SuggestButton({
     }
     const value = textarea.value
     const at = textarea.selectionStart ?? value.length
-    const before = value.slice(0, at).replace(/\n+$/, '')
-    const after = value.slice(at).replace(/^\n+/, '')
-    const next = [before, block, after].filter((part) => part !== '').join('\n\n')
+    const { body: next, block: written, blockAt } = insertSuggestion(value, at, seed)
     onInsert(next)
     // Put the cursor inside the block so the text can be edited right away.
     window.setTimeout(() => {
-      const start = next.indexOf(block) + block.indexOf('\n') + 1
+      const start = blockAt + written.indexOf('\n') + 1
       textarea.focus()
       textarea.setSelectionRange(start, start + seed.length)
     }, 0)

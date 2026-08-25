@@ -139,19 +139,26 @@ export function suggestionBlock(text: string): string {
   return `${fence}suggestion\n${content}\n${fence}`
 }
 
-/** danglingFence returns the fence of a block the text opens and never
- * closes, or '' when every block it opens is closed. At most one can be left
- * open, since every line after it belongs to it. */
-function danglingFence(text: string): string {
+/** danglingOpen returns the block the text opens and never closes: its fence
+ * and the line that opened it, info string and all. null when every block the
+ * text opens is closed. At most one can be left open, since every line after
+ * it belongs to it. */
+function danglingOpen(text: string): { fence: string; line: string } | null {
   const lines = text.split('\n')
   for (let i = 0; i < lines.length; i++) {
     const open = openFence(lines[i])
     if (!open) continue
     const end = blockEnd(lines, i)
-    if (end === lines.length) return open.fence
+    if (end === lines.length) return { fence: open.fence, line: lines[i].replace(/\r$/, '') }
     i = end
   }
-  return ''
+  return null
+}
+
+/** danglingFence returns the fence of a block the text opens and never
+ * closes, or '' when every block it opens is closed. */
+function danglingFence(text: string): string {
+  return danglingOpen(text)?.fence ?? ''
 }
 
 /** withSuggestion appends a suggestion block to a body. */
@@ -167,6 +174,36 @@ export function withSuggestion(body: string, text: string): string {
   const dangling = danglingFence(head)
   if (dangling !== '') head += `\n${dangling}`
   return `${head}\n\n${block}`
+}
+
+/** insertSuggestion puts a suggestion block into a body at a cursor
+ * position, which is what the "Suggest a change" button does.
+ *
+ * The cursor may sit inside a fenced block the writer has not closed yet - a
+ * block is typed top down, so being inside an open one is the ordinary state
+ * halfway through writing. A block dropped there is quoted text, not a
+ * proposal: the page shows no suggestion, the server stores none, and the
+ * writer is given no hint that the button did nothing. So the open block is
+ * closed above the suggestion and opened again below it, with the same info
+ * string, and what was typed still reads as code on both sides of it.
+ *
+ * It returns the block as well as the body, because the caller selects the
+ * replacement text inside the block it just wrote. */
+export function insertSuggestion(
+  body: string,
+  at: number,
+  text: string,
+): { body: string; block: string; blockAt: number } {
+  const block = suggestionBlock(text)
+  let head = body.slice(0, at).replace(/\n+$/, '')
+  let tail = body.slice(at).replace(/^\n+/, '')
+  const open = danglingOpen(head)
+  if (open) {
+    head += `\n${open.fence}`
+    if (tail !== '') tail = `${open.line}\n${tail}`
+  }
+  const composed = [head, block, tail].filter((part) => part !== '').join('\n\n')
+  return { body: composed, block, blockAt: composed.indexOf(block, head.length) }
 }
 
 /** originalLines are the lines a suggestion would replace, taken from the
