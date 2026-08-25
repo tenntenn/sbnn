@@ -1204,6 +1204,17 @@ button.ghost.danger:hover:not(:disabled) {
   border-color: var(--danger-fg);
 }
 
+/* A badge says one small thing about the row it sits on, but the things it
+   says are not one kind. An identity, a state, a warning and a count all
+   arrived as the same grey lozenge, so a reader scanning a file row had to
+   read three pills to learn that the first was a state, the second a file
+   type and the third a number.
+
+   Two marks split them. An outlined pill is a label about the row, and its
+   colour says which kind of label. A filled pill with no outline is not a
+   label at all: it is who wrote something, or how many there are. The
+   geometry is shared through --pill-*, so only fill, border and colour
+   carry the distinction. */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -1218,14 +1229,37 @@ button.ghost.danger:hover:not(:disabled) {
   color: var(--fg-muted);
 }
 
-.badge.sm {
-  font-size: var(--text-2xs);
+/* State: an open question is a different request from a change, so it does
+   not look like the resolved badge sitting next to it. */
+.badge.question {
+  border-color: var(--accent-border);
+  color: var(--accent-fg);
 }
 
-.badge.warn {
+/* Warning: the diff could not show everything it was asked to. An outlined
+   amber pill means this and nothing else. */
+.badge.warn:not(.sm) {
   color: var(--warn-fg);
   background: var(--warn-bg);
   border-color: var(--warn-fg);
+}
+
+/* Identity: who left the comment. A name is not a state, so it drops the
+   outline rather than borrowing the state mark in another colour. */
+.badge.author {
+  border-color: transparent;
+  background: var(--accent-subtle);
+  color: var(--accent-fg);
+}
+
+/* Count: a number, not a word. Filled and unoutlined so it reads as a
+   quantity, and tabular so a column of them lines up and can be compared
+   without reading - the treatment .tab-count and .stat already use. Amber
+   because what is being counted is unresolved comments. */
+.badge.sm.warn {
+  border-color: transparent;
+  background: var(--warn-bg);
+  color: var(--warn-fg);
 }
 
 .empty {
@@ -1610,14 +1644,8 @@ a {
 
 /* A comment written from the command line says who left it. The badge and
    the rule down the side of the thread agree on one colour for that. */
-.badge.author {
-  color: var(--warn-fg);
-  background: var(--warn-bg);
-  border-color: var(--warn-fg);
-}
-
 .comment:has(.badge.author) {
-  border-left-color: var(--warn-fg);
+  border-left-color: var(--accent-fg);
 }
 
 /* ---------- submitting a review ---------- */
@@ -1690,13 +1718,6 @@ a {
 }
 .file-search .hint {
   white-space: nowrap;
-}
-
-/* A question is a different request from a change, so it does not look
-   like the resolved badge next to it. */
-.badge.question {
-  border-color: var(--accent-fg);
-  color: var(--accent-fg);
 }
 
 /* The key list, which is also where the keys are documented. */
