@@ -83,23 +83,46 @@ func (p *moProxy) rewrite(raw string) string {
 }
 
 // sameEndpoint reports whether two URLs point at the same host:port, treating
-// localhost and the loopback addresses as equal.
+// localhost and the loopback addresses as equal. A URL that spells out no port
+// is compared on its scheme's default port, so "http://localhost/x" and
+// "http://127.0.0.1:80/x" are the same endpoint.
 func sameEndpoint(a, b *url.URL) bool {
-	if a.Host == b.Host {
+	// Spelled exactly alike, including a scheme we may know no default port
+	// for. Anything else has to go through the port defaulting below, which
+	// is what tells http://example.com and https://example.com apart.
+	if a.Host == b.Host && strings.EqualFold(a.Scheme, b.Scheme) {
 		return true
 	}
-	ah, ap, err := net.SplitHostPort(a.Host)
-	if err != nil {
+	ah, ap := hostPort(a)
+	bh, bp := hostPort(b)
+	if ap == "" || bp == "" {
+		// A scheme with no known default port (or none at all) gives us
+		// nothing to compare, so do not claim the URL belongs to mo.
 		return false
 	}
-	bh, bp, err := net.SplitHostPort(b.Host)
-	if err != nil {
-		return false
+	return ap == bp && ah == bh
+}
+
+// hostPort splits a URL into its normalised host and its port, filling in the
+// scheme's default port when the URL does not carry one. The port is empty
+// when the scheme has no default, which callers must treat as unknown.
+func hostPort(u *url.URL) (host, port string) {
+	port = u.Port()
+	if port == "" {
+		port = defaultPort(u.Scheme)
 	}
-	if ap != bp {
-		return false
+	return normalizeHost(u.Hostname()), port
+}
+
+// defaultPort returns the port a scheme implies when a URL omits it.
+func defaultPort(scheme string) string {
+	switch strings.ToLower(scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
 	}
-	return normalizeHost(ah) == normalizeHost(bh)
+	return ""
 }
 
 func normalizeHost(h string) string {
@@ -122,12 +145,14 @@ func relaxFrameAncestors(h http.Header, origins ...string) {
 	if len(policies) == 0 {
 		return
 	}
-	allow := "frame-ancestors 'self'"
+	var allow strings.Builder
+	allow.WriteString("frame-ancestors 'self'")
 	for _, o := range origins {
 		if o != "" {
-			allow += " " + o
+			allow.WriteString(" " + o)
 		}
 	}
+	allowed := allow.String()
 	rewritten := make([]string, 0, len(policies))
 	for _, policy := range policies {
 		directives := strings.Split(policy, ";")
@@ -135,14 +160,14 @@ func relaxFrameAncestors(h http.Header, origins ...string) {
 		replaced := false
 		for _, d := range directives {
 			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(d)), "frame-ancestors") {
-				out = append(out, " "+allow)
+				out = append(out, " "+allowed)
 				replaced = true
 				continue
 			}
 			out = append(out, d)
 		}
 		if !replaced {
-			out = append(out, " "+allow)
+			out = append(out, " "+allowed)
 		}
 		rewritten = append(rewritten, strings.Join(out, ";"))
 	}

@@ -40,6 +40,7 @@ year of reviews can be read as one thing.
   $ sbnn reviews --since 7d          # this week
   $ sbnn reviews -t api --limit 5
   $ sbnn reviews --stats             # what they say together, and only then
+  $ sbnn reviews --stats --format json   # the same aggregate as one object
 
 --comments turns the stream around: one record per comment instead of one
 per review, which is the shape counting tools want. Parse the jsonl form -
@@ -74,7 +75,7 @@ func init() {
 	f.StringVarP(&target, "target", "t", "", "Only the reviews of this group")
 	f.IntVarP(&port, "port", "p", DefaultPort, "Server port (used when sbnn is running)")
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
-	f.StringVar(&historyPath, "history-file", "", `Where the log is kept (or $SBNN_HISTORY)`)
+	f.StringVar(&historyPath, "history-file", "", historyFileHelp("Where the log is kept"))
 	f.StringVar(&reviewsSince, "since", "", "Only reviews after this: 7d, 36h, 2026-01-31")
 	f.IntVar(&reviewsLimit, "limit", 0, "Keep only the newest n reviews")
 	f.StringVar(&reviewsFormat, "format", "text", "Output format: text, json or jsonl")
@@ -116,6 +117,12 @@ func runReviews(cmd *cobra.Command, _ []string) error {
 	if reviewsComments {
 		return printCommentStream(os.Stdout, history.Comments(records), format)
 	}
+	if reviewsStats {
+		// --stats asks for the aggregate instead of the list, in whatever
+		// format was asked for. Deciding this per format, inside the text
+		// branch, left the flag doing nothing for json and jsonl.
+		return printReviewStats(os.Stdout, records, format)
+	}
 	switch format {
 	case "json":
 		return jsonEncoder(os.Stdout).Encode(map[string]any{
@@ -131,7 +138,33 @@ func runReviews(cmd *cobra.Command, _ []string) error {
 		}
 		return nil
 	case "text":
-		return printReviews(records)
+		return printReviews(os.Stdout, records)
+	default:
+		return fmt.Errorf("unknown format %q: use text, json or jsonl", format)
+	}
+}
+
+// printReviewStats writes what the reviews say together: the aggregate and
+// only the aggregate, which is what --stats promises, in every format.
+//
+// jsonl gets the same object on one line rather than a line per tally: a
+// Stats is one thing said about one pile of reviews, and splitting it would
+// leave each line meaningless on its own, which is the opposite of what a
+// jsonl reader wants.
+func printReviewStats(w io.Writer, records []history.Record, format string) error {
+	stats := history.Summarize(records)
+	switch format {
+	case "json":
+		return jsonEncoder(w).Encode(stats)
+	case "jsonl":
+		return lineEncoder(w).Encode(stats)
+	case "text":
+		if len(records) == 0 {
+			fmt.Fprintln(w, "no review has been submitted yet")
+			return nil
+		}
+		printStats(w, stats)
+		return nil
 	default:
 		return fmt.Errorf("unknown format %q: use text, json or jsonl", format)
 	}
@@ -223,28 +256,25 @@ func firstLine(s string) string {
 	return strings.ReplaceAll(s, "\t", " ")
 }
 
-func printReviews(records []history.Record) error {
+func printReviews(w io.Writer, records []history.Record) error {
 	if len(records) == 0 {
-		fmt.Println("no review has been submitted yet")
-		return nil
-	}
-	if reviewsStats {
-		// The aggregate is printed when asked for and only then; the list
-		// is a list.
-		printStats(history.Summarize(records))
+		fmt.Fprintln(w, "no review has been submitted yet")
 		return nil
 	}
 	for _, rec := range records {
-		fmt.Printf("%s  %-14s %2d comment(s)%s  %d file(s), +%d -%d%s%s\n",
+		// The verdict gets a column of its own: what a review decided is
+		// the one thing counting its comments cannot tell you.
+		fmt.Fprintf(w, "%s  %-14s %-17s %2d comment(s)%s  %d file(s), +%d -%d%s%s\n",
 			rec.ReviewedAt.Local().Format("2006-01-02 15:04"),
 			rec.Group,
+			rec.Verdict.String(),
 			len(rec.Comments),
 			suggestionCount(rec),
 			rec.Files, rec.Additions, rec.Deletions,
 			waited(rec),
 			labelPairs(rec))
 		if note := strings.TrimSpace(rec.Note); note != "" {
-			fmt.Printf("%s\n", indent(note, "      "))
+			fmt.Fprintf(w, "%s\n", indent(note, "      "))
 		}
 	}
 	return nil
@@ -281,29 +311,31 @@ func waited(rec history.Record) string {
 	return ""
 }
 
-func printStats(s history.Stats) {
-	fmt.Printf("%d review(s), %d comment(s) (%.1f per review), %d suggestion(s)\n",
+func printStats(w io.Writer, s history.Stats) {
+	fmt.Fprintf(w, "%d review(s), %d comment(s) (%.1f per review), %d suggestion(s)\n",
 		s.Reviews, s.Comments, s.CommentsPerReview, s.Suggestions)
-	fmt.Printf("%d review(s) had nothing to say, %d comment(s) were resolved\n", s.Silent, s.Resolved)
-	fmt.Printf("%d file(s) reviewed, +%d -%d\n", s.Files, s.Additions, s.Deletions)
+	fmt.Fprintf(w, "%d approved, %d commented, %d changes requested\n",
+		s.Approved, s.Commented, s.ChangesRequested)
+	fmt.Fprintf(w, "%d review(s) had nothing to say, %d comment(s) were resolved\n", s.Silent, s.Resolved)
+	fmt.Fprintf(w, "%d file(s) reviewed, +%d -%d\n", s.Files, s.Additions, s.Deletions)
 	if s.MedianWait > 0 {
-		fmt.Printf("median wait from diff to review: %s\n", shortDuration(s.MedianWait))
+		fmt.Fprintf(w, "median wait from diff to review: %s\n", shortDuration(s.MedianWait))
 	}
-	printTally("most commented", s.Paths)
-	printTally("by kind of file", s.Extensions)
-	printTally("by author", s.Authors)
+	printTally(w, "most commented", s.Paths)
+	printTally(w, "by kind of file", s.Extensions)
+	printTally(w, "by author", s.Authors)
 }
 
-func printTally(title string, counts []history.Count) {
+func printTally(w io.Writer, title string, counts []history.Count) {
 	if len(counts) == 0 {
 		return
 	}
 	if reviewsTop > 0 && len(counts) > reviewsTop {
 		counts = counts[:reviewsTop]
 	}
-	fmt.Printf("%s:\n", title)
+	fmt.Fprintf(w, "%s:\n", title)
 	for _, c := range counts {
-		fmt.Printf("  %-40s %d\n", c.Key, c.Count)
+		fmt.Fprintf(w, "  %-40s %d\n", c.Key, c.Count)
 	}
 }
 

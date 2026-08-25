@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tenntenn/sbnn/internal/history"
+	"github.com/tenntenn/sbnn/internal/model"
 )
 
 // stream is two comments with everything the text columns draw from.
@@ -17,21 +18,17 @@ func stream() []history.CommentRecord {
 			Group:      "api",
 			ReviewedAt: time.Date(2026, 8, 15, 10, 0, 0, 0, time.Local),
 			Labels:     map[string]string{"branch": "main"},
-			Comment: history.Comment{
-				Path: "internal/server/server.go", Side: "new",
-				StartLine: 12, EndLine: 14,
-				Body: "rename this\nand a second line that must not leak",
-			},
+			Path:       "internal/server/server.go", Side: "new",
+			StartLine: 12, EndLine: 14,
+			Body: "rename this\nand a second line that must not leak",
 		},
 		{
 			Group:      "web",
 			ReviewedAt: time.Date(2026, 8, 16, 10, 0, 0, 0, time.Local),
-			Comment: history.Comment{
-				Path: "README.md", Author: "claude", Side: "new",
-				StartLine: 3, EndLine: 3,
-				Body:        "a\ttab becomes a space",
-				Suggestions: []string{"fixed"},
-			},
+			Path:       "README.md", Author: "claude", Side: "new",
+			StartLine: 3, EndLine: 3,
+			Body:        "a\ttab becomes a space",
+			Suggestions: []string{"fixed"},
 		},
 	}
 }
@@ -75,5 +72,181 @@ func TestCommentStreamJSONLIsOneObjectPerLine(t *testing.T) {
 				t.Errorf("line lacks %q: %s", key, line)
 			}
 		}
+	}
+}
+
+// reviewed is two reviews with enough on them for a summary to be about
+// something.
+func reviewed() []history.Record {
+	return []history.Record{
+		{
+			Group:      "api",
+			ReviewedAt: time.Date(2026, 8, 15, 10, 0, 0, 0, time.Local),
+			Files:      2, Additions: 10, Deletions: 1,
+			Comments: []history.Comment{{Path: "a.go", Side: "new", StartLine: 1, EndLine: 1, Body: "x"}},
+		},
+		{
+			Group:      "web",
+			ReviewedAt: time.Date(2026, 8, 16, 10, 0, 0, 0, time.Local),
+			Files:      1, Additions: 3, Deletions: 3,
+		},
+	}
+}
+
+// --stats says "print what the reviews say together", which is a promise
+// about what is printed, not about the format it is printed in. It used to
+// be read only inside the text branch, so json and jsonl silently printed
+// the per-review stream instead and nothing said the flag had been ignored.
+func TestStatsIsHonouredInEveryFormat(t *testing.T) {
+	t.Run("json", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := printReviewStats(&buf, reviewed(), "json"); err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+			t.Fatalf("not a JSON object: %v\n%s", err, buf.String())
+		}
+		// The aggregate and only the aggregate: no per-review list, and
+		// no "stats" wrapper to reach through.
+		if _, ok := got["stats"]; ok {
+			t.Errorf("--stats still wraps the aggregate: %s", buf.String())
+		}
+		if n, ok := got["reviews"].(float64); !ok || n != 2 {
+			t.Errorf(`"reviews" is not the review count: %v`, got["reviews"])
+		}
+		if n, ok := got["comments"].(float64); !ok || n != 1 {
+			t.Errorf(`"comments" is not the comment count: %v`, got["comments"])
+		}
+	})
+
+	t.Run("jsonl", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := printReviewStats(&buf, reviewed(), "jsonl"); err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+		if len(lines) != 1 {
+			t.Fatalf("the aggregate is one thing, got %d line(s):\n%s", len(lines), buf.String())
+		}
+		var got map[string]any
+		if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
+			t.Fatalf("line is not a JSON object: %q: %v", lines[0], err)
+		}
+		if n, ok := got["reviews"].(float64); !ok || n != 2 {
+			t.Errorf(`"reviews" is not the review count: %v`, got["reviews"])
+		}
+	})
+
+	t.Run("text", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := printReviewStats(&buf, reviewed(), "text"); err != nil {
+			t.Fatal(err)
+		}
+		if want := "2 review(s), 1 comment(s)"; !strings.Contains(buf.String(), want) {
+			t.Errorf("the text aggregate lost its first line:\nwant %q in\n%s", want, buf.String())
+		}
+	})
+
+	t.Run("unknown", func(t *testing.T) {
+		if err := printReviewStats(&bytes.Buffer{}, reviewed(), "yaml"); err == nil {
+			t.Error("an unknown format is an error, not silence")
+		}
+	})
+}
+
+// An empty log says so rather than printing a summary of nothing.
+func TestStatsOnAnEmptyLogSaysSo(t *testing.T) {
+	var buf bytes.Buffer
+	if err := printReviewStats(&buf, nil, "text"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "no review has been submitted yet\n"; buf.String() != want {
+		t.Errorf("got %q, want %q", buf.String(), want)
+	}
+}
+
+// reviewedEachWay is one review of every verdict, plus one written before
+// the verdict was recorded at all. It is separate from reviewed() because
+// the tests above are about how much a summary counts, and these are about
+// what it says the reviews decided.
+func reviewedEachWay() []history.Record {
+	at := func(day int) time.Time {
+		return time.Date(2026, 8, day, 10, 0, 0, 0, time.Local)
+	}
+	return []history.Record{
+		{Group: "api", ReviewedAt: at(15), Verdict: model.VerdictApproved, Files: 2, Additions: 10, Deletions: 1},
+		{Group: "web", ReviewedAt: at(16), Verdict: model.VerdictChangesRequested, Files: 1, Additions: 3, Deletions: 3},
+		{Group: "cli", ReviewedAt: at(17), Verdict: model.VerdictCommented, Files: 1, Additions: 1, Deletions: 0},
+		{Group: "old", ReviewedAt: at(18), Files: 1, Additions: 1, Deletions: 0},
+	}
+}
+
+// The verdict is the one thing a listing is read for: whether the change
+// was approved, remarked on or stopped. Counting comments does not answer
+// it - an approval can carry three and a request for changes none - so
+// every line has to carry it.
+func TestReviewLinesShowTheVerdict(t *testing.T) {
+	var buf bytes.Buffer
+	if err := printReviews(&buf, reviewedEachWay()); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("got %d line(s) for 4 reviews:\n%s", len(lines), buf.String())
+	}
+	// An unset verdict reads as "commented", the default the model and the
+	// API already apply, so an older log still says something.
+	want := []string{"approved", "changes requested", "commented", "commented"}
+	for i, line := range lines {
+		if !strings.Contains(line, want[i]) {
+			t.Errorf("line %d does not say %q: %q", i+1, want[i], line)
+		}
+	}
+}
+
+// --stats has to answer the same question for the pile: how many went
+// through, how many were only remarked on, how many were stopped.
+func TestStatsCountTheVerdicts(t *testing.T) {
+	stats := history.Summarize(reviewedEachWay())
+	if stats.Approved != 1 || stats.Commented != 2 || stats.ChangesRequested != 1 {
+		t.Errorf("Summarize counted %d approved, %d commented, %d changes requested; want 1, 2, 1",
+			stats.Approved, stats.Commented, stats.ChangesRequested)
+	}
+	var buf bytes.Buffer
+	printStats(&buf, stats)
+	if want := "1 approved, 2 commented, 1 changes requested\n"; !strings.Contains(buf.String(), want) {
+		t.Errorf("--stats does not tally the verdicts:\nwant a line %q\ngot\n%s", want, buf.String())
+	}
+}
+
+// The tally lives in history.Stats rather than in this package, so that
+// --stats says the same thing in every format. Counting the verdicts only
+// on the way to the text output would have left json and jsonl - the
+// formats --stats was taught to honour at all in #50 - unable to answer the
+// question the listing is read for.
+func TestStatsCountTheVerdictsInEveryFormat(t *testing.T) {
+	for _, format := range []string{"json", "jsonl"} {
+		t.Run(format, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := printReviewStats(&buf, reviewedEachWay(), format); err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			line := strings.TrimRight(buf.String(), "\n")
+			if err := json.Unmarshal([]byte(line), &got); err != nil {
+				t.Fatalf("not a JSON object: %v\n%s", err, buf.String())
+			}
+			for key, want := range map[string]float64{"approved": 1, "commented": 2, "changesRequested": 1} {
+				n, ok := got[key].(float64)
+				if !ok {
+					t.Errorf("the aggregate has no %q: %s", key, line)
+					continue
+				}
+				if n != want {
+					t.Errorf("%q = %v, want %v", key, n, want)
+				}
+			}
+		})
 	}
 }
