@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -355,6 +356,15 @@ type Stats struct {
 	Deletions   int `json:"deletions"`
 	// Silent is how many reviews were submitted with nothing to say.
 	Silent int `json:"silent"`
+	// Approved, Commented and ChangesRequested are how many reviews
+	// decided each way. Counting comments does not answer what a review
+	// decided - an approval can carry three comments and a request for
+	// changes can carry none - which is the whole reason a verdict is
+	// written down, so a summary that leaves it out cannot be read for the
+	// one thing each review was for.
+	Approved         int `json:"approved"`
+	Commented        int `json:"commented"`
+	ChangesRequested int `json:"changesRequested"`
 	// CommentsPerReview is the mean, kept as a float on purpose: 2.8 says
 	// more than 3.
 	CommentsPerReview float64 `json:"commentsPerReview"`
@@ -382,6 +392,17 @@ func Summarize(records []Record) Stats {
 		s.Deletions += rec.Deletions
 		if len(rec.Comments) == 0 {
 			s.Silent++
+		}
+		// A record written before the verdict was recorded has an empty
+		// one, which reads as "commented" - the default ParseVerdict and
+		// the API already apply - so an old log is counted, not dropped.
+		switch rec.Verdict {
+		case model.VerdictApproved:
+			s.Approved++
+		case model.VerdictChangesRequested:
+			s.ChangesRequested++
+		default:
+			s.Commented++
 		}
 		if s.First.IsZero() || rec.ReviewedAt.Before(s.First) {
 			s.First = rec.ReviewedAt
@@ -433,7 +454,7 @@ func median(values []time.Duration) time.Duration {
 	if len(values) == 0 {
 		return 0
 	}
-	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	slices.Sort(values)
 	mid := len(values) / 2
 	if len(values)%2 == 1 {
 		return values[mid]

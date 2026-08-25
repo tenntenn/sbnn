@@ -239,7 +239,7 @@ func serverLogError(path string, offset int64) string {
 // the one Execute prints on its way out. Everything else in the log is
 // slog's, and slog is used for what does not stop the server.
 func logError(out string) string {
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "sbnn: ")
 		if !ok || rest == "" || strings.HasPrefix(rest, "serving at ") {
 			continue
