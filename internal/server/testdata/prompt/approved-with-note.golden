@@ -1,0 +1,23 @@
+# Review comments (sbnn group "api")
+
+The reviewer approved the change; anything below is worth reading but does not block it.
+
+The reviewer wrote:
+
+Ship it. The naming nits below are optional.
+
+1 comment(s) came with the approval.
+
+## 1. handler.go:12
+
+Diff: handler: return 404 for unknown ids
+
+```
+for _, xs := range ids {
+```
+
+`ids` reads better than `xs` here.
+
+---
+
+The change is approved, so none of this blocks it. Act on what is worth acting on, say what you are leaving and why, and carry on.

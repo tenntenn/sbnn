@@ -1,0 +1,35 @@
+# Review comments (sbnn group "api")
+
+The reviewer approved the change; anything below is worth reading but does not block it.
+
+2 comment(s) came with the approval, 1 of them a question.
+
+## 1. handler.go:12-14
+
+Diff: handler: return 404 for unknown ids
+
+This one is a question: answer it.
+
+```
+for i := 0; i < 3; i++ {
+```
+
+Was the retry loop deliberate?
+
+## 2. handler.go:40 (old)
+
+Diff: handler: return 404 for unknown ids
+
+From: claude
+
+```
+return errNotFound
+```
+
+This branch is now unreachable.
+
+---
+
+The change is approved, so none of this blocks it. Act on what is worth acting on, say what you are leaving and why, and carry on.
+
+A comment marked as a question is asking for an answer, not for a change. Answer it in your reply, in words, and change the code only if your own answer says it should change. Leaving a question unanswered is the one thing that makes the reviewer ask it again.
