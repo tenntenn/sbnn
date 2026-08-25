@@ -281,10 +281,17 @@ func TestParseLineSpec(t *testing.T) {
 		"range":         {spec: "README.md:12-18", wantPath: "README.md", wantStart: 12, wantEnd: 18},
 		"path in dirs":  {spec: "internal/server/server.go:120", wantPath: "internal/server/server.go", wantStart: 120, wantEnd: 120},
 		"colon in path": {spec: "C:/tmp/x.go:7", wantPath: "C:/tmp/x.go", wantStart: 7, wantEnd: 7},
-		"no line":       {spec: "main.go", wantErr: "say path:line"},
 		"zero":          {spec: "main.go:0", wantErr: "not a line range"},
 		"backwards":     {spec: "main.go:18-12", wantErr: "not a line range"},
-		"not digits":    {spec: "main.go:forty", wantErr: "not a line or a line range"},
+
+		// No line spec at the end means the comment is about the file
+		// itself. What settles it is whether the text after the last colon
+		// begins with a digit, so a path that ends in something else keeps
+		// its colon rather than losing the tail to a failed parse.
+		"no line":            {spec: "main.go", wantPath: "main.go"},
+		"not digits":         {spec: "main.go:forty", wantPath: "main.go:forty"},
+		"colon ends path":    {spec: "odd:name.txt", wantPath: "odd:name.txt"},
+		"path in dirs, bare": {spec: "internal/server/server.go", wantPath: "internal/server/server.go"},
 
 		// An overflowing number used to survive as MaxInt64 and be sent to the
 		// server, which anchors the comment to a line no file will ever have.
@@ -456,6 +463,128 @@ func TestBulkCommentQuestionDefault(t *testing.T) {
 			if requests[0].Question != test.want {
 				t.Errorf("%s with --question=%t stored question=%t, want %t",
 					test.entry, test.flag, requests[0].Question, test.want)
+			}
+		})
+	}
+}
+
+// A file the diff carries without any lines - a rename, a mode change, a
+// binary file - can only be spoken about as a whole, and a bare path is how
+// that is said. The request carries no line, which is what the server reads
+// as "the whole file".
+func TestSingleCommentOnAWholeFile(t *testing.T) {
+	resetCommentFlags(t)
+	t.Cleanup(func() { resetCommentFlags(t) })
+	commentBody = "this rename looks wrong"
+	t.Cleanup(func() { commentBody = "" })
+
+	requests, err := singleComment("new.txt")
+	if err != nil {
+		t.Fatalf("singleComment(\"new.txt\") failed: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("singleComment returned %d requests, want 1", len(requests))
+	}
+	req := requests[0]
+	if req.Path != "new.txt" {
+		t.Errorf("path = %q, want %q", req.Path, "new.txt")
+	}
+	if req.StartLine != 0 || req.EndLine != 0 {
+		t.Errorf("lines = %d-%d, want 0-0: a comment on the file names none", req.StartLine, req.EndLine)
+	}
+	// What is echoed back has to name the file and not a line that is not
+	// there; "new.txt:0" would be a place no diff has.
+	if got := requestLines(req); got != "" {
+		t.Errorf("requestLines = %q, want it empty", got)
+	}
+	if got := lineRangeOf(&model.Comment{Path: "new.txt"}); got != "" {
+		t.Errorf("lineRangeOf = %q, want it empty", got)
+	}
+}
+
+// A suggestion is a replacement for the lines a comment names, so it cannot
+// ride along on a comment that names none. The command line refuses it
+// before anything is sent, which matters most for --json: a run that failed
+// at the server would leave the entries ahead of this one stored.
+func TestCommentRefusesASuggestionWithNoLines(t *testing.T) {
+	t.Run("single", func(t *testing.T) {
+		resetCommentFlags(t)
+		t.Cleanup(func() { resetCommentFlags(t) })
+		commentBody, commentSuggest = "reword", "# sbnn"
+		t.Cleanup(func() { commentBody, commentSuggest = "", "" })
+
+		_, err := singleComment("README.md")
+		if err == nil {
+			t.Fatal("singleComment accepted a suggestion with no lines, want an error")
+		}
+		if !strings.Contains(err.Error(), "line") {
+			t.Errorf("singleComment failed with %q, want it to ask for a line", err)
+		}
+	})
+
+	t.Run("bulk", func(t *testing.T) {
+		resetCommentFlags(t)
+		t.Cleanup(func() { resetCommentFlags(t) })
+		_, err := readBulkComments(strings.NewReader(
+			`[{"path":"README.md","body":"reword","suggestion":"# sbnn"}]`))
+		if err == nil {
+			t.Fatal("readBulkComments accepted a suggestion with no lines, want an error")
+		}
+	})
+
+	t.Run("bulk, block in the body", func(t *testing.T) {
+		resetCommentFlags(t)
+		t.Cleanup(func() { resetCommentFlags(t) })
+		_, err := readBulkComments(strings.NewReader(
+			"[{\"path\":\"README.md\",\"body\":\"reword\\n\\n```suggestion\\n# sbnn\\n```\\n\"}]"))
+		if err == nil {
+			t.Fatal("readBulkComments accepted a suggestion block with no lines, want an error")
+		}
+	})
+}
+
+// An entry that leaves the line out is the whole file, the same as a bare
+// path is. A line number that is there still has to be one: below 1 names
+// nothing, and an end without a start is not a range.
+func TestReadBulkCommentsWithoutALine(t *testing.T) {
+	tests := map[string]struct {
+		entry     string
+		wantStart int
+		wantEnd   int
+		wantErr   string
+	}{
+		"no line at all":     {entry: `{"path":"new.txt","body":"x"}`},
+		"null line":          {entry: `{"path":"new.txt","line":null,"body":"x"}`},
+		"empty line string":  {entry: `{"path":"new.txt","line":"","body":"x"}`},
+		"a line is kept":     {entry: `{"path":"main.go","line":4,"body":"x"}`, wantStart: 4, wantEnd: 4},
+		"zero is refused":    {entry: `{"path":"main.go","line":"0","body":"x"}`, wantErr: "not a line range"},
+		"negative startLine": {entry: `{"path":"main.go","startLine":-2,"body":"x"}`, wantErr: "below 1"},
+		"end with no start":  {entry: `{"path":"main.go","endLine":4,"body":"x"}`, wantErr: "endLine but no line"},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			resetCommentFlags(t)
+			t.Cleanup(func() { resetCommentFlags(t) })
+			got, err := readBulkComments(strings.NewReader("[" + test.entry + "]"))
+			if test.wantErr != "" {
+				if err == nil {
+					t.Fatalf("readBulkComments(%s) succeeded, want an error mentioning %q", test.entry, test.wantErr)
+				}
+				if !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("readBulkComments(%s) failed with %q, want it to mention %q", test.entry, err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("readBulkComments(%s) failed: %v", test.entry, err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("readBulkComments(%s) returned %d comments, want 1", test.entry, len(got))
+			}
+			if got[0].StartLine != test.wantStart || got[0].EndLine != test.wantEnd {
+				t.Errorf("readBulkComments(%s) gave lines %d-%d, want %d-%d",
+					test.entry, got[0].StartLine, got[0].EndLine, test.wantStart, test.wantEnd)
 			}
 		})
 	}

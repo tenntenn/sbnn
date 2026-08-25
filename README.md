@@ -332,16 +332,36 @@ writes the comment says which it is, and `sbnn comments` tells the reader:
 
 The lines are the ones the diff shows (`--side old` for a removed line), the
 file is looked up in the newest diff carrying that path, and sbnn fills in the
-reviewed code itself. A whole self review can be posted at once:
+reviewed code itself.
+
+A path on its own, with no line, comments on the file as a whole:
+
+```console
+$ sbnn comment new.txt -m "this rename looks wrong"
+$ sbnn comment exec.sh -m "why is this now executable?"
+```
+
+That is the only thing there is to say about a file the diff carries without
+any lines — a pure rename, a mode change, a binary file — and it reads as a
+comment on the file for every other one too. It shows under the file header
+rather than under a row, and **comment on file** in the file's header does the
+same in the browser. A suggestion replaces the lines a comment names, so it
+needs a line range and cannot go on one of these.
+
+A whole self review can be posted at once:
 
 ```console
 $ sbnn comment --json --author claude <<'EOF'
 [
   {"path": "cmd/root.go", "line": "88", "body": "left over from the old flag"},
-  {"path": "README.md", "line": "12-18", "body": "reworded", "suggestion": "..."}
+  {"path": "README.md", "line": "12-18", "body": "reworded", "suggestion": "..."},
+  {"path": "new.txt", "body": "this rename looks wrong"}
 ]
 EOF
 ```
+
+An entry that leaves `"line"` out is the same whole-file comment a bare path
+makes.
 
 ### Finishing a review
 
@@ -625,7 +645,7 @@ to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
 | `sbnn` | Read a diff on stdin and serve it | `--title`, `--label key=value`, `--open` / `--no-open`, `--foreground`, `--on-review`, `--on-review-url`, `--history-file`, `--json` |
 | `sbnn` on the running server | Act on the server instead of adding a diff | `--status`, `--restart`, `--shutdown`, `--clear`, `--clear --all` |
 | `sbnn comments` | Print the comments left in the browser | `--format` (`prompt`, `markdown`, `json`), `--json`, `--clear`, `--include-resolved`, `--exit-code`, `--quiet` (`-q`) |
-| `sbnn comment path:line[-line]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--json` |
+| `sbnn comment path[:line[-line]]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--json` |
 | `sbnn submit` | End the round, as the Submit button does | `--note` (`-m`), `--verdict` (`approved`, `commented`, `changes-requested`), `--approve`, `--request-changes`, `--exit-code`, `--quiet` |
 | `sbnn wait` | Block until the review is submitted, then print it | `--timeout`, `--format`, `--json`, `--exit-code`, `--quiet` |
 | `sbnn hook` | Run something when a review is submitted | `--on-review`, `--on-review-url`, `--clear`, `--json` |
