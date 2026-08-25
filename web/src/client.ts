@@ -43,6 +43,8 @@ export interface SbnnClient {
   readonly isStatic: boolean
   /** exportedAt is set on static pages and tells when the diff was frozen. */
   readonly exportedAt?: string
+  /** sbnnVersion is the sbnn that wrote a static page, where the page says. */
+  readonly sbnnVersion?: string
   load(group: string): Promise<GroupData>
   addComment(group: string, comment: api.NewComment): Promise<void>
   updateComment(group: string, id: string, patch: api.CommentPatch): Promise<void>
@@ -73,6 +75,15 @@ export interface SbnnClient {
 /** StaticPayload is the data `sbnn export` embeds into the page. */
 export interface StaticPayload {
   version: number
+  /** sbnnVersion is the version of sbnn that wrote the page. */
+  sbnnVersion?: string
+  /**
+   * saVersion is what sbnnVersion was called before the tool was renamed from
+   * sa to sbnn. Pages already written carry it and are still read, so it stays
+   * here; new pages are not expected to use it.
+   *
+   * @deprecated Read through payloadSbnnVersion; prefer sbnnVersion.
+   */
   saVersion?: string
   generatedAt: string
   group: string
@@ -80,6 +91,20 @@ export interface StaticPayload {
   comments: Comment[]
   previews: Record<string, { content: string; source: string; complete: boolean; path?: string }>
   images: Record<string, { dataUrl: string; path?: string }>
+}
+
+/**
+ * payloadSbnnVersion reports which sbnn wrote the page. The field was called
+ * saVersion before the tool was renamed, and a page carries whichever name the
+ * sbnn that exported it wrote, so both are accepted with the current one
+ * winning. An empty string is treated as absent: the writer omits the field
+ * rather than emitting one, so an empty value only turns up in a page that was
+ * edited by hand, and falling through is friendlier than returning "".
+ */
+export function payloadSbnnVersion(
+  payload: Pick<StaticPayload, 'sbnnVersion' | 'saVersion'>,
+): string | undefined {
+  return payload.sbnnVersion || payload.saVersion || undefined
 }
 
 declare global {
@@ -190,6 +215,7 @@ function createStaticClient(data: StaticPayload): SbnnClient {
   return {
     isStatic: true,
     exportedAt: data.generatedAt,
+    sbnnVersion: payloadSbnnVersion(data),
     async load() {
       return { diffs: data.diffs ?? [], comments: read(), status: null }
     },
