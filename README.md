@@ -7,6 +7,32 @@ diff viewer and reviewer. The name reads "sabun" — 差分, Japanese for "diff"
 on the left, a Markdown preview on the right, and review comments you can read
 back from the command line.
 
+## Contents
+
+- [Install](#install)
+- [Usage](#usage)
+  - [Groups](#groups)
+  - [Stacked pull requests](#stacked-pull-requests)
+  - [Reviewing](#reviewing)
+  - [Folding away what nobody reads](#folding-away-what-nobody-reads)
+  - [Comments from an agent](#comments-from-an-agent)
+  - [Finishing a review](#finishing-a-review)
+  - [Waiting, and being woken up](#waiting-and-being-woken-up)
+  - [Reading the comments back](#reading-the-comments-back)
+  - [Approve, comment, or request changes](#approve-comment-or-request-changes)
+  - [Reviewing without a browser](#reviewing-without-a-browser)
+  - [Putting it in a pipeline](#putting-it-in-a-pipeline)
+- [Looking back at reviews](#looking-back-at-reviews)
+- [Exporting a review](#exporting-a-review)
+- [Agent skill](#agent-skill)
+  - [Installing the skill](#installing-the-skill)
+  - [Checking that it took](#checking-that-it-took)
+- [Command and flag reference](#command-and-flag-reference)
+- [How the Markdown preview works](#how-the-markdown-preview-works)
+- [Files and ports](#files-and-ports)
+- [Development](#development)
+- [License](#license)
+
 ![sbnn showing a diff on the left and its Markdown preview on the right](docs/screenshot.png)
 
 It is inspired by [difit](https://github.com/yoshiko-pg/difit), with a few
@@ -474,7 +500,7 @@ agent that can read an instruction file can use it.
 The source is [`skills/sbnn/SKILL.md`](skills/sbnn/SKILL.md) and it is embedded in
 the binary, so the copy you install always matches the sbnn you are running.
 
-### Installing it
+### Installing the skill
 
 ```console
 $ sbnn skill                          # print SKILL.md to stdout
@@ -519,6 +545,30 @@ diff into `sbnn --target <topic>`, give you the URL, wait, and then read your
 comments with `sbnn comments`. If it does not, most agents need the skill
 directory to be picked up at session start, so start a new session after
 installing.
+
+## Command and flag reference
+
+The rest of this README introduces flags where they earn their place in a
+story. This table is the other way round, for when you know what you want and
+only need the name. It is not the full list: that is in `sbnn --help` and in
+`sbnn <command> --help` for each command below.
+
+Every command that talks to the server also takes `--port` (`-p`), `--bind`
+(`-b`) and `--target` (`-t`). `--target` falls back to `$SBNN_TARGET` and then
+to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
+
+| Command | What it does | Flags worth knowing |
+| --- | --- | --- |
+| `sbnn` | Read a diff on stdin and serve it | `--title`, `--label key=value`, `--open` / `--no-open`, `--foreground`, `--on-review`, `--on-review-url`, `--history-file`, `--json` |
+| `sbnn` on the running server | Act on the server instead of adding a diff | `--status`, `--restart`, `--shutdown`, `--clear`, `--clear --all` |
+| `sbnn comments` | Print the comments left in the browser | `--format` (`prompt`, `markdown`, `json`), `--json`, `--clear`, `--include-resolved`, `--exit-code`, `--quiet` (`-q`) |
+| `sbnn comment path:line[-line]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--json` |
+| `sbnn submit` | End the round, as the Submit button does | `--note` (`-m`), `--verdict` (`approved`, `commented`, `changes-requested`), `--approve`, `--request-changes`, `--exit-code`, `--quiet` |
+| `sbnn wait` | Block until the review is submitted, then print it | `--timeout`, `--format`, `--json`, `--exit-code`, `--quiet` |
+| `sbnn hook` | Run something when a review is submitted | `--on-review`, `--on-review-url`, `--clear`, `--json` |
+| `sbnn reviews` | Read the log of submitted reviews | `--since`, `--stats`, `--top`, `--limit`, `--comments`, `--all`, `--file`, `--history-file`, `--format` (`text`, `json`, `jsonl`) |
+| `sbnn export [file]` | Write the review as one self-contained HTML page | `--fragment`, `--page-title`, `--title` |
+| `sbnn skill` | Print or install the agent skill | `--list`, `--install`, `--force` |
 
 ## How the Markdown preview works
 
