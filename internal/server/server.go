@@ -3,6 +3,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -437,6 +439,9 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such group", http.StatusNotFound)
 		return
 	}
+	// The stored review notice outlives the group otherwise, and would be
+	// replayed to a reconnecting browser for a group that no longer exists.
+	s.broker.forgetReviews(name)
 	s.notify(name)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -903,14 +908,45 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+	// Take the slot before promising a stream, so a refusal is a plain 503
+	// and not a 200 that ends immediately.
+	ch, ok := s.broker.subscribe()
+	if !ok {
+		slog.Warn("refused an event subscriber: too many are already connected",
+			"max", maxSubscribers)
+		http.Error(w, "too many event subscribers", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.broker.unsubscribe(ch)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
+	// Set the reconnect delay rather than leaving it to the browser default.
+	io.WriteString(w, "retry: 2000\n\n")
 	flusher.Flush()
 
-	ch := s.broker.subscribe()
-	defer s.broker.unsubscribe(ch)
+	// Replay the review notices this client has not seen - but only for a
+	// client that says where it left off. A browser resends the last id it
+	// got as Last-Event-ID when it reconnects, and that is the one case
+	// where a stored notice is news.
+	//
+	// A client opening the stream for the first time has missed nothing by
+	// definition, and replaying to it is actively wrong: `sbnn wait` opens a
+	// fresh stream with no Last-Event-ID, so handing it every group's last
+	// review made it return a review submitted before anyone asked it to
+	// wait. The diffs sent since then would have gone unreviewed with the
+	// caller told otherwise. runWait already answers "the review is already
+	// in" from the group's own state before it ever reaches the stream.
+	if v := r.Header.Get("Last-Event-ID"); v != "" {
+		if since, err := strconv.ParseUint(v, 10, 64); err == nil {
+			for _, ev := range s.broker.missedReviews(since) {
+				writeEvent(w, ev)
+			}
+			flusher.Flush()
+		}
+	}
 
 	ping := time.NewTicker(25 * time.Second)
 	defer ping.Stop()
@@ -920,14 +956,23 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-s.shutdown:
 			return
-		case msg := <-ch:
-			fmt.Fprintf(w, "data: %s\n\n", msg)
+		case ev := <-ch:
+			writeEvent(w, ev)
 			flusher.Flush()
 		case <-ping.C:
 			io.WriteString(w, ": ping\n\n")
 			flusher.Flush()
 		}
 	}
+}
+
+// writeEvent frames one SSE message. Only review notices carry an id, which is
+// what a reconnecting client echoes back in Last-Event-ID.
+func writeEvent(w io.Writer, ev event) {
+	if ev.id != 0 {
+		fmt.Fprintf(w, "id: %d\n", ev.id)
+	}
+	fmt.Fprintf(w, "data: %s\n\n", ev.data)
 }
 
 // notifyReview tells everyone listening that a review was submitted. An
@@ -943,7 +988,7 @@ func (s *Server) notifyReview(g *model.Group) {
 	if err != nil {
 		return
 	}
-	s.broker.publish(msg)
+	s.broker.publishReview(g.Name, msg)
 }
 
 // notify tells connected browsers that a group changed.
@@ -952,7 +997,7 @@ func (s *Server) notify(group string) {
 	if err != nil {
 		return
 	}
-	s.broker.publish(msg)
+	s.broker.publishChange(msg)
 }
 
 func (s *Server) groupParam(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -993,25 +1038,56 @@ func isLoopback(host string) bool {
 	return true
 }
 
+// maxSubscribers bounds how many event streams can be open at once.
+//
+// /_/events is a GET, so crossOrigin deliberately lets it through: CORS keeps
+// another site from *reading* the events. It does not keep that site from
+// *holding the connection open*, and sbnn has no authentication by design. Any
+// page the user visits can point unlimited EventSources at localhost:6280 and
+// keep them, and each one costs a goroutine, a channel and a 25-second ticker.
+// A cap turns that from unbounded growth into a refusal.
+const maxSubscribers = 64
+
+// event is one server-sent event. A non-zero id marks a review notice, which
+// is kept for replay and is not dropped when a subscriber falls behind; change
+// notices carry id 0.
+type event struct {
+	id   uint64
+	data []byte
+}
+
 // broker fans server side events out to every connected browser.
 type broker struct {
 	mu   sync.Mutex
-	subs map[chan []byte]struct{}
+	subs map[chan event]struct{}
+	// seq numbers review notices so a reconnecting client can say what it
+	// already has, via SSE's id:/Last-Event-ID.
+	seq uint64
+	// reviews holds the most recent review notice per group, so a client that
+	// missed one while catching up still gets it when it reconnects.
+	reviews map[string]event
 }
 
 func newBroker() *broker {
-	return &broker{subs: map[chan []byte]struct{}{}}
+	return &broker{
+		subs:    map[chan event]struct{}{},
+		reviews: map[string]event{},
+	}
 }
 
-func (b *broker) subscribe() chan []byte {
-	ch := make(chan []byte, 8)
+// subscribe registers a listener, reporting false when the cap is reached.
+func (b *broker) subscribe() (chan event, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if len(b.subs) >= maxSubscribers {
+		return nil, false
+	}
+	ch := make(chan event, 8)
 	b.subs[ch] = struct{}{}
-	return ch
+	return ch, true
 }
 
-func (b *broker) unsubscribe(ch chan []byte) {
+func (b *broker) unsubscribe(ch chan event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.subs, ch)
@@ -1025,13 +1101,94 @@ func (b *broker) count() int {
 	return len(b.subs)
 }
 
-func (b *broker) publish(msg []byte) {
+// missedReviews returns the stored review notices newer than since, oldest
+// first. since is what the client reported in Last-Event-ID; zero means it has
+// seen nothing and wants every group's latest.
+func (b *broker) missedReviews(since uint64) []event {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	var out []event
+	for _, ev := range b.reviews {
+		if ev.id > since {
+			out = append(out, ev)
+		}
+	}
+	slices.SortFunc(out, func(a, b event) int { return cmp.Compare(a.id, b.id) })
+	return out
+}
+
+// forgetReviews drops the stored review notice for a group, so that closing a
+// review does not leave a notice behind to be replayed for a group that is
+// gone. Without it b.reviews only ever grows.
+func (b *broker) forgetReviews(group string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.reviews, group)
+}
+
+// publishChange tells subscribers a group changed. Losing one of these costs
+// nothing: the next one supersedes it, and the browser refetches the group.
+func (b *broker) publishChange(msg []byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.fanout(event{data: msg})
+}
+
+// publishReview tells subscribers a review was submitted, and remembers it.
+// This is the notice that wakes `sbnn wait`, so it is numbered, stored for
+// replay, and not dropped in favour of change notices.
+func (b *broker) publishReview(group string, msg []byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.seq++
+	ev := event{id: b.seq, data: msg}
+	b.reviews[group] = ev
+	b.fanout(ev)
+}
+
+// fanout queues ev for every subscriber. b.mu must be held.
+func (b *broker) fanout(ev event) {
 	for ch := range b.subs {
+		deliver(ch, ev)
+	}
+}
+
+// deliver queues one event for one subscriber without blocking the publisher.
+//
+// A change notice is dropped if the queue is full, as it always was: a slow
+// browser refetches on the next event anyway. A review notice is not. Its
+// reasoning only held while more events were coming, and the review notice is
+// typically the *last* of a burst - a subscriber more than a queue behind when
+// a review lands never learned it happened, and `sbnn wait` then blocked
+// forever on a review that already finished. So make room for it by discarding
+// queued change notices, keeping any review notices in order.
+func deliver(ch chan event, ev event) {
+	select {
+	case ch <- ev:
+		return
+	default:
+	}
+	if ev.id == 0 {
+		return
+	}
+	keep := make([]event, 0, cap(ch)+1)
+drain:
+	for {
 		select {
-		case ch <- msg:
-		default: // a slow browser refetches on the next event anyway
+		case old := <-ch:
+			if old.id != 0 {
+				keep = append(keep, old)
+			}
+		default:
+			break drain
+		}
+	}
+	keep = append(keep, ev)
+	for _, q := range keep {
+		select {
+		case ch <- q:
+		default:
+			slog.Warn("dropped a review notice: the event queue is full", "id", q.id)
 		}
 	}
 }
