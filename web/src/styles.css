@@ -542,7 +542,7 @@ input[type='checkbox'] {
 .divider-handle:hover {
   color: var(--fg);
   background: var(--surface-hover);
-  border-color: var(--accent-border);
+  border-color: var(--accent-fg);
 }
 
 .divider-handle:focus-visible {
@@ -612,8 +612,11 @@ body.resizing iframe {
   background: var(--surface-hover);
 }
 
+/* Being the file on screen is said with a background, a weight and a marker
+   in a hue no file status uses - not with the colour links are drawn in. */
 .file-item.active {
   background: var(--surface-selected);
+  font-weight: 600;
   box-shadow: inset var(--border-width-marker) 0 0 var(--selected-marker);
 }
 
@@ -641,7 +644,7 @@ body.resizing iframe {
   background: var(--status-removed-fg);
 }
 .dot.status-modified {
-  background: var(--accent-fg);
+  background: var(--status-modified-fg);
 }
 .dot.status-renamed,
 .dot.status-copied {
@@ -1194,7 +1197,7 @@ a.ghost.button:hover {
 button.ghost.active {
   color: var(--accent-fg);
   background: var(--accent-subtle);
-  border-color: var(--accent-border);
+  border-color: var(--accent-fg);
 }
 
 button.danger {
@@ -1610,10 +1613,12 @@ a {
   touch-action: none;
 }
 
-/* A comment written from the command line says who left it. */
+/* A comment written from the command line says who left it. The badge and
+   the rule down the side of the thread agree on one colour for that. */
 .badge.author {
-  color: var(--accent-fg);
-  border-color: var(--accent-fg);
+  color: var(--warn-fg);
+  background: var(--warn-bg);
+  border-color: var(--warn-fg);
 }
 
 .comment:has(.badge.author) {
