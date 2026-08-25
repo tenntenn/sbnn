@@ -975,3 +975,79 @@ func TestSubmitReviewWithoutABrowser(t *testing.T) {
 		t.Errorf("flattened = %+v", got)
 	}
 }
+
+// A path-based comment was accepted as soon as its snippet was non-empty,
+// so a range starting inside a hunk and ending past it was stored with an
+// endLine the diff never showed. The page draws a comment on the row for
+// its endLine, so such a comment was drawn on no row and the reviewer
+// could not see it, while sbnn comments claimed a range like "2-900".
+func TestHandleAddCommentClampsEndLineToTheDiff(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+
+	// README.md covers new lines 1-3 and old lines 1-2; docs/new.md is a
+	// new file covering new lines 1-2.
+	cases := []struct {
+		name      string
+		path      string
+		side      string
+		startLine int
+		endLine   int
+		wantEnd   int
+	}{
+		{"past the end of the only hunk", "README.md", "new", 2, 900, 3},
+		{"one line past the end", "README.md", "new", 2, 4, 3},
+		{"exactly the last line stays", "README.md", "new", 2, 3, 3},
+		{"a range well inside stays", "README.md", "new", 1, 2, 2},
+		{"a single line stays", "README.md", "new", 3, 3, 3},
+		{"the old side clamps to the old numbering", "README.md", "old", 1, 50, 2},
+		{"a new file clamps too", "docs/new.md", "new", 1, 99, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var comment model.Comment
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+				Path: tc.path, Side: tc.side,
+				StartLine: tc.startLine, EndLine: tc.endLine, Body: "range",
+			}, &comment)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %s, want 200", resp.Status)
+			}
+			// The status was 200 before the fix too. What was wrong was
+			// the range that got stored.
+			if comment.StartLine != tc.startLine {
+				t.Errorf("stored startLine = %d, want %d", comment.StartLine, tc.startLine)
+			}
+			if comment.EndLine != tc.wantEnd {
+				t.Errorf("stored endLine = %d, want %d", comment.EndLine, tc.wantEnd)
+			}
+			if comment.Snippet == "" {
+				t.Error("stored an empty snippet")
+			}
+		})
+	}
+
+	// No stored comment may claim a line the page has no row for.
+	var comments []*model.Comment
+	getJSON(t, ts.URL+"/_/api/groups/default/comments", &comments)
+	for _, c := range comments {
+		f, ok := findFileForComment(added.Diff, c)
+		if !ok {
+			t.Fatalf("comment on no file of the diff: %+v", c)
+		}
+		if last := lastCoveredLine(f, c.Side, c.StartLine, c.EndLine); last != c.EndLine {
+			t.Errorf("comment %s ends at line %d, but the diff stops at %d", c.ID, c.EndLine, last)
+		}
+	}
+}
+
+// findFileForComment returns the file of the diff a comment points at.
+func findFileForComment(d *model.Diff, c *model.Comment) (*model.File, bool) {
+	for _, f := range d.Files {
+		if f.ID == c.FileID {
+			return f, true
+		}
+	}
+	return nil, false
+}
