@@ -4,7 +4,6 @@ import { renderMarkdown } from './markdown'
 import { renderNotebook } from './notebook'
 import { buildPrompt } from './prompt'
 import { suggestions } from './suggestion'
-import { readSetting, writeSetting } from './storage'
 
 /** PreviewResult is either an embedded mo page or Markdown rendered here. */
 export type PreviewResult =
@@ -160,23 +159,124 @@ function createLiveClient(): SbnnClient {
   }
 }
 
+/**
+ * A static page has nowhere but localStorage to keep the reviewer's comments,
+ * and unlike a pane width those comments are the work itself. storage.ts
+ * swallows every failure by design, which is right for a setting and wrong
+ * here: a full quota, a private window or blocked site data would let someone
+ * write a page of review and lose all of it without a word. The static client
+ * therefore reads and writes through the path below, which says so instead.
+ */
+let storageWarned = false
+
+/** warnStorage reports, once, that the page cannot keep the reviewer's work. */
+function warnStorage(detail: string, err: unknown): void {
+  if (storageWarned) return
+  storageWarned = true
+  console.error(`sbnn: ${detail}`, err)
+  showStorageBanner(detail)
+}
+
+/**
+ * showStorageBanner puts the warning on the page from outside React: the
+ * static client is constructed before anything mounts and does not own App.
+ * styles.css is not extended for it either, so the banner carries its own
+ * style and borrows the app's custom properties where they are defined.
+ */
+function showStorageBanner(detail: string): void {
+  if (typeof document === 'undefined' || !document.body) return
+
+  const bar = document.createElement('div')
+  bar.setAttribute('role', 'alert')
+  bar.style.cssText = [
+    'position: fixed',
+    // Anchored to the bottom: the advice is to press "Copy prompt", which sits
+    // in the header, so the warning must not be covering it.
+    'inset: auto 0 0 0',
+    'z-index: 2147483647',
+    'display: flex',
+    'gap: 0.75rem',
+    'align-items: flex-start',
+    'padding: 0.75rem 1rem',
+    'background: var(--bg, #fff)',
+    'color: var(--fg, #111)',
+    'border-top: 2px solid var(--danger, #b00020)',
+    'box-shadow: 0 -1px 4px rgb(0 0 0 / 0.25)',
+    'line-height: 1.4',
+  ].join(';')
+
+  const text = document.createElement('div')
+  text.style.cssText = 'flex: 1'
+  const lead = document.createElement('strong')
+  lead.style.cssText = 'color: var(--danger, #b00020)'
+  lead.textContent = detail
+  const advice = document.createElement('span')
+  advice.textContent =
+    ' Use "Copy prompt" now to keep a copy: nothing you write here will survive this tab.'
+  text.append(lead, advice)
+
+  const close = document.createElement('button')
+  close.type = 'button'
+  close.textContent = 'Dismiss'
+  close.style.cssText = [
+    'flex: none',
+    'padding: 0.125rem 0.5rem',
+    'background: var(--bg-soft, transparent)',
+    'color: var(--fg-muted, #555)',
+    'border: 1px solid var(--border, #ccc)',
+    'border-radius: 4px',
+    'cursor: pointer',
+    'font: inherit',
+  ].join(';')
+  close.addEventListener('click', () => bar.remove())
+
+  bar.append(text, close)
+  document.body.appendChild(bar)
+}
+
 function createStaticClient(data: StaticPayload): SbnnClient {
   const storageKey = `sbnn:comments:${data.group}:${data.generatedAt}`
   const listeners = new Set<() => void>()
 
+  // Once the browser has refused a write, the comments live here for the rest
+  // of the page view. They are not saved and the banner says so, but they stay
+  // on screen and "Copy prompt" still carries them, which is the whole point of
+  // telling the reviewer to run it.
+  let memory: Comment[] | null = null
+
   const read = (): Comment[] => {
-    const stored = readSetting(storageKey)
+    if (memory !== null) return memory
+    let stored: string | null = null
+    try {
+      stored = window.localStorage.getItem(storageKey)
+    } catch (err) {
+      warnStorage('This page cannot reach browser storage, so your comments are not being saved.', err)
+      return data.comments ?? []
+    }
     if (stored) {
       try {
         return JSON.parse(stored) as Comment[]
-      } catch {
-        // Something else wrote there, or the entry was truncated.
+      } catch (err) {
+        // Something else wrote there, or the entry was truncated. Falling back
+        // to the exported comments quietly would drop the reviewer's work out
+        // from under them, so it is reported like a failed write.
+        warnStorage(
+          'Comments saved on this page earlier could not be read back, so this is the review as it was exported.',
+          err,
+        )
       }
     }
     return data.comments ?? []
   }
+
   const write = (comments: Comment[]) => {
-    writeSetting(storageKey, JSON.stringify(comments))
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(comments))
+      memory = null
+    } catch (err) {
+      memory = comments
+      warnStorage('This browser refused to save your comments (private window, blocked site data, or a full quota).', err)
+    }
     listeners.forEach((fn) => fn())
   }
 
