@@ -471,3 +471,76 @@ func describe(files []*model.File) string {
 	}
 	return b.String()
 }
+
+// A diff that never names its file must not produce a file whose path is the
+// empty string: the reviewer would see a nameless row, and any lookup handed
+// an empty path would match it.
+func TestParseUnnamedFileGetsPlaceholderPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		src     string
+		status  model.FileStatus
+		oldPath string
+		newPath string
+	}{
+		{
+			name:    "bare hunk",
+			src:     "@@ -1,2 +1,2 @@\n-a\n+b\n c\n",
+			status:  model.StatusModified,
+			newPath: diff.UnnamedPath,
+		},
+		{
+			name:    "git header without paths",
+			src:     "diff --git\n@@ -1,1 +1,1 @@\n-a\n+b\n",
+			status:  model.StatusModified,
+			newPath: diff.UnnamedPath,
+		},
+		{
+			name:    "both sides are /dev/null",
+			src:     "--- /dev/null\n+++ /dev/null\n@@ -0,0 +1,1 @@\n+a\n",
+			status:  model.StatusAdded,
+			newPath: diff.UnnamedPath,
+		},
+		{
+			name:    "deletion without paths keeps the name on the old side",
+			src:     "diff --git \ndeleted file mode 100644\n@@ -1,1 +0,0 @@\n-a\n",
+			status:  model.StatusDeleted,
+			oldPath: diff.UnnamedPath,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files := diff.Parse(tt.src)
+			if len(files) != 1 {
+				t.Fatalf("got %d file(s), want 1:\n%s", len(files), describe(files))
+			}
+			f := files[0]
+			if f.Path() == "" {
+				t.Errorf("Path() is empty:\n%s", describe(files))
+			}
+			if f.Status != tt.status || f.OldPath != tt.oldPath || f.NewPath != tt.newPath {
+				t.Errorf("got %s %q -> %q, want %s %q -> %q",
+					f.Status, f.OldPath, f.NewPath, tt.status, tt.oldPath, tt.newPath)
+			}
+		})
+	}
+}
+
+// The placeholder is only for entries the diff never named; a real path is
+// never replaced, and a one-sided path stays one-sided.
+func TestParseNamedFilesKeepTheirPaths(t *testing.T) {
+	src := `diff --git a/gone.txt b/gone.txt
+deleted file mode 100644
+--- a/gone.txt
++++ /dev/null
+@@ -1,1 +0,0 @@
+-a
+`
+	files := diff.Parse(src)
+	if len(files) != 1 {
+		t.Fatalf("got %d file(s), want 1:\n%s", len(files), describe(files))
+	}
+	if f := files[0]; f.OldPath != "gone.txt" || f.NewPath != "" {
+		t.Errorf("got %q -> %q, want %q -> %q", f.OldPath, f.NewPath, "gone.txt", "")
+	}
+}

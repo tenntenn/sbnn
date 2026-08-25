@@ -416,6 +416,28 @@ func parseRange(s string, sign byte) (start, count int, ok bool) {
 	return n, count, true
 }
 
+// UnnamedPath is the path given to a file entry the diff never named: a bare
+// hunk with no "--- / +++" pair and no "diff --git" header, which is what a
+// truncated paste or a hand-assembled patch looks like. Without it such an
+// entry carries the empty string as its path, which renders as a nameless row
+// the reviewer cannot identify, hashes to the same file ID for every unnamed
+// file, and is matched by any path lookup that happens to be handed "".
+const UnnamedPath = "(unnamed)"
+
+// nameIfUnnamed gives f a visible placeholder path when the diff identified
+// neither side of it. It runs after the status has been decided, so that the
+// placeholder never turns an unnamed entry into an addition or a deletion.
+func nameIfUnnamed(f *model.File) {
+	if f.OldPath != "" || f.NewPath != "" {
+		return
+	}
+	if f.Status == model.StatusDeleted {
+		f.OldPath = UnnamedPath
+		return
+	}
+	f.NewPath = UnnamedPath
+}
+
 // finalize fills in the derived fields of a parsed file.
 func finalize(f *model.File, index int) {
 	for _, h := range f.Hunks {
@@ -440,6 +462,7 @@ func finalize(f *model.File, index int) {
 			f.Status = model.StatusModified
 		}
 	}
+	nameIfUnnamed(f)
 	// A new file has nothing to put on the left hand side, so it is always
 	// shown as unified. The same is true for deletions and binary blobs.
 	switch {
