@@ -102,6 +102,148 @@ func TestAppendAndLoad(t *testing.T) {
 	}
 }
 
+// TestReadSkipsWhatItCannotUse pins the promise the skip comment makes: a
+// line the reader cannot use costs that line and nothing else. An
+// over-long one used to take the rest of the log with it, because
+// bufio.Scanner stops the whole scan at the first line past its buffer.
+func TestReadSkipsWhatItCannotUse(t *testing.T) {
+	huge := `{"group":"generated","note":"` + strings.Repeat("x", history.MaxRecordBytes) + `"}`
+	first := `{"group":"api","reviewedAt":"2026-08-16T10:00:00Z"}`
+	last := `{"group":"web","reviewedAt":"2026-08-16T11:00:00Z"}`
+
+	for _, tt := range []struct {
+		name    string
+		log     string
+		want    []string
+		skipped history.Skipped
+	}{
+		{
+			name: "an over-long line in the middle",
+			log:  first + "\n" + huge + "\n" + last + "\n",
+			want: []string{"api", "web"},
+			// This is the case that used to return nothing at all.
+			skipped: history.Skipped{Long: 1},
+		},
+		{
+			name:    "an over-long line first",
+			log:     huge + "\n" + first + "\n",
+			want:    []string{"api"},
+			skipped: history.Skipped{Long: 1},
+		},
+		{
+			name:    "an over-long line last, with no newline after it",
+			log:     first + "\n" + huge,
+			want:    []string{"api"},
+			skipped: history.Skipped{Long: 1},
+		},
+		{
+			name:    "two over-long lines back to back",
+			log:     huge + "\n" + huge + "\n" + last + "\n",
+			want:    []string{"web"},
+			skipped: history.Skipped{Long: 2},
+		},
+		{
+			name:    "broken and over-long together",
+			log:     "{not json}\n" + first + "\n" + huge + "\n" + last + "\n",
+			want:    []string{"api", "web"},
+			skipped: history.Skipped{Broken: 1, Long: 1},
+		},
+		{
+			name: "blank lines are not a complaint",
+			log:  "\n" + first + "\n   \n" + last + "\n\n",
+			want: []string{"api", "web"},
+		},
+		{
+			name: "a record right at the limit is still a record",
+			log: `{"group":"big","note":"` +
+				strings.Repeat("x", history.MaxRecordBytes-len(`{"group":"big","note":""}`)) +
+				`"}` + "\n",
+			want: []string{"big"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			records, skipped, err := history.ReadSkipped(strings.NewReader(tt.log), history.Filter{})
+			if err != nil {
+				t.Fatalf("ReadSkipped = %v", err)
+			}
+			var got []string
+			for _, rec := range records {
+				got = append(got, rec.Group)
+			}
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("read %v, want %v", got, tt.want)
+			}
+			if skipped != tt.skipped {
+				t.Errorf("skipped %+v, want %+v", skipped, tt.skipped)
+			}
+			if skipped.Any() != (tt.skipped != history.Skipped{}) {
+				t.Errorf("Any() = %v for %+v", skipped.Any(), skipped)
+			}
+			// Read is the same read, without the count.
+			plain, err := history.Read(strings.NewReader(tt.log), history.Filter{})
+			if err != nil {
+				t.Fatalf("Read = %v", err)
+			}
+			if len(plain) != len(records) {
+				t.Errorf("Read got %d record(s), ReadSkipped %d", len(plain), len(records))
+			}
+		})
+	}
+}
+
+func TestSkippedString(t *testing.T) {
+	for _, tt := range []struct {
+		in   history.Skipped
+		want string
+	}{
+		{history.Skipped{}, ""},
+		{history.Skipped{Broken: 2}, "2 unreadable line(s)"},
+		{history.Skipped{Long: 1}, "1 line(s) over 8 MiB"},
+		{history.Skipped{Broken: 1, Long: 3}, "1 unreadable line(s), 3 line(s) over 8 MiB"},
+	} {
+		if got := tt.in.String(); got != tt.want {
+			t.Errorf("Skipped%+v.String() = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestLoadSkipsOverLongLine is the same promise through the file path, the
+// one "sbnn reviews" actually takes.
+func TestLoadSkipsOverLongLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reviews.jsonl")
+	if err := history.Append(path, history.Record{Group: "api", ReviewedAt: at(0)}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"group":"generated","note":"` +
+		strings.Repeat("x", history.MaxRecordBytes) + `"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := history.Append(path, history.Record{Group: "web", ReviewedAt: at(60)}); err != nil {
+		t.Fatal(err)
+	}
+
+	records, skipped, err := history.LoadSkipped(path, history.Filter{})
+	if err != nil {
+		t.Fatalf("LoadSkipped = %v", err)
+	}
+	if len(records) != 2 || records[0].Group != "api" || records[1].Group != "web" {
+		t.Errorf("LoadSkipped kept %+v, want the two readable records", records)
+	}
+	if want := (history.Skipped{Long: 1}); skipped != want {
+		t.Errorf("skipped %+v, want %+v", skipped, want)
+	}
+	if got := skipped.String(); got != "1 line(s) over 8 MiB" {
+		t.Errorf("skipped.String() = %q", got)
+	}
+}
+
 func TestCommentsFlattensReviews(t *testing.T) {
 	records := []history.Record{
 		history.FromGroup(group("api", "",
