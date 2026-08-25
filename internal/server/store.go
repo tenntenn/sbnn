@@ -3,11 +3,15 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/tenntenn/sbnn/internal/model"
 )
@@ -17,6 +21,13 @@ import (
 const DefaultGroup = "default"
 
 var groupNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// roundTitlePattern matches a default round title, so a session file written
+// before rounds were counted can say how far its groups had got.
+var roundTitlePattern = regexp.MustCompile(`^diff (\d+)$`)
+
+// maxTitleLen bounds a round title, in runes.
+const maxTitleLen = 120
 
 // ValidateGroupName checks a group name coming from the CLI or the URL.
 func ValidateGroupName(name string) (string, error) {
@@ -36,9 +47,15 @@ type Store struct {
 	path   string
 	groups []*model.Group
 	seq    int
+	// rounds counts the rounds a group has held, per group name. It only
+	// goes up, so two rounds of one review never share a default title.
+	rounds map[string]int
+	// persistErr is why the last write to path failed, if it did.
+	persistErr error
 	// sealed is set when Load refused the session file. The bytes on disk
 	// are the only copy of a session this build cannot read, so nothing may
-	// write over them.
+	// write over them - not even the write() that reports through
+	// persistErr, because a sealed store must not touch the file at all.
 	sealed bool
 }
 
@@ -52,6 +69,8 @@ type persisted struct {
 	Version int            `json:"version"`
 	Seq     int            `json:"seq"`
 	Groups  []*model.Group `json:"groups"`
+	// Rounds is how many rounds each group has held.
+	Rounds map[string]int `json:"rounds,omitempty"`
 }
 
 const persistVersion = 1
@@ -71,7 +90,16 @@ func (s *Store) Load() error {
 	}
 	var p persisted
 	if err := json.Unmarshal(b, &p); err != nil {
-		return fmt.Errorf("session file %s is broken: %w", s.path, err)
+		// Starting empty on top of the old file means the next diff,
+		// comment or hook renames a fresh session over it. A truncated
+		// write from a killed server is exactly the case where the old
+		// bytes are still worth having, so keep them.
+		kept, moveErr := s.setAside()
+		if moveErr != nil {
+			return fmt.Errorf("session file %s is broken and could not be moved aside (%v): %w", s.path, moveErr, err)
+		}
+		return fmt.Errorf("session file %s is broken, so sbnn started a new session; "+
+			"the old one was kept as %s: %w", s.path, kept, err)
 	}
 	// A file from a newer sbnn may hold fields this build knows nothing
 	// about. Loading it as far as the JSON tags happen to line up would turn
@@ -94,39 +122,147 @@ func (s *Store) Load() error {
 	defer s.mu.Unlock()
 	s.groups = p.Groups
 	s.seq = p.Seq
+	s.rounds = p.Rounds
+	if s.rounds == nil {
+		// A file written before the rounds were counted has to carry on
+		// from the highest number it already used, or the next round
+		// repeats a title.
+		s.rounds = make(map[string]int, len(p.Groups))
+		for _, g := range p.Groups {
+			s.rounds[g.Name] = roundsSoFar(g)
+		}
+	}
 	return nil
 }
 
+// setAside renames a session file sbnn refuses to load, so that the new
+// session does not overwrite it, and returns where it went.
+func (s *Store) setAside() (string, error) {
+	kept := s.path + ".broken"
+	if err := os.Rename(s.path, kept); err != nil {
+		return "", err
+	}
+	return kept, nil
+}
+
 // persist writes the session to disk. The caller must hold the lock.
+//
+// A failure is not fatal - the server keeps serving the session it holds in
+// memory - but it must not pass unnoticed either, because everything written
+// after it is lost on the next restart. So the reason is logged and kept for
+// PersistError, which the status API reports.
 func (s *Store) persist() {
 	if s.path == "" || s.sealed {
 		return
 	}
-	b, err := json.Marshal(persisted{Version: persistVersion, Seq: s.seq, Groups: s.groups})
+	err := s.write()
 	if err != nil {
+		// A full disk or a removed state directory keeps failing on every
+		// comment, so only the first failure of a streak is logged; the
+		// current reason is always available from PersistError.
+		if s.persistErr == nil {
+			slog.Warn("the session is not being saved", "file", s.path, "error", err)
+		}
+		s.persistErr = err
 		return
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".session-*")
+	if s.persistErr != nil {
+		slog.Info("the session is being saved again", "file", s.path)
+		s.persistErr = nil
+	}
+}
+
+// write replaces the session file with the current session. The caller must
+// hold the lock.
+func (s *Store) write() (err error) {
+	b, err := json.Marshal(persisted{Version: persistVersion, Seq: s.seq, Groups: s.groups, Rounds: s.rounds})
 	if err != nil {
-		return
+		return fmt.Errorf("encoding the session: %w", err)
+	}
+	dir := filepath.Dir(s.path)
+	tmp, err := os.CreateTemp(dir, ".session-*")
+	if err != nil {
+		return fmt.Errorf("creating a temporary file in %s: %w", dir, err)
 	}
 	name := tmp.Name()
+	defer func() {
+		if err != nil {
+			os.Remove(name)
+		}
+	}()
 	if _, err := tmp.Write(b); err != nil {
 		tmp.Close()
-		os.Remove(name)
-		return
+		return fmt.Errorf("writing %s: %w", name, err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("setting the mode of %s: %w", name, err)
+	}
+	// Flush before the rename: a crash right after an unsynced rename leaves
+	// the session file in place but empty, which is worse than the old one.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("flushing %s: %w", name, err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(name)
-		return
-	}
-	if err := os.Chmod(name, 0o600); err != nil {
-		os.Remove(name)
-		return
+		return fmt.Errorf("closing %s: %w", name, err)
 	}
 	if err := os.Rename(name, s.path); err != nil {
-		os.Remove(name)
+		return fmt.Errorf("renaming %s to %s: %w", name, s.path, err)
 	}
+	return nil
+}
+
+// PersistError reports why the session was last not written to disk, or nil
+// when the session file is up to date.
+func (s *Store) PersistError() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.persistErr
+}
+
+// roundsSoFar guesses how many rounds a group loaded from an older session
+// file has held: the diffs it holds, or the highest number a default title
+// carries when rounds have been deleted since.
+func roundsSoFar(g *model.Group) int {
+	n := len(g.Diffs)
+	for _, d := range g.Diffs {
+		m := roundTitlePattern.FindStringSubmatch(d.Title)
+		if m == nil {
+			continue
+		}
+		if v, err := strconv.Atoi(m[1]); err == nil && v > n {
+			n = v
+		}
+	}
+	return n
+}
+
+// nextRound counts one more round of a group. The caller must hold the lock.
+func (s *Store) nextRound(group string) int {
+	if s.rounds == nil {
+		s.rounds = make(map[string]int)
+	}
+	s.rounds[group]++
+	return s.rounds[group]
+}
+
+// cleanTitle makes a title given from outside fit to show: no surrounding
+// space, no line breaks or other control characters, and no longer than
+// maxTitleLen runes. Titles land in the sidebar, in the tab strip and under
+// every comment in the prompt an agent reads.
+func cleanTitle(title string) string {
+	title = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, title)
+	title = strings.Join(strings.Fields(title), " ")
+	if r := []rune(title); len(r) > maxTitleLen {
+		title = strings.TrimRight(string(r[:maxTitleLen-1]), " ") + "\u2026"
+	}
+	return title
 }
 
 func (s *Store) nextID(prefix string) string {
@@ -241,8 +377,13 @@ func (s *Store) AddDiff(group string, d *model.Diff) *model.Diff {
 	if d.CreatedAt.IsZero() {
 		d.CreatedAt = time.Now()
 	}
+	// The round number counts every round the group has held, deleted ones
+	// included: "diff 3" means the third round of this review, which is what
+	// a reader takes it to mean, and two rounds never share a title.
+	round := s.nextRound(group)
+	d.Title = cleanTitle(d.Title)
 	if d.Title == "" {
-		d.Title = fmt.Sprintf("diff %d", len(g.Diffs)+1)
+		d.Title = fmt.Sprintf("diff %d", round)
 	}
 	g.Diffs = append(g.Diffs, d)
 	s.persist()
@@ -296,6 +437,8 @@ func (s *Store) DeleteGroup(name string) bool {
 	}
 	s.groups = groups
 	if found {
+		// A group that comes back is a new review, and starts at round 1.
+		delete(s.rounds, name)
 		s.persist()
 	}
 	return found
@@ -404,6 +547,7 @@ func (s *Store) DeleteAllGroups() int {
 	defer s.mu.Unlock()
 	n := len(s.groups)
 	s.groups = nil
+	s.rounds = nil
 	if n > 0 {
 		s.persist()
 	}

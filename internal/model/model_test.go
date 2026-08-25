@@ -36,6 +36,40 @@ func TestSuggestions(t *testing.T) {
 			[]string{"```go\ncode\n```"},
 		},
 		{
+			// The inner fence is part of the replacement text, not
+			// the end of the block.
+			"suggestion proposing a code block",
+			"```suggestion\n```go\nx\n```\n```",
+			[]string{"```go\nx\n```"},
+		},
+		{
+			"nested fence indented inside a list item",
+			"```suggestion\n- run it:\n\n  ```sh\n  go test ./...\n  ```\n```",
+			[]string{"- run it:\n\n  ```sh\n  go test ./...\n  ```"},
+		},
+		{
+			"nested tilde block",
+			"```suggestion\n~~~\ny\n~~~\n```",
+			[]string{"~~~\ny\n~~~"},
+		},
+		{
+			// A close never needs to be longer than the fence it
+			// closes, so the longer run is the suggestion's.
+			"a run longer than the nested fence closes the suggestion",
+			"````suggestion\n```\n````",
+			[]string{"```"},
+		},
+		{
+			"an unclosed nested fence still ends at the suggestion fence",
+			"```suggestion\n~~~\n```",
+			[]string{"~~~"},
+		},
+		{
+			"two blocks each holding a fence",
+			"```suggestion\n```go\na\n```\n```\n\nand\n\n```suggestion\n```go\nb\n```\n```",
+			[]string{"```go\na\n```", "```go\nb\n```"},
+		},
+		{
 			"plain code block is not a suggestion",
 			"```go\ncode\n```",
 			nil,
@@ -88,5 +122,27 @@ func TestCommentJSONCarriesSuggestions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(decoded.Suggestions, []string{"new"}) {
 		t.Errorf("suggestions = %q", decoded.Suggestions)
+	}
+}
+
+// Whatever WithSuggestion writes, Suggestions has to read back unchanged:
+// the two are the only ends of the wire a suggestion travels over.
+func TestWithSuggestionRoundTrip(t *testing.T) {
+	for _, suggestion := range []string{
+		"func parse() {",
+		"a\n\nb",
+		"```go\nx\n```",
+		"```",
+		"~~~\ny\n~~~",
+		"text with ``` in it",
+		"# Heading\n\n```suggestion\nnested\n```",
+		"````\ndeep\n````",
+	} {
+		t.Run(suggestion, func(t *testing.T) {
+			body := model.WithSuggestion("note", suggestion)
+			if got := model.Suggestions(body); !reflect.DeepEqual(got, []string{suggestion}) {
+				t.Errorf("round trip through %q gave %q, want %q", body, got, []string{suggestion})
+			}
+		})
 	}
 }
