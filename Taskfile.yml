@@ -33,6 +33,8 @@ tasks:
     cmds:
       - "{{.GO}} vet ./..."
       - "gofmt -l . | grep -v '^web/node_modules' && exit 1 || true"
+      - "{{.GO}} mod tidy"
+      - "git diff --exit-code go.mod go.sum"
 
   dev:
     desc: Runs the sbnn server in the foreground and the Vite dev server, which proxies /_ to it.
