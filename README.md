@@ -561,7 +561,9 @@ is required to bind anywhere else.
 ## Development
 
 The UI is React + Vite, embedded into the binary with `go:embed`. The built
-assets are committed so that `go install` needs no Node.
+assets in `web/dist` are committed so that `go install` needs no Node — which
+means you must run `task web` and commit them yourself whenever you change
+anything under `web/src`.
 
 Tools are managed with [aqua](https://aquaproj.github.io/); run `aqua install`
 to get `task`.
@@ -569,8 +571,12 @@ to get `task`.
 ```console
 $ task build     # pnpm build in web/, then go build
 $ task test      # go test ./...
+$ task lint      # go vet, a gofmt check, and go mod tidy with no diff
 $ task dev       # sbnn in the foreground plus the Vite dev server
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, the `web/dist` rule
+in full, and what a good pull request looks like here.
 
 ## License
 
