@@ -351,13 +351,31 @@ func parseLines(s string) (start, end int, err error) {
 	if m == nil {
 		return 0, 0, fmt.Errorf("%q is not a line or a line range", s)
 	}
-	start, _ = strconv.Atoi(m[1])
+	start, err = lineNumber(m[1])
+	if err != nil {
+		return 0, 0, err
+	}
 	end = start
 	if m[2] != "" {
-		end, _ = strconv.Atoi(m[2])
+		end, err = lineNumber(m[2])
+		if err != nil {
+			return 0, 0, err
+		}
 	}
 	if start <= 0 || end < start {
 		return 0, 0, fmt.Errorf("%q is not a line range", s)
 	}
 	return start, end, nil
+}
+
+// lineNumber converts one run of digits. The pattern lets through a number
+// too large to hold, which Atoi answers with both MaxInt and an error; taking
+// the value and dropping the error anchors the comment to a line no file will
+// ever have, and nothing downstream notices.
+func lineNumber(digits string) (int, error) {
+	n, err := strconv.Atoi(digits)
+	if err != nil {
+		return 0, fmt.Errorf("line %s is out of range for a line number", digits)
+	}
+	return n, nil
 }
