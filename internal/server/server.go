@@ -912,7 +912,17 @@ func (s *Server) handleDeleteHooks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	removed := s.store.DeleteHooks(name, r.PathValue("id"))
+	id := r.PathValue("id")
+	removed := s.store.DeleteHooks(name, id)
+	// The by-id route has to say when it matched nothing, or a typo'd or
+	// already-deleted id looks exactly like a success. Every other by-id
+	// delete in the API answers 404 for that. The clear-all route keeps
+	// its 200 and its count: removing nothing from an empty list is what
+	// was asked for, not a miss.
+	if id != "" && removed == 0 {
+		http.Error(w, "no such hook", http.StatusNotFound)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]int{"removed": removed})
 }
 
