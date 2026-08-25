@@ -158,11 +158,25 @@ one of these — never poll `sbnn comments` in a loop:
   sbnn hook --target <topic> --on-review '<command that resumes the work>'
   ```
 
-  The command gets the review prompt on its stdin and `SBNN_GROUP`, `SBNN_URL`,
-  `SBNN_COMMENTS` and `SBNN_REVIEW_NOTE` in its environment. Ask the user what
-  that command should be for their setup rather than guessing; if they do not
-  want one, tell them to run `sbnn comments` and paste the result to you when
-  they are back.
+  The command gets the review prompt on its stdin and six variables in its
+  environment:
+
+  - `SBNN_GROUP` — the group that was reviewed: the name you passed to
+    `--target`, or `default` when you passed none.
+  - `SBNN_URL` — the review page of that group.
+  - `SBNN_SERVER` — the base URL of the sbnn server that started the hook.
+  - `SBNN_PORT` — the port of that same server. These two are how the hook
+    talks back to the server that started it: a hook that wants the comments
+    runs `sbnn comments --target "$SBNN_GROUP" --port "$SBNN_PORT"` rather
+    than assuming the review is on the default port.
+  - `SBNN_COMMENTS` — how many comments the review left, as a number. It is a
+    count, not the comments themselves; read those with `sbnn comments`.
+  - `SBNN_REVIEW_NOTE` — what the reviewer said about the change as a whole,
+    which is empty when they said nothing.
+
+  Ask the user what that command should be for their setup rather than
+  guessing; if they do not want one, tell them to run `sbnn comments` and
+  paste the result to you when they are back.
 - **Neither**: say you will pick the review up next time, and stop. Nothing
   is lost — the comments stay in the sbnn server until they are cleared.
 
@@ -403,7 +417,8 @@ them correct it.
 | `... \| sbnn export --fragment <file>` | The same, body only, for embedding |
 
 `--port` (default 6280) selects the server; use it only if the user runs sbnn
-on a non-default port.
+on a non-default port. Inside a review hook you do not have to ask which port
+that is: the server passes its own in `SBNN_PORT`.
 
 ## Notes
 
