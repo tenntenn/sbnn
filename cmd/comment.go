@@ -68,6 +68,12 @@ Many at once, for a whole self review:
   ]
   EOF
 
+Each entry carries its own text, so --message, --suggest and --suggest-file
+are refused next to --json: the array is already on stdin, and --suggest -
+would be reading the same stdin the array comes from. Of the rest, --author,
+--diff and --question act as defaults for entries that leave "author",
+"diffId" or "question" out; the side is taken from the entry alone.
+
 Comments made this way are read back exactly like the ones written in the
 browser, with ` + "`sbnn comments`" + `.`,
 	Args:         cobra.MaximumNArgs(1),
@@ -91,6 +97,14 @@ func init() {
 	f.StringVar(&commentDiffID, "diff", "", "Diff ID (default: the newest diff carrying the path)")
 	f.BoolVar(&commentBulk, "json", false, "Read a JSON array of comments from stdin")
 	f.BoolVar(&commentJSONOut, "json-output", false, "Print the stored comments as JSON")
+
+	// --json takes every comment from stdin, so nothing else may read stdin or
+	// claim to hold the one comment's text. Marked in pairs rather than as one
+	// group of four, because --message and --suggest belong together: a
+	// suggestion usually comes with a sentence saying why.
+	commentCmd.MarkFlagsMutuallyExclusive("json", "message")
+	commentCmd.MarkFlagsMutuallyExclusive("json", "suggest")
+	commentCmd.MarkFlagsMutuallyExclusive("json", "suggest-file")
 }
 
 func runComment(cmd *cobra.Command, args []string) error {
@@ -257,9 +271,12 @@ type bulkComment struct {
 	Side       string    `json:"side"`
 	Body       string    `json:"body"`
 	Suggestion string    `json:"suggestion"`
-	Question   bool      `json:"question"`
-	Author     string    `json:"author"`
-	DiffID     string    `json:"diffId"`
+	// Question is a pointer so an entry that says "question": false keeps its
+	// false even when --question sets the default for the entries that leave
+	// the field out, the same way an empty "author" falls back to --author.
+	Question *bool  `json:"question"`
+	Author   string `json:"author"`
+	DiffID   string `json:"diffId"`
 }
 
 // flexLines accepts "12", "12-18" and 12 alike.
@@ -354,6 +371,10 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 		if diffID == "" {
 			diffID = commentDiffID
 		}
+		question := commentQuestion
+		if e.Question != nil {
+			question = *e.Question
+		}
 		requests = append(requests, server.AddCommentRequest{
 			DiffID:     diffID,
 			Path:       e.Path,
@@ -362,7 +383,7 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 			StartLine:  start,
 			EndLine:    end,
 			Body:       e.Body,
-			Question:   e.Question || commentQuestion,
+			Question:   question,
 			Suggestion: e.Suggestion,
 		})
 	}
