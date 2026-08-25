@@ -158,11 +158,34 @@ one of these — never poll `sbnn comments` in a loop:
   sbnn hook --target <topic> --on-review '<command that resumes the work>'
   ```
 
-  The command gets the review prompt on its stdin and `SBNN_GROUP`, `SBNN_URL`,
-  `SBNN_COMMENTS` and `SBNN_REVIEW_NOTE` in its environment. Ask the user what
-  that command should be for their setup rather than guessing; if they do not
-  want one, tell them to run `sbnn comments` and paste the result to you when
-  they are back.
+  The command gets the review prompt on its stdin and the variables below in
+  its environment:
+
+  - `SBNN_GROUP` — the group that was reviewed: the name you passed to
+    `--target`, or `default` when you passed none.
+  - `SBNN_URL` — the review page of that group.
+  - `SBNN_SERVER` — the base URL of the sbnn server that started the hook, and
+    `SBNN_PORT` its port. These are how a hook talks back to the server that
+    started it: run `sbnn comments --target "$SBNN_GROUP" --port "$SBNN_PORT"`
+    rather than assuming the review is on the default port.
+  - `SBNN_COMMENTS` — how many comments the review left, as a number. It is a
+    count, not the comments themselves; read those with `sbnn comments`.
+  - `SBNN_REVIEW_NOTE` — what the reviewer said about the change as a whole,
+    which is empty when they said nothing.
+  - `SBNN_VERDICT` — the verdict of the review as a whole, spelled the way the
+    JSON event spells it: `approved`, `commented` or `changes-requested`. It is
+    empty for a review that has none, so pick your own default rather than
+    reading one into it.
+  - `SBNN_BLOCKING` — `1` or `0`, the answer to "may the change go ahead?".
+    This is the same rule as `wait --exit-code` and `submit --exit-code`, so a
+    hook that branches on it agrees with a pipeline that branches on sbnn's
+    exit status. It is not the verdict: a review that only commented still
+    blocks while a comment of it is open, so branch on this rather than on
+    `SBNN_VERDICT`.
+
+  Ask the user what that command should be for their setup rather than
+  guessing; if they do not want one, tell them to run `sbnn comments` and
+  paste the result to you when they are back.
 - **Neither**: say you will pick the review up next time, and stop. Nothing
   is lost — the comments stay in the sbnn server until they are cleared.
 

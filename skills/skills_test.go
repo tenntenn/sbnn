@@ -112,46 +112,51 @@ func TestSkillHasNoEmptyFences(t *testing.T) {
 	}
 }
 
-// hookEnvName matches the environment variable names the server hands to a
-// review hook.
-var hookEnvName = regexp.MustCompile(`SBNN_[A-Z][A-Z0-9_]*`)
+// hookEnvAssignment matches the way the server names a variable it hands to a
+// review hook: the literal that opens a "NAME=" pair. Matching the assignment
+// rather than the bare name keeps a variable that is only talked about in a
+// comment out of the list.
+var hookEnvAssignment = regexp.MustCompile(`"(SBNN_[A-Z][A-Z0-9_]*)=`)
 
-// hookEnvNames reads the names out of runHookCommand rather than repeating
-// them here. Comparing the skill against a copy of the list would only prove
-// the copy is intact; comparing it against the source is what notices the
-// seventh variable when someone adds one.
+// hookEnvNames reads the names out of the server package rather than
+// repeating them here. Comparing the skill against a copy of the list would
+// only prove the copy is intact; comparing it against the source is what
+// notices the ninth variable when someone adds one.
+//
+// Every non-test file of internal/server is scanned, not one function of one
+// file. Which function builds the environment is the server's business - it
+// has already moved once, from runHookCommand to hookEnv - and a test that
+// pins it down goes off with no idea what drifted the moment it is renamed.
 func hookEnvNames(t *testing.T, root string) []string {
 	t.Helper()
 
-	src := filepath.Join(root, "internal", "server", "hook.go")
-	b, err := os.ReadFile(src)
+	dir := filepath.Join(root, "internal", "server")
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("read %s: %v", src, err)
-	}
-	text := string(b)
-
-	const marker = "func (s *Server) runHookCommand("
-	start := strings.Index(text, marker)
-	if start < 0 {
-		t.Fatalf("%s: runHookCommand not found; this test needs updating", src)
-	}
-	// A top-level function ends at the first "\n}" after its opening.
-	body := text[start:]
-	if end := strings.Index(body, "\n}"); end >= 0 {
-		body = body[:end]
+		t.Fatalf("read %s: %v", dir, err)
 	}
 
 	seen := make(map[string]bool)
 	var names []string
-	for _, n := range hookEnvName.FindAllString(body, -1) {
-		if seen[n] {
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		seen[n] = true
-		names = append(names, n)
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", filepath.Join(dir, name), err)
+		}
+		for _, m := range hookEnvAssignment.FindAllStringSubmatch(string(b), -1) {
+			if seen[m[1]] {
+				continue
+			}
+			seen[m[1]] = true
+			names = append(names, m[1])
+		}
 	}
 	if len(names) == 0 {
-		t.Fatalf("%s: no SBNN_* variables found in runHookCommand; this test needs updating", src)
+		t.Fatalf("%s: no SBNN_* assignments found; the hook environment is built somewhere else now, so this test needs updating", dir)
 	}
 	sort.Strings(names)
 	return names
