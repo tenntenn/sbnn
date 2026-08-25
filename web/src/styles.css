@@ -1466,6 +1466,31 @@ a {
   max-width: 100%;
 }
 
+/* What stands where a picture cannot be drawn: an image the review does not
+   carry, one too heavy to carry, one that pointed out of the tree. It names
+   the file and says why, because a broken-image icon says neither - and it
+   looks the same in a live page and an exported one. */
+.preview-asset-missing {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  max-width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  border: var(--border-width-hairline) dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+
+.preview-asset-name {
+  font-family: var(--font-mono);
+  color: var(--fg);
+}
+
 .markdown hr {
   border: none;
   border-top: var(--border-width-hairline) solid var(--border);

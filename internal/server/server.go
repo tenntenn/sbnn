@@ -266,6 +266,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /_/api/groups/{group}/diffs/{diff}/files/{file}/preview", s.handlePreview)
 	mux.HandleFunc("GET /_/api/groups/{group}/diffs/{diff}/files/{file}/content", s.handleFileContent)
 	mux.HandleFunc("GET /_/api/groups/{group}/diffs/{diff}/files/{file}/image", s.handleFileImage)
+	mux.HandleFunc("GET /_/api/groups/{group}/diffs/{diff}/files/{file}/asset", s.handleFileAsset)
 	mux.HandleFunc("GET /_/api/groups/{group}/comments", s.handleComments)
 	mux.HandleFunc("POST /_/api/groups/{group}/comments", s.handleAddComment)
 	mux.HandleFunc("PATCH /_/api/groups/{group}/comments/{id}", s.handleUpdateComment)
@@ -731,7 +732,7 @@ func (s *Server) handleFileContent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such file", http.StatusNotFound)
 		return
 	}
-	res, err := s.prev.content(d, f)
+	res, err := s.prev.content(name, d, f)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, errNotPreviewable) {
@@ -761,6 +762,39 @@ func (s *Server) handleFileImage(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusInternalServerError
 		if errors.Is(err, errNotPreviewable) {
 			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-store")
+	if _, err := w.Write(data); err != nil {
+		slog.Warn("failed to write response", "error", err)
+	}
+}
+
+// handleFileAsset hands out one image a previewed Markdown file points at.
+//
+// A relative src in a preview resolves against the server root, where sbnn
+// itself lives and the image does not, so the page rewrites it to point here
+// instead. The path is a query parameter and is believed about nothing: the
+// previewer matches it against the images the document actually names, and
+// hands back nothing for anything else.
+func (s *Server) handleFileAsset(w http.ResponseWriter, r *http.Request) {
+	name, ok := s.groupParam(w, r)
+	if !ok {
+		return
+	}
+	d, f, found := s.store.FileContext(name, r.PathValue("diff"), r.PathValue("file"))
+	if !found {
+		http.Error(w, "no such file", http.StatusNotFound)
+		return
+	}
+	data, contentType, err := s.prev.asset(d, f, r.URL.Query().Get("path"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, errNotPreviewable) {
+			status = http.StatusNotFound
 		}
 		writeJSON(w, status, map[string]string{"error": err.Error()})
 		return
