@@ -189,6 +189,16 @@ func TestSpaHandler(t *testing.T) {
 			wantType:   "text/html; charset=utf-8",
 			wantCache:  "no-cache",
 		},
+		{
+			// The word after the dot is longer than any file type, so it
+			// is a name, not an extension. Without the eight-character
+			// cap this group's own review URL answers 404.
+			name:       "a long word after the dot is a group name, not an extension",
+			path:       "/release.snapshot1",
+			wantStatus: http.StatusOK,
+			wantType:   "text/html; charset=utf-8",
+			wantCache:  "no-cache",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
@@ -258,6 +268,14 @@ func TestHasFileExtension(t *testing.T) {
 		{"see.the-next-doc", false},
 		{"archive.tar.gz", true},
 		{"UPPER.PNG", true},
+		// The eight-character cap, at its boundary. Nothing else in this
+		// table reaches it - "see.the-next-doc" is rejected for its
+		// hyphens - so without these two the cap could be deleted and
+		// every test here would still pass, taking long dotted group
+		// names ("release.snapshot1") to a 404 with it.
+		{"bundle.abcdefgh", true},
+		{"bundle.abcdefghi", false},
+		{"release.snapshot1", false},
 	} {
 		if got := hasFileExtension(tt.in); got != tt.want {
 			t.Errorf("hasFileExtension(%q) = %v, want %v", tt.in, got, tt.want)
