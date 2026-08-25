@@ -163,6 +163,51 @@ func TestReconstructMarksGapsInsideCodeFences(t *testing.T) {
 				"\n---\n\n*sbnn: 6 line(s) not included in the diff*\n\n" +
 				"tail\n",
 		},
+		{
+			// The closing fence has to sit inside the list item too. In
+			// column 0 it is outside the item and closes nothing, so the
+			// marker, the reopened fence and everything after them were
+			// shown literally inside the code block and the list was cut
+			// in two.
+			name:  "a fence indented inside a list item is closed at that indent",
+			lines: []string{"1. Step one", "", "   ```console", "   $ go test"},
+			want: "1. Step one\n\n   ```console\n   $ go test\n" +
+				"   ```\n" +
+				"\n   ---\n\n   *sbnn: 3 line(s) not included in the diff*\n\n" +
+				"   ```console\n" +
+				"tail\n",
+		},
+		{
+			// The fence is behind the bullet, so fenceAt never saw it and
+			// the gap landed in the middle of the code.
+			name:  "a fence on the bullet line is seen, and reopened without the bullet",
+			lines: []string{"- ```go", "a := 1"},
+			want: "- ```go\na := 1\n" +
+				"  ```\n" +
+				"\n  ---\n\n  *sbnn: 5 line(s) not included in the diff*\n\n" +
+				"  ```go\n" +
+				"tail\n",
+		},
+		{
+			// Blank lines keep the quote marker; a truly empty line would
+			// end the blockquote and leave the marker outside it.
+			name:  "a fence in a blockquote stays quoted, blank lines included",
+			lines: []string{"> ```go", "> a := 1"},
+			want: "> ```go\n> a := 1\n" +
+				"> ```\n" +
+				">\n> ---\n>\n> *sbnn: 5 line(s) not included in the diff*\n>\n" +
+				"> ```go\n" +
+				"tail\n",
+		},
+		{
+			name:  "a fence indented three spaces with no list is closed at that indent",
+			lines: []string{"   ```go", "   a := 1"},
+			want: "   ```go\n   a := 1\n" +
+				"   ```\n" +
+				"\n   ---\n\n   *sbnn: 5 line(s) not included in the diff*\n\n" +
+				"   ```go\n" +
+				"tail\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -289,5 +334,40 @@ func TestSnippetKeepsDiffMarkers(t *testing.T) {
 	}
 	if got := diff.Snippet(f, "new", 9, 12); got != "" {
 		t.Errorf("Snippet outside the hunk = %q, want empty", got)
+	}
+}
+
+// splitContainers is what lets a fence be found behind a list bullet or a
+// quote marker, and what the closing and reopened fences are written with.
+func TestSplitContainers(t *testing.T) {
+	for _, tt := range []struct {
+		in       string
+		wantCont string
+		wantRest string
+	}{
+		{"```go", "", "```go"},
+		{"   ```go", "   ", "```go"},
+		{"- ```go", "  ", "```go"},
+		{"* ```go", "  ", "```go"},
+		{"1. ```go", "   ", "```go"},
+		{"10) ```go", "    ", "```go"},
+		{"> ```go", "> ", "```go"},
+		{">```go", ">", "```go"},
+		{"> - ```go", ">   ", "```go"},
+		{"  - > ```go", "    > ", "```go"},
+		// Four spaces or more is indented code, not a container.
+		{"    ```go", "", "    ```go"},
+		{"-     ```go", "", "-     ```go"},
+		// A bullet with nothing after it is not this line's container.
+		{"-", "", "-"},
+		{"plain text", "", "plain text"},
+		{"-not a bullet", "", "-not a bullet"},
+		{"1.no space", "", "1.no space"},
+	} {
+		cont, rest := diff.SplitContainersForTest(tt.in)
+		if cont != tt.wantCont || rest != tt.wantRest {
+			t.Errorf("splitContainers(%q) = %q, %q; want %q, %q",
+				tt.in, cont, rest, tt.wantCont, tt.wantRest)
+		}
 	}
 }

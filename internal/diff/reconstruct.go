@@ -69,22 +69,49 @@ func Reconstruct(f *model.File) (content string, complete bool) {
 // the file. Those readers learn about the holes from complete instead.
 //
 // Inside a fenced code block the marker would be shown as code rather than
-// read as Markdown, so the fence is closed around it and opened again after
-// with the line that opened it, which keeps the following lines code and the
-// marker visible.
+// read as Markdown, so the fence is closed around it and opened again after,
+// which keeps the following lines code and the marker visible.
+//
+// The closing fence, the marker and the reopened fence all carry the prefix
+// the opening fence was written with. Without it a fence opened inside a list
+// item ("   ```console") was closed by a "```" in column 0, which is outside
+// the item and so closes nothing: everything after it stayed code, and the
+// marker, the reopened fence and the rest of the file were shown literally
+// inside the code block with the list broken in half.
 func writeGap(b *strings.Builder, f *model.File, n int, fence fenceState) {
 	if !f.IsMarkdown || f.IsNotebook {
 		return
 	}
+	var indent string
 	if fence.open {
+		indent = fence.indent
+		b.WriteString(indent)
 		b.WriteString(strings.Repeat(string(fence.char), fence.length))
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(b, "\n"+GapMarker+"\n\n", n)
-	if fence.open {
-		b.WriteString(fence.line)
+	b.WriteString(blankIn(indent))
+	for _, line := range strings.Split(fmt.Sprintf(GapMarker, n), "\n") {
+		if line == "" {
+			b.WriteString(blankIn(indent))
+			continue
+		}
+		b.WriteString(indent)
+		b.WriteString(line)
 		b.WriteString("\n")
 	}
+	b.WriteString(blankIn(indent))
+	if fence.open {
+		b.WriteString(indent)
+		b.WriteString(fence.fence)
+		b.WriteString("\n")
+	}
+}
+
+// blankIn is a blank line that stays inside the container indent belongs to.
+// Indentation is dropped, because a line of spaces is trailing whitespace,
+// but a blockquote marker is kept: a truly empty line would end the quote.
+func blankIn(indent string) string {
+	return strings.TrimRight(indent, " ") + "\n"
 }
 
 // fenceState is whether the lines written so far have left a fenced code
@@ -93,35 +120,107 @@ type fenceState struct {
 	open   bool
 	char   byte   // the fence character, ` or ~
 	length int    // how many of it the fence opened with
-	line   string // the opening line itself, info string and all
+	indent string // what continues the fence's container on a following line
+	fence  string // the fence itself, info string and all, without the indent
 }
 
 // track follows one line of Markdown in or out of a fenced code block.
 func (s *fenceState) track(line string) {
-	char, length, rest, ok := fenceAt(line)
+	indent, rest := splitContainers(line)
+	char, length, info, ok := fenceAt(rest)
 	if !ok {
 		return
 	}
 	if !s.open {
-		s.open, s.char, s.length, s.line = true, char, length, line
+		s.open, s.char, s.length = true, char, length
+		s.indent, s.fence = indent, rest
 		return
 	}
 	// A fence closes only on the character it opened with, with at least as
 	// many of them, and with nothing else on the line.
-	if char == s.char && length >= s.length && strings.TrimSpace(rest) == "" {
+	if char == s.char && length >= s.length && strings.TrimSpace(info) == "" {
 		s.open = false
 	}
 }
 
+// splitContainers peels the block containers a line opens - blockquote
+// markers, list markers and up to three spaces of indentation at each level -
+// off its front. It returns the prefix that continues those containers on a
+// following line, and what is left of the line.
+//
+// A list marker becomes spaces of its own width, because a following line
+// continues the item rather than starting a new one; a blockquote marker
+// stays as it is. This is what lets a fence opened as "- ```go" or "> ```go"
+// be seen at all: fenceAt only ever sees the fence itself, and the prefix it
+// was found behind is what the closing and reopened fences are written with.
+func splitContainers(line string) (cont, rest string) {
+	var b strings.Builder
+	rest = line
+	for {
+		t := strings.TrimLeft(rest, " ")
+		if n := len(rest) - len(t); n > 3 {
+			// Four spaces or more: indented code, not another container.
+			break
+		} else {
+			b.WriteString(strings.Repeat(" ", n))
+			rest = t
+		}
+		switch {
+		case strings.HasPrefix(rest, ">"):
+			b.WriteString(">")
+			rest = rest[1:]
+			if strings.HasPrefix(rest, " ") {
+				b.WriteString(" ")
+				rest = rest[1:]
+			}
+		default:
+			n := listMarkerLen(rest)
+			if n == 0 {
+				return b.String(), rest
+			}
+			b.WriteString(strings.Repeat(" ", n))
+			rest = rest[n:]
+		}
+	}
+	return b.String(), rest
+}
+
+// listMarkerLen returns the width of the list marker a line starts with,
+// trailing spaces included, or 0 if it does not start with one. A marker with
+// nothing after it opens an empty item and is not a container for this line.
+func listMarkerLen(s string) int {
+	i := 0
+	switch {
+	case strings.HasPrefix(s, "-"), strings.HasPrefix(s, "*"), strings.HasPrefix(s, "+"):
+		i = 1
+	default:
+		for i < len(s) && i < 9 && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i == 0 || i >= len(s) || (s[i] != '.' && s[i] != ')') {
+			return 0
+		}
+		i++
+	}
+	spaces := 0
+	for i+spaces < len(s) && s[i+spaces] == ' ' {
+		spaces++
+	}
+	if spaces == 0 || spaces > 4 {
+		// No space at all is not a marker; five or more starts indented
+		// code inside the item, which is not this line's container.
+		return 0
+	}
+	return i + spaces
+}
+
 // fenceAt reports the code fence a line consists of: which character, how
 // many of them, and what follows - the info string of an opening fence, or
-// nothing at all for a closing one.
-func fenceAt(line string) (char byte, length int, rest string, ok bool) {
-	t := strings.TrimLeft(line, " ")
-	if len(line)-len(t) > 3 {
-		// Indented four spaces or more: that is a code block, not a fence.
-		return 0, 0, "", false
-	}
+// nothing at all for a closing one. It is given a line with its containers
+// already peeled off by splitContainers, so any space left in front of the
+// fence is indentation of four or more, which is a code block and not a
+// fence.
+func fenceAt(t string) (char byte, length int, rest string, ok bool) {
 	if len(t) < 3 || (t[0] != '`' && t[0] != '~') {
 		return 0, 0, "", false
 	}
