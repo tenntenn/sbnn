@@ -62,16 +62,23 @@ That is the whole installation. sbnn is one binary with the review page built
 into it, and it renders the Markdown preview itself, so nothing else has to be
 on PATH before you pipe a diff into it.
 
-sbnn is built with the Go version `go.mod` names, `go 1.24.0`. You do not
-normally have to match it yourself: since Go 1.21 the default `GOTOOLCHAIN=auto`
-downloads whatever toolchain a module asks for, so the command above works on an
-older Go too. It stops only if you have set `GOTOOLCHAIN=local`, or you are on Go
-1.20 or earlier, and the message names both the version wanted and the one you
+sbnn is built with the Go version `go.mod` names, `go 1.27.0`. Your own Go does
+not have to be that new: since Go 1.21 the default `GOTOOLCHAIN=auto` fetches
+whatever toolchain a module asks for, so the command above works on an older Go
+and says so as it goes:
+
+```console
+$ go install github.com/tenntenn/sbnn@latest
+go: github.com/tenntenn/sbnn@v0.0.0-... requires go >= 1.27.0; switching to go1.27.0
+```
+
+It stops only if you have set `GOTOOLCHAIN=local`, or you are on Go 1.20 or
+earlier, in which case the message names both the version wanted and the one you
 are running:
 
 ```console
 $ GOTOOLCHAIN=local go install github.com/tenntenn/sbnn@latest
-go: go.mod requires go >= 1.24.0 (running go 1.22.0; GOTOOLCHAIN=local)
+go: github.com/tenntenn/sbnn@latest: ... requires go >= 1.27.0 (running go 1.24.7; GOTOOLCHAIN=local)
 ```
 
 Upgrade Go to the version that line asks for, or leave `GOTOOLCHAIN` at its
