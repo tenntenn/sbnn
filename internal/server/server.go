@@ -25,10 +25,28 @@ import (
 	"github.com/tenntenn/sbnn/internal/model"
 )
 
-// MaxDiffSize bounds a single diff sent to the server. It is exported so the
-// command line can bound stdin by the same number instead of keeping its own
-// copy, which could drift.
+// MaxDiffSize bounds a single diff sent to the server. It is exported so that
+// cmd can bound stdin by this number rather than by a copy of it; cmd still
+// keeps its own maxDiffSize today, and TestMaxDiffSizeMatchesTheCommandLine
+// fails if the two ever stop agreeing.
 const MaxDiffSize = 32 << 20 // 32MB
+
+// maxDiffBodySize bounds the request that carries a diff.
+//
+// The diff is bounded by MaxDiffSize, but it reaches the server inside a JSON
+// object, and JSON only ever makes a string longer: a quote or a backslash
+// doubles, a newline becomes two bytes, and the object itself adds its keys.
+// Bounding the body by MaxDiffSize therefore rejected diffs that were inside
+// the limit while telling them they were not - a 32,999,998-byte diff, well
+// under 32MB, arrived as a 33,804,914-byte body and came back as "the diff is
+// too large (max 32MB)".
+//
+// So the body gets its own, larger bound, and the diff is measured after
+// decoding, where its real size is known and the message can be true. Twice
+// MaxDiffSize covers a diff that is half quotes and backslashes, which no
+// diff of source text is; a body past that is not a diff sbnn can help with
+// and is refused as a body, in those words.
+const maxDiffBodySize = 2*MaxDiffSize + maxBodySize
 
 // maxBodySize bounds the small JSON bodies: a comment, a review note, a hook.
 const maxBodySize = 1 << 20 // 1MB
@@ -412,7 +430,14 @@ func (s *Server) handleAddDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req AddDiffRequest
-	if !decodeBody(w, r, MaxDiffSize, "the diff", &req) {
+	if !decodeBody(w, r, maxDiffBodySize, "the request body", &req) {
+		return
+	}
+	// Now that the diff is out of its envelope, its size is the one the
+	// sender knows and the one the command line prints.
+	if len(req.Content) > MaxDiffSize {
+		http.Error(w, fmt.Sprintf("the diff is too large (max %s)", byteLimit(MaxDiffSize)),
+			http.StatusRequestEntityTooLarge)
 		return
 	}
 	if strings.TrimSpace(req.Content) == "" {
@@ -872,7 +897,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request, limit int64, what string
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
-			http.Error(w, fmt.Sprintf("%s is too large (max %s)", what, megabytes(limit)),
+			http.Error(w, fmt.Sprintf("%s is too large (max %s)", what, byteLimit(limit)),
 				http.StatusRequestEntityTooLarge)
 			return false
 		}
@@ -882,9 +907,27 @@ func decodeBody(w http.ResponseWriter, r *http.Request, limit int64, what string
 	return true
 }
 
-// megabytes renders a limit the way the command line words it: "32MB".
-func megabytes(n int64) string {
-	return strconv.FormatInt(n>>20, 10) + "MB"
+// byteLimit renders a limit the way the command line words one: "32MB",
+// "65MB", "512KB", "900B".
+//
+// Dividing by a megabyte and stopping there was not enough: every limit under
+// a megabyte came out as "0MB", so a refusal could name a limit of nothing and
+// leave the sender no idea what would fit.
+func byteLimit(n int64) string {
+	scaled := func(unit int64, suffix string) string {
+		if n%unit == 0 {
+			return strconv.FormatInt(n/unit, 10) + suffix
+		}
+		return strconv.FormatFloat(float64(n)/float64(unit), 'f', 1, 64) + suffix
+	}
+	switch {
+	case n >= 1<<20:
+		return scaled(1<<20, "MB")
+	case n >= 1<<10:
+		return scaled(1<<10, "KB")
+	default:
+		return strconv.FormatInt(n, 10) + "B"
+	}
 }
 
 func (s *Server) groupParam(w http.ResponseWriter, r *http.Request) (string, bool) {
