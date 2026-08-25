@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -16,6 +17,7 @@ var (
 	hookCommand string
 	hookURL     string
 	hookClear   bool
+	hookRemove  string
 )
 
 var hookCmd = &cobra.Command{
@@ -31,6 +33,7 @@ review", with nobody waiting in between.
   $ sbnn hook --on-review 'claude -p "$(sbnn comments)"'
   $ sbnn hook --on-review-url http://localhost:9000/reviews
   $ sbnn hook                       # what is registered
+  $ sbnn hook --remove h2           # forget one of them
   $ sbnn hook --clear               # forget it
 
 The command runs through the shell with the review prompt on its stdin and
@@ -72,20 +75,70 @@ func init() {
 	f.StringVar(&hookCommand, "on-review", "", "Shell command to run when a review is submitted")
 	f.StringVar(&hookURL, "on-review-url", "", "URL to POST to when a review is submitted")
 	f.BoolVar(&hookClear, "clear", false, "Remove the hooks of the group")
+	f.StringVar(&hookRemove, "remove", "", "Remove one hook by ID (sbnn hook lists the IDs)")
 	f.BoolVar(&jsonOutput, "json", false, "Print structured JSON on stdout")
-	// --clear used to win over a registration given in the same command,
-	// taking the hooks and dropping the new one without a word. Refusing
-	// the combination says so once, instead of leaving the user to believe
-	// a hook is registered when none is. The two registration flags are
-	// paired with --clear separately rather than put in one group with it:
-	// a single hook may carry a command and a URL at once, and one group
-	// of three would forbid that too.
+	// A removal and a registration asked for in the same command disagree
+	// about what the command is for, and the switch in runHook would settle
+	// it by order: the removal happens, the new hook is dropped without a
+	// word, and the user is left believing it is registered. --clear had
+	// the same trouble. Refusing the combinations says so once. The flags
+	// are paired one by one rather than put in a single group of four: a
+	// hook may carry a command and a URL at once, and one group would
+	// forbid that too.
+	hookCmd.MarkFlagsMutuallyExclusive("remove", "clear")
+	hookCmd.MarkFlagsMutuallyExclusive("remove", "on-review")
+	hookCmd.MarkFlagsMutuallyExclusive("remove", "on-review-url")
 	hookCmd.MarkFlagsMutuallyExclusive("clear", "on-review")
 	hookCmd.MarkFlagsMutuallyExclusive("clear", "on-review-url")
 }
 
+// hookAction is what a run of "sbnn hook" turns out to be.
+type hookAction int
+
+const (
+	hookList hookAction = iota
+	hookRemoveOne
+	hookClearAll
+	hookAdd
+)
+
+// hookActionFor reads the flags rather than the values they hold, because a
+// flag that was given an empty value - "sbnn hook --remove $HOOK_ID" with
+// HOOK_ID unset is the way it happens - is indistinguishable from an absent
+// flag by value alone. Deciding by value sent that run down the default
+// branch, so it printed the hook list and exited 0 while the user believed a
+// hook had been removed. An empty value is a mistake worth saying out loud.
+func hookActionFor(cmd *cobra.Command) (hookAction, error) {
+	fs := cmd.Flags()
+	switch {
+	case fs.Changed("remove"):
+		if hookRemove == "" {
+			return hookList, errors.New("--remove needs a hook ID: sbnn hook lists them")
+		}
+		return hookRemoveOne, nil
+	case hookClear:
+		return hookClearAll, nil
+	// A hook may carry a command, a URL, or both, so emptiness is only a
+	// mistake when everything that was given is empty.
+	case fs.Changed("on-review") || fs.Changed("on-review-url"):
+		if hookCommand == "" && hookURL == "" {
+			return hookList, errors.New("--on-review and --on-review-url need something to run")
+		}
+		return hookAdd, nil
+	default:
+		return hookList, nil
+	}
+}
+
 func runHook(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
+	// The flags are settled before the server is contacted so that a
+	// mistyped command is answered by the mistake, not by whether a server
+	// happens to be running.
+	action, err := hookActionFor(cmd)
+	if err != nil {
+		return err
+	}
 	group, err := groupName(target)
 	if err != nil {
 		return err
@@ -95,15 +148,28 @@ func runHook(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("no sbnn server found on %s", c.Addr)
 	}
 
-	switch {
-	case hookClear:
+	switch action {
+	case hookRemoveOne:
+		removed, err := c.DeleteHook(ctx, group, hookRemove)
+		if err != nil {
+			return err
+		}
+		// The server answers an unknown ID with a count of 0 rather than
+		// an error, so without this the user is told a hook went that was
+		// never there.
+		if removed == 0 {
+			return fmt.Errorf("no hook %q on group %q", hookRemove, group)
+		}
+		fmt.Fprintf(os.Stderr, "sbnn: removed hook %q from group %q\n", hookRemove, group)
+		return nil
+	case hookClearAll:
 		removed, err := c.DeleteHooks(ctx, group)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "sbnn: removed %d hook(s) from group %q\n", removed, group)
 		return nil
-	case hookCommand != "" || hookURL != "":
+	case hookAdd:
 		added, err := c.AddHook(ctx, group, model.Hook{Command: hookCommand, URL: hookURL})
 		if err != nil {
 			return err
