@@ -259,6 +259,20 @@ func (c *Client) DeleteHooks(ctx context.Context, group string) (int, error) {
 	return res.Removed, nil
 }
 
+// DeleteHook removes one hook by ID and returns how many went, which is 0
+// when the group has no hook with that ID: the server reports that as a
+// count, not as an error, so the caller decides what it means.
+func (c *Client) DeleteHook(ctx context.Context, group, id string) (int, error) {
+	var res struct {
+		Removed int `json:"removed"`
+	}
+	u := c.url("/_/api/groups/%s/hooks/%s", url.PathEscape(group), url.PathEscape(id))
+	if err := c.do(ctx, http.MethodDelete, u, nil, &res); err != nil {
+		return 0, err
+	}
+	return res.Removed, nil
+}
+
 // ReviewNotice is what the server pushes when a review is submitted.
 type ReviewNotice struct {
 	Type       string    `json:"type"`

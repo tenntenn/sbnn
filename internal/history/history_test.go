@@ -1,10 +1,13 @@
 package history_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -244,6 +247,112 @@ func TestLoadSkipsOverLongLine(t *testing.T) {
 	}
 }
 
+// TestAppendKeepsRecordsWholeUnderConcurrency holds Append to what the log
+// format needs: one line per record, whole, however many writers there
+// are. HistoryFile is one file for the machine while a session file is one
+// per port, so several servers writing at once is the ordinary case.
+//
+// This is the end the log is judged by, not the test that catches the lock
+// going away: on Linux a write(2) to a regular file is serialised by the
+// inode lock, so these records come back whole even with no lock of ours,
+// and the test passes either way. TestAppendWaitsForTheAppendLock is the
+// one that fails when Append stops locking.
+func TestAppendKeepsRecordsWholeUnderConcurrency(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reviews.jsonl")
+	const writers, each = 8, 25
+	note := strings.Repeat("x", 256<<10)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for w := range writers {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := range each {
+				rec := history.Record{
+					Group:      fmt.Sprintf("g%d", w),
+					ReviewedAt: at(i),
+					Note:       note,
+				}
+				if err := history.Append(path, rec); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("Append = %v", err)
+	}
+
+	// Every line has to be a record: a line that does not parse is a
+	// review Read drops on the floor, silently.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	if len(lines) != writers*each {
+		t.Errorf("log has %d line(s), want %d", len(lines), writers*each)
+	}
+	for i, line := range lines {
+		var rec history.Record
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("line %d of %d does not parse (%d bytes): %v",
+				i+1, len(lines), len(line), err)
+		}
+	}
+
+	records, err := history.Load(path, history.Filter{})
+	if err != nil {
+		t.Fatalf("Load = %v", err)
+	}
+	if len(records) != writers*each {
+		t.Fatalf("Load read %d record(s), want %d", len(records), writers*each)
+	}
+	perGroup := map[string]int{}
+	for _, rec := range records {
+		perGroup[rec.Group]++
+		if len(rec.Note) != len(note) {
+			t.Fatalf("a record of %s came back with a note of %d bytes, want %d",
+				rec.Group, len(rec.Note), len(note))
+		}
+	}
+	for w := range writers {
+		if got := perGroup[fmt.Sprintf("g%d", w)]; got != each {
+			t.Errorf("g%d wrote %d record(s), want %d", w, got, each)
+		}
+	}
+}
+
+// TestAppendStillAppends is the plain case, so that taking a lock has not
+// turned an append into something else.
+func TestAppendStillAppends(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reviews.jsonl")
+	for _, name := range []string{"api", "web", "cli"} {
+		if err := history.Append(path, history.Record{Group: name, ReviewedAt: at(0)}); err != nil {
+			t.Fatalf("Append(%s) = %v", name, err)
+		}
+	}
+	records, err := history.Load(path, history.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, rec := range records {
+		got = append(got, rec.Group)
+	}
+	if strings.Join(got, ",") != "api,web,cli" {
+		t.Errorf("log reads %v, want the three in the order they were written", got)
+	}
+	// An empty path is still the way to say "keep no log".
+	if err := history.Append("", history.Record{Group: "api"}); err != nil {
+		t.Errorf("Append with no path = %v", err)
+	}
+}
+
 func TestCommentsFlattensReviews(t *testing.T) {
 	records := []history.Record{
 		history.FromGroup(group("api", "",
@@ -371,7 +480,20 @@ func TestParseSince(t *testing.T) {
 			t.Errorf("ParseSince(%q) = %s, want %s", tt.in, got, tt.want)
 		}
 	}
-	if _, err := history.ParseSince("last tuesday", now); err == nil {
-		t.Error("ParseSince should refuse what it cannot read")
+	for _, in := range []string{
+		"last tuesday",
+		// Only the documented forms are read; anything that merely starts
+		// with a number and a "d" is not seven days.
+		"7days",
+		"7dx",
+		"7d3h",
+		"7dd",
+		"7 d",
+		"-7d",
+		"0d",
+	} {
+		if got, err := history.ParseSince(in, now); err == nil {
+			t.Errorf("ParseSince(%q) = %s, want an error", in, got)
+		}
 	}
 }
