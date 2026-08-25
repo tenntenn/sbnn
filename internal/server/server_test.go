@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/history"
 	"github.com/tenntenn/sbnn/internal/mo"
 	"github.com/tenntenn/sbnn/internal/model"
@@ -974,4 +975,81 @@ func TestSubmitReviewWithoutABrowser(t *testing.T) {
 	if got := history.Comments(records); len(got) != 1 || got[0].Who() != "code-review" {
 		t.Errorf("flattened = %+v", got)
 	}
+}
+
+// GET /_/api/groups/{group} returns the whole group, and the page refetches it
+// on every change event, so its size is paid again for each edit - measured at
+// 6.61 MB for a 500-file review. Diff.Raw is the original diff text and no
+// client reads it: it is declared in web/src/types.ts and used nowhere, and
+// export.Build already drops it. The store must keep it, since an export or a
+// re-parse still wants it.
+func TestGroupResponseOmitsRawDiffText(t *testing.T) {
+	ts, srv := newTestServer(t)
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs",
+		AddDiffRequest{Title: "first", Content: sampleDiff}, nil)
+
+	resp, err := http.Get(ts.URL + "/_/api/groups/default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "diff --git") {
+		t.Errorf("the group response still carries the raw diff text: %s", body)
+	}
+
+	// The parsed files - what the UI actually renders - are still there.
+	var g model.Group
+	if err := json.Unmarshal(body, &g); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Diffs) != 1 || len(g.Diffs[0].Files) != 2 {
+		t.Fatalf("group = %+v, want the parsed files intact", g)
+	}
+	if g.Diffs[0].Raw != "" {
+		t.Errorf("Raw = %q, want it dropped from the response", g.Diffs[0].Raw)
+	}
+
+	// The store keeps it.
+	stored, ok := srv.Store().Group(DefaultGroup)
+	if !ok {
+		t.Fatal("the group is gone from the store")
+	}
+	if !strings.Contains(stored.Diffs[0].Raw, "diff --git") {
+		t.Errorf("the store lost the raw diff text: %q", stored.Diffs[0].Raw)
+	}
+}
+
+// The saving this buys, on the endpoint the page refetches on every event.
+func BenchmarkGroupResponseSize(b *testing.B) {
+	srv, err := New(Options{SessionFile: filepath.Join(b.TempDir(), "s.json"), Version: "test"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	raw := strings.Repeat(sampleDiff, 100)
+	srv.Store().AddDiff(DefaultGroup, &model.Diff{Raw: raw, Files: diff.Parse(raw)})
+
+	g, _ := srv.Store().Group(DefaultGroup)
+	with, err := json.MarshalIndent(g, "", "  ")
+	if err != nil {
+		b.Fatal(err)
+	}
+	g, _ = srv.Store().Group(DefaultGroup)
+	without, err := json.MarshalIndent(withoutRawDiffs(g), "", "  ")
+	if err != nil {
+		b.Fatal(err)
+	}
+	for b.Loop() {
+		g, _ := srv.Store().Group(DefaultGroup)
+		if _, err := json.MarshalIndent(withoutRawDiffs(g), "", "  "); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ReportMetric(float64(len(with)), "bytes-with-raw")
+	b.ReportMetric(float64(len(without)), "bytes-without-raw")
+	b.ReportMetric(100*float64(len(with)-len(without))/float64(len(with)), "%-saved")
 }
