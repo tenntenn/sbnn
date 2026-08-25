@@ -233,6 +233,14 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   itself, as a rule and a line saying how many lines are not there. Nothing
   is written into a notebook that way: it is JSON, and sbnn's own sentence in
   the middle of it would be the reason it could not be shown at all.
+- Every other text file — a `.go`, a config file, a script with no extension
+  at all — gets a preview too: the whole file as its own numbered lines,
+  syntax coloured by the same rules that colour the diff. It is the same
+  working-tree-or-rebuilt content behind the same **tree** / **rebuilt** /
+  **partial** header, and the first 2,000 lines are drawn with a button for
+  the rest, so one generated file cannot fill the pane with a hundred
+  thousand rows. An exported page has no working tree to read, so it keeps
+  its previews of Markdown, notebooks and images only.
 - **Sync** makes the preview follow the diff as you scroll, by fraction
   rather than by line — the two documents do not agree on lines, and
   pretending they do lands you in the wrong place with more confidence.
