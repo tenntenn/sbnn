@@ -75,7 +75,7 @@ func init() {
 	f.StringVarP(&target, "target", "t", "", "Only the reviews of this group")
 	f.IntVarP(&port, "port", "p", DefaultPort, "Server port (used when sbnn is running)")
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
-	f.StringVar(&historyPath, "history-file", "", `Where the log is kept (or $SBNN_HISTORY)`)
+	f.StringVar(&historyPath, "history-file", "", historyFileHelp("Where the log is kept"))
 	f.StringVar(&reviewsSince, "since", "", "Only reviews after this: 7d, 36h, 2026-01-31")
 	f.IntVar(&reviewsLimit, "limit", 0, "Keep only the newest n reviews")
 	f.StringVar(&reviewsFormat, "format", "text", "Output format: text, json or jsonl")
