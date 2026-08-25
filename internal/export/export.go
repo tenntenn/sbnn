@@ -49,8 +49,17 @@ type Image struct {
 
 // Payload is the data the exported page reads out of window.__SBNN_DATA__.
 type Payload struct {
-	Version     int                `json:"version"`
-	SaVersion   string             `json:"saVersion,omitempty"`
+	Version int `json:"version"`
+	// SbnnVersion is the sbnn that wrote the page. It went out as
+	// "saVersion" until the tool was renamed, while everything around it -
+	// __SBNN_DATA__, the sbnn: storage keys, the page title - was renamed
+	// with it, so the old spelling was the last thing left saying "sa".
+	//
+	// PayloadVersion is deliberately not bumped for the rename: the page
+	// reads either name and prefers this one, so an older page stays
+	// readable and a page written here is read by an older page's reader
+	// as one whose version it simply does not know.
+	SbnnVersion string             `json:"sbnnVersion,omitempty"`
 	GeneratedAt time.Time          `json:"generatedAt"`
 	Group       string             `json:"group"`
 	Diffs       []*model.Diff      `json:"diffs"`
@@ -83,10 +92,10 @@ type Payload struct {
 // are resolved the same way the live preview does: the working tree file
 // when it is still there, the new side rebuilt from the diff otherwise - and
 // for a binary image, only the working tree copy can be shown at all.
-func Build(g *model.Group, saVersion string, now time.Time) *Payload {
+func Build(g *model.Group, sbnnVersion string, now time.Time) *Payload {
 	p := &Payload{
 		Version:     PayloadVersion,
-		SaVersion:   saVersion,
+		SbnnVersion: sbnnVersion,
 		GeneratedAt: now,
 		Group:       g.Name,
 		Diffs:       make([]*model.Diff, 0, len(g.Diffs)),
