@@ -79,7 +79,11 @@ func New(opts Options) (*Server, error) {
 		shutdown: make(chan struct{}),
 	}
 	if err := s.store.Load(); err != nil {
+		// The background server's log lands in the state directory, where
+		// nobody is looking, so this also goes to stderr: losing a session
+		// is worth one line wherever the human is.
 		slog.Warn("could not restore session", "error", err)
+		fmt.Fprintf(os.Stderr, "sbnn: %v\n", err)
 	}
 	// Run replaces this with a previewer that knows the frame proxy.
 	s.prev = &previewer{mo: opts.Mo, cacheDir: opts.CacheDir}

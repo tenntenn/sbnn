@@ -471,3 +471,100 @@ func describe(files []*model.File) string {
 	}
 	return b.String()
 }
+
+// A combined diff carries one marker column per parent, so " +y" - a space
+// then a plus - is a line added relative to the second parent, not a context
+// line whose content starts with a plus.
+func TestParseCombinedMarkerColumns(t *testing.T) {
+	type line struct {
+		kind    model.LineKind
+		content string
+	}
+	tests := []struct {
+		name      string
+		src       string
+		want      []line
+		additions int
+		deletions int
+	}{
+		{
+			name: "two parents",
+			src: "diff --cc a.txt\n--- a/a.txt\n+++ b/a.txt\n" +
+				"@@@ -1,2 -1,2 +1,2 @@@\n  ctx\n- x\n +y\n",
+			want: []line{
+				{model.LineContext, "ctx"},
+				{model.LineDelete, "x"},
+				{model.LineAdd, "y"},
+			},
+			additions: 1,
+			deletions: 1,
+		},
+		{
+			name: "changed against both parents",
+			src: "diff --cc a.txt\n@@@ -1,2 -1,2 +1,2 @@@\n" +
+				"--gone\n++new\n  ctx\n",
+			want: []line{
+				{model.LineDelete, "gone"},
+				{model.LineAdd, "new"},
+				{model.LineContext, "ctx"},
+			},
+			additions: 1,
+			deletions: 1,
+		},
+		{
+			name: "three parents carry three columns",
+			src: "diff --cc a.txt\n@@@@ -1,1 -1,1 -1,1 +1,1 @@@@\n" +
+				"   ctx\n  +third\n---gone\n",
+			want: []line{
+				{model.LineContext, "ctx"},
+				{model.LineAdd, "third"},
+				{model.LineDelete, "gone"},
+			},
+			additions: 1,
+			deletions: 1,
+		},
+		{
+			name: "content keeps its own leading markers",
+			src:  "diff --cc a.txt\n@@@ -1,1 -1,1 +1,1 @@@\n  - not a marker\n +  indented\n",
+			want: []line{
+				{model.LineContext, "- not a marker"},
+				{model.LineAdd, "  indented"},
+			},
+			additions: 1,
+			deletions: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files := diff.Parse(tt.src)
+			if len(files) != 1 || len(files[0].Hunks) != 1 {
+				t.Fatalf("want 1 file with 1 hunk, got:\n%s", describe(files))
+			}
+			f := files[0]
+			var got []line
+			for _, l := range f.Hunks[0].Lines {
+				got = append(got, line{l.Kind, l.Content})
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tt.want) {
+				t.Errorf("lines = %v, want %v", got, tt.want)
+			}
+			if f.Additions != tt.additions || f.Deletions != tt.deletions {
+				t.Errorf("got +%d -%d, want +%d -%d",
+					f.Additions, f.Deletions, tt.additions, tt.deletions)
+			}
+		})
+	}
+}
+
+// Text that is not a body line at all must keep its characters rather than
+// lose the first ones to a marker column that is not there.
+func TestParseCombinedKeepsNonBodyText(t *testing.T) {
+	files := diff.Parse("diff --cc a.txt\n@@@ -1,1 -1,1 +1,1 @@@\n  ctx\n2 files changed\n")
+	if len(files) != 1 || len(files[0].Hunks) != 1 {
+		t.Fatalf("want 1 file with 1 hunk, got:\n%s", describe(files))
+	}
+	lines := files[0].Hunks[0].Lines
+	if len(lines) != 2 || lines[1].Content != "2 files changed" || lines[1].Kind != model.LineContext {
+		t.Errorf("last line = %+v, want context %q", lines[len(lines)-1], "2 files changed")
+	}
+}

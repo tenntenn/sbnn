@@ -70,13 +70,32 @@ func (s *Store) Load() error {
 	}
 	var p persisted
 	if err := json.Unmarshal(b, &p); err != nil {
-		return fmt.Errorf("session file %s is broken: %w", s.path, err)
+		// Starting empty on top of the old file means the next diff,
+		// comment or hook renames a fresh session over it. A truncated
+		// write from a killed server is exactly the case where the old
+		// bytes are still worth having, so keep them.
+		kept, moveErr := s.setAside()
+		if moveErr != nil {
+			return fmt.Errorf("session file %s is broken and could not be moved aside (%v): %w", s.path, moveErr, err)
+		}
+		return fmt.Errorf("session file %s is broken, so sbnn started a new session; "+
+			"the old one was kept as %s: %w", s.path, kept, err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.groups = p.Groups
 	s.seq = p.Seq
 	return nil
+}
+
+// setAside renames a session file sbnn refuses to load, so that the new
+// session does not overwrite it, and returns where it went.
+func (s *Store) setAside() (string, error) {
+	kept := s.path + ".broken"
+	if err := os.Rename(s.path, kept); err != nil {
+		return "", err
+	}
+	return kept, nil
 }
 
 // persist writes the session to disk. The caller must hold the lock.
