@@ -57,6 +57,24 @@ function marker(kind: Line['kind']): string {
   }
 }
 
+/** nextSelection is what picking `line` on `side` does to the range that
+ * stands. Only an explicit extend - the shift key, or a drag across the
+ * gutter - grows it; a plain pick always starts a new one-line range, so a
+ * reader who wants a different line can simply click it instead of having to
+ * dismiss the draft first. */
+export function nextSelection(
+  current: Selection | null,
+  side: Side,
+  line: number,
+  extend: boolean,
+): Selection {
+  if (extend && current && current.side === side) {
+    if (line < current.start) return { ...current, start: line }
+    return { ...current, end: line }
+  }
+  return { side, start: line, end: line }
+}
+
 /** DRAG_SLOP is how far, in CSS pixels, the pointer may travel between press
  * and release and still count as a click rather than a drag. */
 const DRAG_SLOP = 4
@@ -138,14 +156,7 @@ export function DiffFileSection({
   }
 
   const pick = (side: Side, line: number, extend: boolean) => {
-    setSelection((current) => {
-      const grow = extend || (current !== null && current.side === side)
-      if (grow && current && current.side === side) {
-        if (line < current.start) return { ...current, start: line }
-        return { ...current, end: line }
-      }
-      return { side, start: line, end: line }
-    })
+    setSelection((current) => nextSelection(current, side, line, extend))
   }
 
   // Pressing on the gutter may be the start of a drag, so the form waits for
@@ -223,7 +234,7 @@ export function DiffFileSection({
             label={selectionLabel}
             seed={currentText(file, selection)}
             canSuggest={selection.side === 'new'}
-            hint="Drag or tap another line number to cover more lines"
+            hint="Drag across the line numbers, or shift-click one, to cover more lines"
             onSubmit={submitComment}
             onCancel={() => setSelection(null)}
           />
