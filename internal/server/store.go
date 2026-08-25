@@ -53,6 +53,11 @@ type Store struct {
 	rounds map[string]int
 	// persistErr is why the last write to path failed, if it did.
 	persistErr error
+	// sealed is set when Load refused the session file. The bytes on disk
+	// are the only copy of a session this build cannot read, so nothing may
+	// write over them - not even the write() that reports through
+	// persistErr, because a sealed store must not touch the file at all.
+	sealed bool
 }
 
 // NewStore returns a store persisting to path. An empty path disables
@@ -114,6 +119,36 @@ func (s *Store) Load() error {
 		return fmt.Errorf("session file %s is broken, so sbnn started a new session; "+
 			"the old one was kept as %s: %w", s.path, kept, err)
 	}
+	// A file from a newer sbnn may hold fields this build knows nothing
+	// about. Loading it as far as the JSON tags happen to line up would turn
+	// a format change into silently missing diffs and comments, so refuse it
+	// and say which version wrote it.
+	if p.Version > persistVersion {
+		// Refusing the file is only half the job: the server logs the error
+		// and keeps running, so the very first diff would otherwise persist
+		// an empty session over the file we just declined to read. Seal the
+		// store instead, which keeps the bytes on disk intact and makes the
+		// advice below something the reader can still act on.
+		//
+		// Moving the file aside is advice for a stopped sbnn. A running one
+		// stays sealed whatever happens to the path, because it still cannot
+		// read what it refused and has nothing to merge a new session into,
+		// so the sentence says to restart rather than leaving the reader to
+		// find out that the diffs went nowhere.
+		refused := fmt.Errorf("session file %s was written by a newer sbnn (format version %d, this one understands %d): "+
+			"this session is not saved and the file is left untouched; "+
+			"upgrade sbnn, or move the file aside and restart sbnn to start a new session", s.path, p.Version, persistVersion)
+		s.mu.Lock()
+		s.sealed = true
+		// persist() returns before write() for a sealed store, so nothing
+		// after this ever sets persistErr. Status.SessionError is why the
+		// session is not on disk and is empty only while the file is up to
+		// date, so leaving it empty here would tell a reader the session was
+		// saved when it is in memory and nowhere else.
+		s.persistErr = refused
+		s.mu.Unlock()
+		return refused
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.groups = p.Groups
@@ -157,7 +192,7 @@ func (s *Store) setAside() (string, error) {
 // after it is lost on the next restart. So the reason is logged and kept for
 // PersistError, which the status API reports.
 func (s *Store) persist() {
-	if s.path == "" {
+	if s.path == "" || s.sealed {
 		return
 	}
 	err := s.write()
