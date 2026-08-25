@@ -336,6 +336,7 @@ func (p *parser) readHunk() {
 func (p *parser) readCombinedHunk() {
 	f := p.file()
 	h := &model.Hunk{Header: p.lines[p.i]}
+	parents := combinedParents(h.Header)
 	p.i++
 	for p.i < len(p.lines) {
 		l := p.lines[p.i]
@@ -346,22 +347,55 @@ func (p *parser) readCombinedHunk() {
 			p.i++
 			continue
 		}
-		kind := model.LineContext
-		content := l
-		if l != "" {
-			switch l[0] {
-			case '+':
-				kind, content = model.LineAdd, l[1:]
-			case '-':
-				kind, content = model.LineDelete, l[1:]
-			case ' ':
-				content = l[1:]
-			}
-		}
+		kind, content := splitCombinedLine(l, parents)
 		h.Lines = append(h.Lines, model.Line{Kind: kind, Content: content})
 		p.i++
 	}
 	f.Hunks = append(f.Hunks, h)
+}
+
+// combinedParents returns how many marker columns the body lines of a combined
+// hunk carry. git writes one more @ than the merge has parents, so the usual
+// "@@@" header introduces two columns and an octopus merge introduces more.
+func combinedParents(header string) int {
+	n := 0
+	for n < len(header) && header[n] == '@' {
+		n++
+	}
+	if n < 2 {
+		return 1
+	}
+	return n - 1
+}
+
+// splitCombinedLine splits one body line of a combined hunk into its marker
+// columns and the content behind them.
+//
+// A combined diff carries one column per parent, so a line added relative to
+// the second parent is written " +y": a space, then a plus. Looking at the
+// first character alone read that as a context line whose content began with a
+// plus, which both mis-typed the line and left every other line carrying a
+// spurious leading space - and since finalize counts the kinds, the file then
+// reported addition and deletion totals that did not match what was on screen.
+//
+// A line is a deletion when any column says it left that parent, and an
+// addition when any column says it arrived from one; only a line unchanged
+// against every parent is context. Columns are consumed while they look like
+// markers and never more than there are parents, so a line that is not a body
+// line at all keeps its text instead of losing its first characters.
+func splitCombinedLine(l string, parents int) (model.LineKind, string) {
+	n := 0
+	for n < parents && n < len(l) && (l[n] == ' ' || l[n] == '+' || l[n] == '-') {
+		n++
+	}
+	markers, content := l[:n], l[n:]
+	switch {
+	case strings.ContainsRune(markers, '-'):
+		return model.LineDelete, content
+	case strings.ContainsRune(markers, '+'):
+		return model.LineAdd, content
+	}
+	return model.LineContext, content
 }
 
 type hunkHeader = model.Hunk
