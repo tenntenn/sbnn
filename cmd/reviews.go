@@ -13,6 +13,7 @@ import (
 
 	"github.com/tenntenn/sbnn/internal/client"
 	"github.com/tenntenn/sbnn/internal/history"
+	"github.com/tenntenn/sbnn/internal/model"
 )
 
 var (
@@ -131,7 +132,7 @@ func runReviews(cmd *cobra.Command, _ []string) error {
 		}
 		return nil
 	case "text":
-		return printReviews(records)
+		return printReviews(os.Stdout, records)
 	default:
 		return fmt.Errorf("unknown format %q: use text, json or jsonl", format)
 	}
@@ -223,31 +224,61 @@ func firstLine(s string) string {
 	return strings.ReplaceAll(s, "\t", " ")
 }
 
-func printReviews(records []history.Record) error {
+func printReviews(w io.Writer, records []history.Record) error {
 	if len(records) == 0 {
-		fmt.Println("no review has been submitted yet")
+		fmt.Fprintln(w, "no review has been submitted yet")
 		return nil
 	}
 	if reviewsStats {
 		// The aggregate is printed when asked for and only then; the list
 		// is a list.
-		printStats(history.Summarize(records))
+		printStats(w, history.Summarize(records), verdicts(records))
 		return nil
 	}
 	for _, rec := range records {
-		fmt.Printf("%s  %-14s %2d comment(s)%s  %d file(s), +%d -%d%s%s\n",
+		fmt.Fprintf(w, "%s  %-14s %-17s %2d comment(s)%s  %d file(s), +%d -%d%s%s\n",
 			rec.ReviewedAt.Local().Format("2006-01-02 15:04"),
 			rec.Group,
+			rec.Verdict.String(),
 			len(rec.Comments),
 			suggestionCount(rec),
 			rec.Files, rec.Additions, rec.Deletions,
 			waited(rec),
 			labelPairs(rec))
 		if note := strings.TrimSpace(rec.Note); note != "" {
-			fmt.Printf("%s\n", indent(note, "      "))
+			fmt.Fprintf(w, "%s\n", indent(note, "      "))
 		}
 	}
 	return nil
+}
+
+// verdictTally is how many reviews decided each way. It is counted here
+// rather than in history.Stats so that the three numbers travel together
+// in the order a reader wants them: what went through, what was only
+// remarked on, what was stopped.
+type verdictTally struct {
+	Approved         int
+	Commented        int
+	ChangesRequested int
+}
+
+// verdicts counts what the reviews decided. A record written before the
+// verdict was recorded has an empty one, which model.Verdict reads as
+// "commented" - the same default ParseVerdict and the API apply - so an
+// old log is counted, not dropped.
+func verdicts(records []history.Record) verdictTally {
+	var t verdictTally
+	for _, rec := range records {
+		switch rec.Verdict {
+		case model.VerdictApproved:
+			t.Approved++
+		case model.VerdictChangesRequested:
+			t.ChangesRequested++
+		default:
+			t.Commented++
+		}
+	}
+	return t
 }
 
 // labelPairs puts the labels a review was sent with on its line, sorted so
@@ -281,29 +312,31 @@ func waited(rec history.Record) string {
 	return ""
 }
 
-func printStats(s history.Stats) {
-	fmt.Printf("%d review(s), %d comment(s) (%.1f per review), %d suggestion(s)\n",
+func printStats(w io.Writer, s history.Stats, v verdictTally) {
+	fmt.Fprintf(w, "%d review(s), %d comment(s) (%.1f per review), %d suggestion(s)\n",
 		s.Reviews, s.Comments, s.CommentsPerReview, s.Suggestions)
-	fmt.Printf("%d review(s) had nothing to say, %d comment(s) were resolved\n", s.Silent, s.Resolved)
-	fmt.Printf("%d file(s) reviewed, +%d -%d\n", s.Files, s.Additions, s.Deletions)
+	fmt.Fprintf(w, "%d approved, %d commented, %d changes requested\n",
+		v.Approved, v.Commented, v.ChangesRequested)
+	fmt.Fprintf(w, "%d review(s) had nothing to say, %d comment(s) were resolved\n", s.Silent, s.Resolved)
+	fmt.Fprintf(w, "%d file(s) reviewed, +%d -%d\n", s.Files, s.Additions, s.Deletions)
 	if s.MedianWait > 0 {
-		fmt.Printf("median wait from diff to review: %s\n", shortDuration(s.MedianWait))
+		fmt.Fprintf(w, "median wait from diff to review: %s\n", shortDuration(s.MedianWait))
 	}
-	printTally("most commented", s.Paths)
-	printTally("by kind of file", s.Extensions)
-	printTally("by author", s.Authors)
+	printTally(w, "most commented", s.Paths)
+	printTally(w, "by kind of file", s.Extensions)
+	printTally(w, "by author", s.Authors)
 }
 
-func printTally(title string, counts []history.Count) {
+func printTally(w io.Writer, title string, counts []history.Count) {
 	if len(counts) == 0 {
 		return
 	}
 	if reviewsTop > 0 && len(counts) > reviewsTop {
 		counts = counts[:reviewsTop]
 	}
-	fmt.Printf("%s:\n", title)
+	fmt.Fprintf(w, "%s:\n", title)
 	for _, c := range counts {
-		fmt.Printf("  %-40s %d\n", c.Key, c.Count)
+		fmt.Fprintf(w, "  %-40s %d\n", c.Key, c.Count)
 	}
 }
 

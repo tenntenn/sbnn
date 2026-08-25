@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tenntenn/sbnn/internal/history"
+	"github.com/tenntenn/sbnn/internal/model"
 )
 
 // stream is two comments with everything the text columns draw from.
@@ -75,5 +76,55 @@ func TestCommentStreamJSONLIsOneObjectPerLine(t *testing.T) {
 				t.Errorf("line lacks %q: %s", key, line)
 			}
 		}
+	}
+}
+
+// reviewed is three reviews, one of each verdict, plus one written before
+// the verdict was recorded at all.
+func reviewed() []history.Record {
+	at := func(day int) time.Time {
+		return time.Date(2026, 8, day, 10, 0, 0, 0, time.Local)
+	}
+	return []history.Record{
+		{Group: "api", ReviewedAt: at(15), Verdict: model.VerdictApproved, Files: 2, Additions: 10, Deletions: 1},
+		{Group: "web", ReviewedAt: at(16), Verdict: model.VerdictChangesRequested, Files: 1, Additions: 3, Deletions: 3},
+		{Group: "cli", ReviewedAt: at(17), Verdict: model.VerdictCommented, Files: 1, Additions: 1, Deletions: 0},
+		{Group: "old", ReviewedAt: at(18), Files: 1, Additions: 1, Deletions: 0},
+	}
+}
+
+// The verdict is the one thing a listing is read for: whether the change
+// was approved, remarked on or stopped. Counting comments does not answer
+// it, so every line has to carry it.
+func TestReviewLinesShowTheVerdict(t *testing.T) {
+	var buf bytes.Buffer
+	if err := printReviews(&buf, reviewed()); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("got %d line(s) for 4 reviews:\n%s", len(lines), buf.String())
+	}
+	// An unset verdict reads as "commented", the default the model and the
+	// API already apply, so an older log still says something.
+	want := []string{"approved", "changes requested", "commented", "commented"}
+	for i, line := range lines {
+		if !strings.Contains(line, want[i]) {
+			t.Errorf("line %d does not say %q: %q", i+1, want[i], line)
+		}
+	}
+}
+
+// --stats has to answer the same question for the pile: how many went
+// through, how many were only remarked on, how many were stopped.
+func TestStatsCountTheVerdicts(t *testing.T) {
+	records := reviewed()
+	if got := (verdictTally{Approved: 1, Commented: 2, ChangesRequested: 1}); got != verdicts(records) {
+		t.Errorf("verdicts() = %+v, want %+v", verdicts(records), got)
+	}
+	var buf bytes.Buffer
+	printStats(&buf, history.Summarize(records), verdicts(records))
+	if want := "1 approved, 2 commented, 1 changes requested\n"; !strings.Contains(buf.String(), want) {
+		t.Errorf("--stats does not tally the verdicts:\nwant a line %q\ngot\n%s", want, buf.String())
 	}
 }
