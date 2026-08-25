@@ -587,21 +587,38 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	if req.EndLine < req.StartLine {
 		req.EndLine = req.StartLine
 	}
-	if req.FileID == "" {
+	// Which file the comment is on. Both shapes of the request end up
+	// here: the page sends diffId and fileId, while a client that only
+	// knows the path - an agent on the command line - lets the server
+	// resolve it against the newest diff. The stored range is measured
+	// against that file, so the file has to be found for both shapes and
+	// not, as it once was, only for the path one.
+	var f *model.File
+	byPath := req.FileID == ""
+	if byPath {
 		if req.Path == "" {
 			http.Error(w, "a comment needs a fileId or a path", http.StatusBadRequest)
 			return
 		}
-		d, f, found := s.store.FindFileByPath(name, req.DiffID, req.Path)
-		if !found {
+		d, found, ok := s.store.FindFileByPath(name, req.DiffID, req.Path)
+		if !ok {
 			http.Error(w, fmt.Sprintf("no diff in group %q contains %s", name, req.Path), http.StatusNotFound)
 			return
 		}
+		f = found
 		req.DiffID, req.FileID = d.ID, f.ID
+	} else {
+		// A fileId the store cannot place is left to AddComment to
+		// refuse. There is no file to measure the range against here, so
+		// the request goes on exactly as it did before.
+		_, f, _ = s.store.FileContext(name, req.DiffID, req.FileID)
+	}
+
+	if f != nil {
 		if req.Snippet == "" {
 			req.Snippet = diff.Snippet(f, req.Side, req.StartLine, req.EndLine)
 		}
-		if req.Snippet == "" {
+		if byPath && req.Snippet == "" {
 			http.Error(w, fmt.Sprintf("%s has no line %s in this diff", req.Path, lineSpec(req.StartLine, req.EndLine)),
 				http.StatusBadRequest)
 			return
