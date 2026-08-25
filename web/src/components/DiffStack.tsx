@@ -49,6 +49,22 @@ interface Props {
 // up into this band.
 const ACTIVE_BAND = 0.7
 
+/** resolveFolded settles whether a file is shown folded.
+ *
+ * The server may fold a file on its own, and that default steps aside when
+ * the file carries comments - an automatic fold must never hide one. An
+ * override is the reader's own choice, made on this page with the header
+ * button or `f`, and it wins outright: a reviewer who is done with a long
+ * generated file gets to put it away even after commenting on it. */
+export function resolveFolded(
+  override: boolean | undefined,
+  senderFolded: boolean,
+  hasComments: boolean,
+): boolean {
+  if (override !== undefined) return override
+  return senderFolded && !hasComments
+}
+
 function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n))
 }
@@ -223,7 +239,7 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
           {d.files.map((file) => {
             const key = sectionKey(d.id, file.id)
             const fileComments = commentsByKey.get(key) ?? []
-            const folded = (foldOverrides.get(key) ?? Boolean(file.folded)) && fileComments.length === 0
+            const folded = resolveFolded(foldOverrides.get(key), Boolean(file.folded), fileComments.length > 0)
             const viewMode = viewModeOverrides.get(key) ?? viewModeDefault ?? file.viewMode
             return (
               <div
