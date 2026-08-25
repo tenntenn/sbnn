@@ -184,3 +184,53 @@ func TestHookRemoveRefusesToBeMixedWithRegistration(t *testing.T) {
 		})
 	}
 }
+
+// "sbnn hook --remove $HOOK_ID" with HOOK_ID unset used to reach runHook's
+// switch as hookRemove == "", which is what an absent --remove looks like
+// too, so the run fell through to the default branch: the hook list went to
+// stdout, the exit code was 0, and the hook the user meant to drop was still
+// there. Which branch a run takes has to be decided by the flags that were
+// given, not by the values they carry, and an empty value has to be refused
+// rather than quietly turned into a different command.
+func TestHookActionForDecidesByFlagsNotValues(t *testing.T) {
+	tests := map[string]struct {
+		args    []string
+		want    hookAction
+		wantErr bool
+	}{
+		"no flags lists":                {args: nil, want: hookList},
+		"remove with an id":             {args: []string{"--remove", "h2"}, want: hookRemoveOne},
+		"remove with an empty id":       {args: []string{"--remove", ""}, wantErr: true},
+		"remove with an empty id =form": {args: []string{"--remove="}, wantErr: true},
+		"clear":                         {args: []string{"--clear"}, want: hookClearAll},
+		"a command registers":           {args: []string{"--on-review", "echo hi"}, want: hookAdd},
+		"a url registers":               {args: []string{"--on-review-url", "http://localhost:9000/r"}, want: hookAdd},
+		"a command and a url register":  {args: []string{"--on-review", "echo hi", "--on-review-url", "http://localhost:9000/r"}, want: hookAdd},
+		"an empty command is refused":   {args: []string{"--on-review", ""}, wantErr: true},
+		"an empty url is refused":       {args: []string{"--on-review-url", ""}, wantErr: true},
+		"an empty half is still a hook": {args: []string{"--on-review", "echo hi", "--on-review-url", ""}, want: hookAdd},
+		"an empty half, the other way":  {args: []string{"--on-review", "", "--on-review-url", "http://localhost:9000/r"}, want: hookAdd},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := validateHookFlags(t, tt.args); err != nil {
+				t.Fatalf("sbnn hook %s: %v", strings.Join(tt.args, " "), err)
+			}
+			got, err := hookActionFor(hookCmd)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("sbnn hook %s was accepted as action %d, want an error",
+						strings.Join(tt.args, " "), got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("sbnn hook %s: %v", strings.Join(tt.args, " "), err)
+			}
+			if got != tt.want {
+				t.Errorf("action = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}

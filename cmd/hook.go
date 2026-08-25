@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -73,8 +74,53 @@ func init() {
 	hookCmd.MarkFlagsMutuallyExclusive("remove", "on-review-url")
 }
 
+// hookAction is what a run of "sbnn hook" turns out to be.
+type hookAction int
+
+const (
+	hookList hookAction = iota
+	hookRemoveOne
+	hookClearAll
+	hookAdd
+)
+
+// hookActionFor reads the flags rather than the values they hold, because a
+// flag that was given an empty value - "sbnn hook --remove $HOOK_ID" with
+// HOOK_ID unset is the way it happens - is indistinguishable from an absent
+// flag by value alone. Deciding by value sent that run down the default
+// branch, so it printed the hook list and exited 0 while the user believed a
+// hook had been removed. An empty value is a mistake worth saying out loud.
+func hookActionFor(cmd *cobra.Command) (hookAction, error) {
+	fs := cmd.Flags()
+	switch {
+	case fs.Changed("remove"):
+		if hookRemove == "" {
+			return hookList, errors.New("--remove needs a hook ID: sbnn hook lists them")
+		}
+		return hookRemoveOne, nil
+	case hookClear:
+		return hookClearAll, nil
+	// A hook may carry a command, a URL, or both, so emptiness is only a
+	// mistake when everything that was given is empty.
+	case fs.Changed("on-review") || fs.Changed("on-review-url"):
+		if hookCommand == "" && hookURL == "" {
+			return hookList, errors.New("--on-review and --on-review-url need something to run")
+		}
+		return hookAdd, nil
+	default:
+		return hookList, nil
+	}
+}
+
 func runHook(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
+	// The flags are settled before the server is contacted so that a
+	// mistyped command is answered by the mistake, not by whether a server
+	// happens to be running.
+	action, err := hookActionFor(cmd)
+	if err != nil {
+		return err
+	}
 	group, err := groupName(target)
 	if err != nil {
 		return err
@@ -84,8 +130,8 @@ func runHook(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("no sbnn server found on %s", c.Addr)
 	}
 
-	switch {
-	case hookRemove != "":
+	switch action {
+	case hookRemoveOne:
 		removed, err := c.DeleteHook(ctx, group, hookRemove)
 		if err != nil {
 			return err
@@ -98,14 +144,14 @@ func runHook(cmd *cobra.Command, _ []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "sbnn: removed hook %q from group %q\n", hookRemove, group)
 		return nil
-	case hookClear:
+	case hookClearAll:
 		removed, err := c.DeleteHooks(ctx, group)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "sbnn: removed %d hook(s) from group %q\n", removed, group)
 		return nil
-	case hookCommand != "" || hookURL != "":
+	case hookAdd:
 		added, err := c.AddHook(ctx, group, model.Hook{Command: hookCommand, URL: hookURL})
 		if err != nil {
 			return err
