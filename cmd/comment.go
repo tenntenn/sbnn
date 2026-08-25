@@ -320,7 +320,7 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 }
 
 func normalizeSide(side string) (string, error) {
-	switch side {
+	switch strings.ToLower(strings.TrimSpace(side)) {
 	case "", "new":
 		return "new", nil
 	case "old":

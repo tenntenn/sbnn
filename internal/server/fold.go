@@ -92,29 +92,43 @@ func matchPath(pattern, p string) bool {
 	return ok
 }
 
-// matchDoubleStar handles the one pattern path.Match cannot: "**" for any
-// number of directories.
+// matchDoubleStar handles the one thing path.Match cannot: "**", standing
+// for any run of directories - anywhere in the pattern, as many times as the
+// sender cares to write it. The pattern and the path are cut into segments
+// and walked together, because "**" is about whole directory steps and
+// path.Match cannot see a "/" at all.
 func matchDoubleStar(pattern, p string) bool {
-	prefix, suffix, _ := strings.Cut(pattern, "**")
-	if !strings.HasPrefix(p, prefix) {
-		return false
-	}
-	rest := strings.TrimPrefix(p, prefix)
-	suffix = strings.TrimPrefix(suffix, "/")
-	if suffix == "" {
-		return true
-	}
-	// The suffix may match at any depth below the prefix.
-	for {
-		if ok, _ := path.Match(suffix, rest); ok {
-			return true
-		}
-		_, after, found := strings.Cut(rest, "/")
-		if !found {
+	return matchSegments(strings.Split(pattern, "/"), strings.Split(p, "/"))
+}
+
+// matchSegments matches path segments against pattern segments. A pattern
+// segment of exactly "**" stands for any number of path segments, none
+// included - except as the last segment of the pattern, where "dir/**" means
+// what is inside dir and so wants at least one. Every other segment is
+// path.Match against a single segment, so "*" stops at a "/" the way it
+// always did.
+func matchSegments(pattern, p []string) bool {
+	for len(pattern) > 0 {
+		if pattern[0] == "**" {
+			if len(pattern) == 1 {
+				return len(p) > 0
+			}
+			for i := 0; i <= len(p); i++ {
+				if matchSegments(pattern[1:], p[i:]) {
+					return true
+				}
+			}
 			return false
 		}
-		rest = after
+		if len(p) == 0 {
+			return false
+		}
+		if ok, _ := path.Match(pattern[0], p[0]); !ok {
+			return false
+		}
+		pattern, p = pattern[1:], p[1:]
 	}
+	return len(p) == 0
 }
 
 func shorten(s string, n int) string {
