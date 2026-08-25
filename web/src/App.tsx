@@ -13,7 +13,7 @@ import { PreviewStack } from './components/PreviewStack'
 import { Sidebar } from './components/Sidebar'
 import { clampRatio, SplitPane, SPLIT_DEFAULT } from './components/SplitPane'
 import { useNarrowLayout } from './useMediaQuery'
-import { plainKey, shortcuts, typingInto } from './shortcuts'
+import { plainKey, shortcuts, stepToComment, typingInto } from './shortcuts'
 import { applyTheme, storedTheme, type Theme } from './theme'
 import { sectionKey } from './sectionKey'
 
@@ -66,6 +66,9 @@ export function App() {
   // touch the same path as their Nth file share one.
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const [foldOverrides, setFoldOverrides] = useState<Map<string, boolean>>(() => new Map())
+  // Where `n` / `p` stand: the comment last stepped to, which is a position
+  // of its own and cannot be read back off the file being shown.
+  const [currentCommentId, setCurrentCommentId] = useState<string | null>(null)
   const [viewModeOverrides, setViewModeOverrides] = useState<Map<string, ViewMode>>(() => new Map())
   // viewModeDefault is every file's view mode until its own toggle says
   // otherwise; null respects each file's own server-picked default (added
@@ -301,20 +304,25 @@ export function App() {
   // in another file, and going there is the point. Every file's comments
   // are on the page at once now, so landing on the right one is a direct
   // scrollIntoView rather than a guess at "the first .comment on screen".
+  //
+  // Where the tour stands is the comment it last visited, not the file:
+  // deriving it from the active file made every comment after the second in
+  // a file unreachable, because arriving at the second one left the reader
+  // in the same file the search started from.
   const stepComment = useCallback(
     (by: number) => {
-      const open = comments.filter((c) => !c.resolved)
-      if (open.length === 0) return
-      const at = activeKey ? open.findIndex((c) => sectionKey(c.diffId, c.fileId) === activeKey) : -1
-      const index = at < 0 ? (by > 0 ? 0 : open.length - 1) : at + by
-      const target = open[(index + open.length) % open.length]
+      const stops = comments
+        .filter((c) => !c.resolved)
+        .map((c) => ({ id: c.id, key: sectionKey(c.diffId, c.fileId) }))
+      const target = stepToComment(stops, currentCommentId, activeKey, by)
       if (!target) return
-      goToKey(sectionKey(target.diffId, target.fileId))
+      setCurrentCommentId(target.id)
+      goToKey(target.key)
       window.setTimeout(() => {
         document.getElementById(`comment-${target.id}`)?.scrollIntoView({ block: 'center' })
       }, 50)
     },
-    [comments, activeKey, goToKey],
+    [comments, currentCommentId, activeKey, goToKey],
   )
 
   // One place where every key is answered. Each is a single unmodified
