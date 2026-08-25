@@ -336,6 +336,7 @@ func (p *parser) readHunk() {
 func (p *parser) readCombinedHunk() {
 	f := p.file()
 	h := &model.Hunk{Header: p.lines[p.i]}
+	parents := combinedParents(h.Header)
 	p.i++
 	for p.i < len(p.lines) {
 		l := p.lines[p.i]
@@ -346,22 +347,55 @@ func (p *parser) readCombinedHunk() {
 			p.i++
 			continue
 		}
-		kind := model.LineContext
-		content := l
-		if l != "" {
-			switch l[0] {
-			case '+':
-				kind, content = model.LineAdd, l[1:]
-			case '-':
-				kind, content = model.LineDelete, l[1:]
-			case ' ':
-				content = l[1:]
-			}
-		}
+		kind, content := splitCombinedLine(l, parents)
 		h.Lines = append(h.Lines, model.Line{Kind: kind, Content: content})
 		p.i++
 	}
 	f.Hunks = append(f.Hunks, h)
+}
+
+// combinedParents returns how many marker columns the body lines of a combined
+// hunk carry. git writes one more @ than the merge has parents, so the usual
+// "@@@" header introduces two columns and an octopus merge introduces more.
+func combinedParents(header string) int {
+	n := 0
+	for n < len(header) && header[n] == '@' {
+		n++
+	}
+	if n < 2 {
+		return 1
+	}
+	return n - 1
+}
+
+// splitCombinedLine splits one body line of a combined hunk into its marker
+// columns and the content behind them.
+//
+// A combined diff carries one column per parent, so a line added relative to
+// the second parent is written " +y": a space, then a plus. Looking at the
+// first character alone read that as a context line whose content began with a
+// plus, which both mis-typed the line and left every other line carrying a
+// spurious leading space - and since finalize counts the kinds, the file then
+// reported addition and deletion totals that did not match what was on screen.
+//
+// A line is a deletion when any column says it left that parent, and an
+// addition when any column says it arrived from one; only a line unchanged
+// against every parent is context. Columns are consumed while they look like
+// markers and never more than there are parents, so a line that is not a body
+// line at all keeps its text instead of losing its first characters.
+func splitCombinedLine(l string, parents int) (model.LineKind, string) {
+	n := 0
+	for n < parents && n < len(l) && (l[n] == ' ' || l[n] == '+' || l[n] == '-') {
+		n++
+	}
+	markers, content := l[:n], l[n:]
+	switch {
+	case strings.ContainsRune(markers, '-'):
+		return model.LineDelete, content
+	case strings.ContainsRune(markers, '+'):
+		return model.LineAdd, content
+	}
+	return model.LineContext, content
 }
 
 type hunkHeader = model.Hunk
@@ -395,6 +429,20 @@ func parseHunkHeader(line string) (*hunkHeader, bool) {
 	}, true
 }
 
+// parseRange parses one side of a hunk header: "-1,5", or "+3" for a range of
+// a single line. sign is the character the side must begin with.
+//
+// Both numbers have to be plain digits. strconv.Atoi would otherwise read the
+// minus of "@@ --1,2 +1,2 @@" as part of the number and hand back a start of
+// -1, which numbers the hunk's lines from -1 upwards: Line.OldNumber is
+// documented as 1-based, or 0 when the line is not on that side, so 0 would
+// come to mean two different things inside one hunk, and the rows numbered 0
+// or below render with a blank gutter and cannot be commented on. A negative
+// count is no better - it makes the reading loop's "oldLeft <= 0" true
+// straight away, so the hunk keeps its header and swallows no body at all.
+//
+// A start of 0 is legitimate and still parses: "@@ -0,0 +1,5 @@" is how git
+// writes an added file.
 func parseRange(s string, sign byte) (start, count int, ok bool) {
 	if len(s) == 0 || s[0] != sign {
 		return 0, 0, false
@@ -402,40 +450,37 @@ func parseRange(s string, sign byte) (start, count int, ok bool) {
 	s = s[1:]
 	count = 1
 	if i := strings.IndexByte(s, ','); i >= 0 {
-		n, err := strconv.Atoi(s[i+1:])
-		if err != nil {
+		n, valid := parseCount(s[i+1:])
+		if !valid {
 			return 0, 0, false
 		}
 		count = n
 		s = s[:i]
 	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
+	n, valid := parseCount(s)
+	if !valid {
 		return 0, 0, false
 	}
 	return n, count, true
 }
 
-// UnnamedPath is the path given to a file entry the diff never named: a bare
-// hunk with no "--- / +++" pair and no "diff --git" header, which is what a
-// truncated paste or a hand-assembled patch looks like. Without it such an
-// entry carries the empty string as its path, which renders as a nameless row
-// the reviewer cannot identify, hashes to the same file ID for every unnamed
-// file, and is matched by any path lookup that happens to be handed "".
-const UnnamedPath = "(unnamed)"
-
-// nameIfUnnamed gives f a visible placeholder path when the diff identified
-// neither side of it. It runs after the status has been decided, so that the
-// placeholder never turns an unnamed entry into an addition or a deletion.
-func nameIfUnnamed(f *model.File) {
-	if f.OldPath != "" || f.NewPath != "" {
-		return
+// parseCount parses a non-negative decimal number written without a sign of
+// its own. It refuses "-1" and "+1" alike: the only sign a hunk header carries
+// is the one that says which side the range belongs to.
+func parseCount(s string) (int, bool) {
+	if s == "" {
+		return 0, false
 	}
-	if f.Status == model.StatusDeleted {
-		f.OldPath = UnnamedPath
-		return
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
 	}
-	f.NewPath = UnnamedPath
+	n, err := strconv.Atoi(s)
+	if err != nil { // more digits than an int can hold
+		return 0, false
+	}
+	return n, true
 }
 
 // finalize fills in the derived fields of a parsed file.
@@ -572,4 +617,26 @@ func unquotePath(s string) string {
 		return unquoted
 	}
 	return s
+}
+
+// UnnamedPath is the path given to a file entry the diff never named: a bare
+// hunk with no "--- / +++" pair and no "diff --git" header, which is what a
+// truncated paste or a hand-assembled patch looks like. Without it such an
+// entry carries the empty string as its path, which renders as a nameless row
+// the reviewer cannot identify, hashes to the same file ID for every unnamed
+// file, and is matched by any path lookup that happens to be handed "".
+const UnnamedPath = "(unnamed)"
+
+// nameIfUnnamed gives f a visible placeholder path when the diff identified
+// neither side of it. It runs after the status has been decided, so that the
+// placeholder never turns an unnamed entry into an addition or a deletion.
+func nameIfUnnamed(f *model.File) {
+	if f.OldPath != "" || f.NewPath != "" {
+		return
+	}
+	if f.Status == model.StatusDeleted {
+		f.OldPath = UnnamedPath
+		return
+	}
+	f.NewPath = UnnamedPath
 }
