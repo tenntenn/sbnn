@@ -58,6 +58,12 @@ export function App() {
   const [comments, setComments] = useState<Comment[]>([])
   const [reviewedAt, setReviewedAt] = useState<string | null>(null)
   const [reviewVerdict, setReviewVerdict] = useState<Verdict | null>(null)
+  // roundReviewed is whether the verdict still covers what is on the page.
+  // A live page reads that from the status summary; an exported one has no
+  // server to ask, so it is frozen into the payload - otherwise a page
+  // exported after a diff arrived would show the previous round's Approved
+  // against a diff nobody has looked at.
+  const [roundReviewed, setRoundReviewed] = useState<boolean | null>(null)
   const [status, setStatus] = useState<Status | null>(null)
   // activeKey is the file the reader is currently looking at: on a phone
   // the one file shown, on a wide screen whichever the diff pane has been
@@ -147,6 +153,7 @@ export function App() {
       setComments(data.comments)
       setReviewedAt(data.reviewedAt ?? null)
       setReviewVerdict(data.reviewVerdict ?? null)
+      setRoundReviewed(data.reviewed ?? null)
       setStatus(data.status)
       setError(null)
     } catch (err) {
@@ -239,7 +246,7 @@ export function App() {
   // The review is what anything waiting on sbnn is waiting for, so saying "I
   // am done" is an explicit act rather than a guess from the last comment.
   const summary = status?.groups.find((g) => g.name === group)
-  const reviewed = summary ? summary.reviewed : reviewedAt !== null
+  const reviewed = summary ? summary.reviewed : (roundReviewed ?? reviewedAt !== null)
   const hooks = summary?.hooks ?? 0
 
   const submitReview = async (verdict: Verdict) => {

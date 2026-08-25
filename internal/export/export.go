@@ -69,6 +69,14 @@ type Payload struct {
 	ReviewedAt    time.Time     `json:"reviewedAt,omitzero"`
 	ReviewNote    string        `json:"reviewNote,omitempty"`
 	ReviewVerdict model.Verdict `json:"reviewVerdict,omitempty"`
+
+	// Reviewed is whether that verdict still covers the diffs on the page,
+	// as Group.Reviewed reports it: a diff that arrived after the review
+	// has not been reviewed, and the live page says so because the status
+	// summary tells it. An exported page has no status to ask, so a page
+	// exported one diff after an approval would otherwise show that
+	// approval against a change nobody has looked at.
+	Reviewed bool `json:"reviewed"`
 }
 
 // Build freezes a group into a payload. Markdown, notebook and image files
@@ -89,6 +97,7 @@ func Build(g *model.Group, saVersion string, now time.Time) *Payload {
 		ReviewedAt:    g.ReviewedAt,
 		ReviewNote:    g.ReviewNote,
 		ReviewVerdict: g.ReviewVerdict,
+		Reviewed:      g.Reviewed(),
 	}
 	if p.Comments == nil {
 		p.Comments = []*model.Comment{}

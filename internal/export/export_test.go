@@ -492,6 +492,82 @@ func TestRenderOmitsAnUnsubmittedReview(t *testing.T) {
 	}
 }
 
+// TestBuildSaysWhetherTheVerdictStillCoversTheDiffs pins the flag the page
+// needs to tell a current verdict from a stale one. A live page reads that
+// from the status summary; an exported page has no server to ask, so a page
+// exported one diff after an approval would otherwise show Approved against
+// a change nobody has looked at.
+func TestBuildSaysWhetherTheVerdictStillCoversTheDiffs(t *testing.T) {
+	reviewedAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	tests := []struct {
+		name string
+		set  func(*model.Group)
+		want bool
+	}{
+		{
+			name: "approved, and nothing has arrived since",
+			set: func(g *model.Group) {
+				g.ReviewedAt = reviewedAt
+				g.ReviewVerdict = model.VerdictApproved
+				g.Diffs[0].CreatedAt = reviewedAt.Add(-time.Hour)
+			},
+			want: true,
+		},
+		{
+			name: "approved, then another diff arrived",
+			set: func(g *model.Group) {
+				g.ReviewedAt = reviewedAt
+				g.ReviewVerdict = model.VerdictApproved
+				g.Diffs[0].CreatedAt = reviewedAt.Add(time.Hour)
+			},
+			want: false,
+		},
+		{
+			name: "never submitted",
+			set:  func(*model.Group) {},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := group(t, "")
+			tt.set(g)
+			if got := export.Build(g, "test", time.Now()).Reviewed; got != tt.want {
+				t.Errorf("Reviewed = %v, want %v (Group.Reviewed() = %v)", got, tt.want, g.Reviewed())
+			}
+		})
+	}
+}
+
+// The flag has to reach the page under a name the page reads, and it is a
+// plain false rather than an absent key: absent is what a page written by an
+// older sbnn looks like, and those two do not mean the same thing.
+func TestRenderEmbedsWhetherTheReviewIsCurrent(t *testing.T) {
+	g := group(t, "")
+	g.ReviewedAt = time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	g.ReviewVerdict = model.VerdictApproved
+	g.Diffs[0].CreatedAt = g.ReviewedAt.Add(time.Hour)
+
+	page, err := export.Render(export.Build(g, "test", time.Now()), assets(), export.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payloadJSON(t, page), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := decoded["reviewed"]
+	if !ok {
+		t.Fatal("the payload has no reviewed key, so the page cannot tell a stale verdict from a current one")
+	}
+	if got != false {
+		t.Errorf("reviewed = %v, want false: a diff arrived after the approval", got)
+	}
+	if decoded["reviewVerdict"] != "approved" {
+		t.Errorf("reviewVerdict = %v, want approved: the review still happened", decoded["reviewVerdict"])
+	}
+}
+
 // payloadJSON pulls window.__SBNN_DATA__ back out of a rendered page.
 func payloadJSON(t *testing.T, page string) []byte {
 	t.Helper()
