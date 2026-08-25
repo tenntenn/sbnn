@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -65,6 +68,12 @@ Many at once, for a whole self review:
   ]
   EOF
 
+Each entry carries its own text, so --message, --suggest and --suggest-file
+are refused next to --json: the array is already on stdin, and --suggest -
+would be reading the same stdin the array comes from. Of the rest, --author,
+--diff and --question act as defaults for entries that leave "author",
+"diffId" or "question" out; the side is taken from the entry alone.
+
 Comments made this way are read back exactly like the ones written in the
 browser, with ` + "`sbnn comments`" + `.`,
 	Args:         cobra.MaximumNArgs(1),
@@ -88,6 +97,14 @@ func init() {
 	f.StringVar(&commentDiffID, "diff", "", "Diff ID (default: the newest diff carrying the path)")
 	f.BoolVar(&commentBulk, "json", false, "Read a JSON array of comments from stdin")
 	f.BoolVar(&commentJSONOut, "json-output", false, "Print the stored comments as JSON")
+
+	// --json takes every comment from stdin, so nothing else may read stdin or
+	// claim to hold the one comment's text. Marked in pairs rather than as one
+	// group of four, because --message and --suggest belong together: a
+	// suggestion usually comes with a sentence saying why.
+	commentCmd.MarkFlagsMutuallyExclusive("json", "message")
+	commentCmd.MarkFlagsMutuallyExclusive("json", "suggest")
+	commentCmd.MarkFlagsMutuallyExclusive("json", "suggest-file")
 }
 
 func runComment(cmd *cobra.Command, args []string) error {
@@ -120,22 +137,70 @@ func runComment(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no comment to add")
 	}
 
-	stored := make([]*model.Comment, 0, len(requests))
-	for _, req := range requests {
-		added, err := c.AddComment(ctx, group, req)
-		if err != nil {
-			return err
-		}
-		stored = append(stored, added)
-		if !commentJSONOut {
-			fmt.Fprintf(os.Stderr, "sbnn: %s on %s%s\n", added.ID, added.Path, lineRangeOf(added))
-		}
+	if err := addComments(ctx, c, group, requests, os.Stdout, os.Stderr); err != nil {
+		return err
 	}
 	if commentJSONOut {
-		return jsonEncoder(os.Stdout).Encode(stored)
+		return nil
 	}
 	fmt.Println(server.GroupURL(c.BaseURL(), group))
 	return nil
+}
+
+// commentAdder is the one thing addComments needs from the client.
+type commentAdder interface {
+	AddComment(ctx context.Context, group string, req server.AddCommentRequest) (*model.Comment, error)
+}
+
+// addComments stores the requests one at a time and stops at the first
+// failure. The ones before it are already on the server and stay there, so
+// they are reported before the error goes up: with --json-output nothing has
+// been printed yet, and a caller that saw only the error would re-run the
+// same input and store them a second time.
+func addComments(ctx context.Context, adder commentAdder, group string, requests []server.AddCommentRequest, out, errOut io.Writer) error {
+	stored := make([]*model.Comment, 0, len(requests))
+	for i, req := range requests {
+		added, err := adder.AddComment(ctx, group, req)
+		if err != nil {
+			if len(requests) > 1 {
+				err = fmt.Errorf("comment %d of %d (%s%s): %w",
+					i+1, len(requests), req.Path, requestLines(req), err)
+			}
+			return reportStored(out, errOut, stored, len(requests), err)
+		}
+		stored = append(stored, added)
+		if !commentJSONOut {
+			fmt.Fprintf(errOut, "sbnn: %s on %s%s\n", added.ID, added.Path, lineRangeOf(added))
+		}
+	}
+	if commentJSONOut {
+		return jsonEncoder(out).Encode(stored)
+	}
+	return nil
+}
+
+// reportStored says what survived a run that failed part-way through, so that
+// the rest of it can be sent again without duplicating what is there.
+func reportStored(out, errOut io.Writer, stored []*model.Comment, total int, cause error) error {
+	if len(stored) == 0 {
+		return cause
+	}
+	if commentJSONOut {
+		if err := jsonEncoder(out).Encode(stored); err != nil {
+			return errors.Join(cause, err)
+		}
+	}
+	fmt.Fprintf(errOut,
+		"sbnn: %d of %d comments were stored before this and are still there; send the rest without the first %d entries, or they will be added twice\n",
+		len(stored), total, len(stored))
+	return cause
+}
+
+func requestLines(req server.AddCommentRequest) string {
+	if req.EndLine > req.StartLine {
+		return fmt.Sprintf(":%d-%d", req.StartLine, req.EndLine)
+	}
+	return fmt.Sprintf(":%d", req.StartLine)
 }
 
 func lineRangeOf(c *model.Comment) string {
@@ -206,9 +271,12 @@ type bulkComment struct {
 	Side       string    `json:"side"`
 	Body       string    `json:"body"`
 	Suggestion string    `json:"suggestion"`
-	Question   bool      `json:"question"`
-	Author     string    `json:"author"`
-	DiffID     string    `json:"diffId"`
+	// Question is a pointer so an entry that says "question": false keeps its
+	// false even when --question sets the default for the entries that leave
+	// the field out, the same way an empty "author" falls back to --author.
+	Question *bool  `json:"question"`
+	Author   string `json:"author"`
+	DiffID   string `json:"diffId"`
 }
 
 // flexLines accepts "12", "12-18" and 12 alike.
@@ -233,12 +301,39 @@ func (l *flexLines) UnmarshalJSON(b []byte) error {
 		l.Start, l.End = start, end
 		return nil
 	}
-	var n int
-	if err := json.Unmarshal(b, &n); err != nil {
+	var num json.Number
+	if err := json.Unmarshal(b, &num); err != nil {
 		return fmt.Errorf("line must be a number or a string like \"12-18\": %w", err)
+	}
+	n, err := lineFromNumber(num)
+	if err != nil {
+		return err
 	}
 	l.Start, l.End = n, n
 	return nil
+}
+
+// lineFromNumber reads a JSON number as a line number. JSON has a single
+// numeric type, so 12 and 12.0 are the same number and both name line 12;
+// generators that do arithmetic (jq, Python, anything in JavaScript) emit the
+// second spelling for whole numbers. Only a real fraction is refused.
+func lineFromNumber(num json.Number) (int, error) {
+	text := num.String()
+	if strings.ContainsAny(text, ".eE") {
+		f, err := num.Float64()
+		if err != nil {
+			return 0, fmt.Errorf("line %s is not a line number", text)
+		}
+		if f != math.Trunc(f) {
+			return 0, fmt.Errorf("line must be a whole number, not %s", text)
+		}
+		text = strconv.FormatFloat(f, 'f', -1, 64)
+	}
+	n, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("line %s is out of range for a line number", text)
+	}
+	return n, nil
 }
 
 func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
@@ -276,6 +371,10 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 		if diffID == "" {
 			diffID = commentDiffID
 		}
+		question := commentQuestion
+		if e.Question != nil {
+			question = *e.Question
+		}
 		requests = append(requests, server.AddCommentRequest{
 			DiffID:     diffID,
 			Path:       e.Path,
@@ -284,7 +383,7 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 			StartLine:  start,
 			EndLine:    end,
 			Body:       e.Body,
-			Question:   e.Question || commentQuestion,
+			Question:   question,
 			Suggestion: e.Suggestion,
 		})
 	}
@@ -292,7 +391,7 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 }
 
 func normalizeSide(side string) (string, error) {
-	switch side {
+	switch strings.ToLower(strings.TrimSpace(side)) {
 	case "", "new":
 		return "new", nil
 	case "old":
@@ -323,13 +422,31 @@ func parseLines(s string) (start, end int, err error) {
 	if m == nil {
 		return 0, 0, fmt.Errorf("%q is not a line or a line range", s)
 	}
-	start, _ = strconv.Atoi(m[1])
+	start, err = lineNumber(m[1])
+	if err != nil {
+		return 0, 0, err
+	}
 	end = start
 	if m[2] != "" {
-		end, _ = strconv.Atoi(m[2])
+		end, err = lineNumber(m[2])
+		if err != nil {
+			return 0, 0, err
+		}
 	}
 	if start <= 0 || end < start {
 		return 0, 0, fmt.Errorf("%q is not a line range", s)
 	}
 	return start, end, nil
+}
+
+// lineNumber converts one run of digits. The pattern lets through a number
+// too large to hold, which Atoi answers with both MaxInt and an error; taking
+// the value and dropping the error anchors the comment to a line no file will
+// ever have, and nothing downstream notices.
+func lineNumber(digits string) (int, error) {
+	n, err := strconv.Atoi(digits)
+	if err != nil {
+		return 0, fmt.Errorf("line %s is out of range for a line number", digits)
+	}
+	return n, nil
 }

@@ -932,6 +932,60 @@ func TestCrossOriginRequestsAreRefused(t *testing.T) {
 	}
 }
 
+// --dangerously-allow-remote-access binds sbnn somewhere other than loopback,
+// and the browser then reports the address the user actually typed. That
+// address is not opts.Bind and it is not loopback, so matching Origin against
+// either one refuses every write and leaves a read-only page behind a flag
+// that advertises a working one. What identifies the page in that setup is
+// the browser's own same-origin verdict, and failing that, the Host the
+// request was dialled at.
+func TestCrossOriginUnderRemoteBind(t *testing.T) {
+	_, srv := newTestServer(t, func(o *Options) {
+		o.Bind = "0.0.0.0"
+		o.Port = 6280
+		o.AllowRemote = true
+	})
+
+	const lan = "192.168.1.5:6280"
+	cases := []struct {
+		name    string
+		host    string
+		headers map[string]string
+		want    bool // refused as cross-origin
+	}{
+		{"the page the user typed, named by the browser", lan,
+			map[string]string{"Origin": "http://" + lan, "Sec-Fetch-Site": "same-origin"}, false},
+		{"the page the user typed, on a browser too old for Sec-Fetch-Site", lan,
+			map[string]string{"Origin": "http://" + lan}, false},
+		{"the address bar", lan,
+			map[string]string{"Sec-Fetch-Site": "none"}, false},
+		{"loopback still counts", "localhost:6280",
+			map[string]string{"Origin": "http://localhost:6280"}, false},
+		{"another site, named by the browser", lan,
+			map[string]string{"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}, true},
+		{"another site, as a simple request with no Sec-Fetch-Site", lan,
+			map[string]string{"Origin": "https://evil.example"}, true},
+		{"another port on the same machine", lan,
+			map[string]string{"Origin": "http://192.168.1.5:1"}, true},
+		{"a sandboxed page, which sends Origin: null", lan,
+			map[string]string{"Origin": "null"}, true},
+		{"the command line, which names no origin", lan, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/_/api/groups/default/review", strings.NewReader(`{}`))
+			r.Host = tc.host
+			for k, v := range tc.headers {
+				r.Header.Set(k, v)
+			}
+			reason, got := srv.crossOrigin(r)
+			if got != tc.want {
+				t.Errorf("crossOrigin() = %v (%q), want %v", got, reason, tc.want)
+			}
+		})
+	}
+}
+
 // A review submitted over the API is a review like any other: it wakes what
 // is waiting, and it is written into the log. That is what lets a reviewer
 // who is not a person - `sbnn submit` - end a round.
@@ -974,6 +1028,217 @@ func TestSubmitReviewWithoutABrowser(t *testing.T) {
 	// reviewer apart.
 	if got := history.Comments(records); len(got) != 1 || got[0].Who() != "code-review" {
 		t.Errorf("flattened = %+v", got)
+	}
+}
+
+// A fileId that names no file of the diff anchors the comment to nothing:
+// the page keys its sections on diffId:fileId, so the comment counted in
+// every "N open comment(s)" total was shown on no line at all.
+func TestHandleAddCommentRejectsUnknownFileID(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[0]
+	other := added.Diff.Files[1]
+
+	cases := []struct {
+		name   string
+		diffID string
+		fileID string
+		want   int
+	}{
+		{"a file of this diff", added.Diff.ID, file.ID, http.StatusOK},
+		{"another file of this diff", added.Diff.ID, other.ID, http.StatusOK},
+		{"a fileId of no file", added.Diff.ID, "bogus", http.StatusBadRequest},
+		{"an empty-looking but wrong fileId", added.Diff.ID, "f1-00000000", http.StatusBadRequest},
+		{"an unknown diffId is still refused", "nosuchdiff", file.ID, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var comment model.Comment
+			out := any(nil)
+			if tc.want == http.StatusOK {
+				out = &comment
+			}
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+				DiffID: tc.diffID, FileID: tc.fileID, Path: file.Path(), Side: "new",
+				StartLine: 1, EndLine: 1, Body: "hi",
+			}, out)
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+			}
+			if tc.want == http.StatusOK && comment.FileID != tc.fileID {
+				t.Errorf("stored fileId = %q, want %q", comment.FileID, tc.fileID)
+			}
+		})
+	}
+
+	// Every stored comment must name a file that really is in its diff,
+	// or the page and the comment count disagree for good.
+	var comments []*model.Comment
+	getJSON(t, ts.URL+"/_/api/groups/default/comments", &comments)
+	if len(comments) != 2 {
+		t.Errorf("stored %d comments, want 2", len(comments))
+	}
+	for _, c := range comments {
+		if _, _, ok := findFileOfDiff(added.Diff, c.FileID); !ok {
+			t.Errorf("stored comment anchored to no file of the diff: %+v", c)
+		}
+	}
+}
+
+// findFileOfDiff reports whether the diff has a file with this id.
+func findFileOfDiff(d *model.Diff, fileID string) (*model.Diff, *model.File, bool) {
+	for _, f := range d.Files {
+		if f.ID == fileID {
+			return d, f, true
+		}
+	}
+	return nil, nil, false
+}
+
+// A comment has to point at a line that can exist. The Line model uses
+// 1-based numbers with 0 meaning "not on this side", so a non-positive
+// startLine names nothing, and an endLine before the start is not a range.
+func TestHandleAddCommentRejectsNonPositiveLines(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[0]
+
+	cases := []struct {
+		name      string
+		startLine int
+		endLine   int
+		want      int
+		wantEnd   int // the stored endLine, checked when want is 200
+	}{
+		{"a negative start line", -5, -1, http.StatusBadRequest, 0},
+		{"line zero", 0, 0, http.StatusBadRequest, 0},
+		{"an end line before the start", 3, 2, http.StatusBadRequest, 0},
+		{"no end line at all means the one line", 2, 0, http.StatusOK, 2},
+		{"a proper range", 2, 3, http.StatusOK, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var comment model.Comment
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+				DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(), Side: "new",
+				StartLine: tc.startLine, EndLine: tc.endLine, Body: "hi",
+			}, nil)
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+			}
+			if tc.want != http.StatusOK {
+				return
+			}
+			// The accepted ones must also be stored with the range asked for.
+			resp = postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+				DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(), Side: "new",
+				StartLine: tc.startLine, EndLine: tc.endLine, Body: "hi",
+			}, &comment)
+			if comment.StartLine != tc.startLine || comment.EndLine != tc.wantEnd {
+				t.Errorf("stored range = %d-%d, want %d-%d",
+					comment.StartLine, comment.EndLine, tc.startLine, tc.wantEnd)
+			}
+		})
+	}
+
+	// Nothing that was refused may have reached the store.
+	var comments []*model.Comment
+	getJSON(t, ts.URL+"/_/api/groups/default/comments", &comments)
+	for _, c := range comments {
+		if c.StartLine < 1 || c.EndLine < c.StartLine {
+			t.Errorf("stored comment with an impossible range: %+v", c)
+		}
+	}
+}
+
+// The API used to fold every side that was not the literal "old" into
+// "new", so "OLD" attached the comment to the new side -- a different
+// file, on lines that mean something else -- and said 200. The CLI is
+// strict about the same field, so the two layers disagreed silently.
+func TestHandleAddCommentValidatesSide(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[0]
+
+	cases := []struct {
+		name     string
+		side     string
+		want     int
+		wantSide string // the side actually stored, checked when want is 200
+	}{
+		{"lower case new", "new", http.StatusOK, "new"},
+		{"lower case old", "old", http.StatusOK, "old"},
+		{"empty means new", "", http.StatusOK, "new"},
+		{"upper case old is old, not new", "OLD", http.StatusOK, "old"},
+		{"mixed case old", "Old", http.StatusOK, "old"},
+		{"padded old", "  old  ", http.StatusOK, "old"},
+		{"upper case new", "NEW", http.StatusOK, "new"},
+		{"a different word", "left", http.StatusBadRequest, ""},
+		{"a typo", "NEWW", http.StatusBadRequest, ""},
+		{"nonsense", "sideways", http.StatusBadRequest, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := AddCommentRequest{
+				DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(), Side: tc.side,
+				StartLine: 1, EndLine: 1, Body: "hi",
+			}
+			if tc.want != http.StatusOK {
+				resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", req, nil)
+				if resp.StatusCode != tc.want {
+					t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+				}
+				return
+			}
+			var comment model.Comment
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", req, &comment)
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+			}
+			// A 200 is not enough: the point of the bug was that the
+			// wrong side was stored while the status looked fine.
+			if comment.Side != tc.wantSide {
+				t.Errorf("stored side = %q, want %q", comment.Side, tc.wantSide)
+			}
+		})
+	}
+
+	// Nothing refused reached the store, and every stored side is canonical.
+	var comments []*model.Comment
+	getJSON(t, ts.URL+"/_/api/groups/default/comments", &comments)
+	if len(comments) != 7 {
+		t.Errorf("stored %d comments, want 7", len(comments))
+	}
+	for _, c := range comments {
+		if c.Side != "new" && c.Side != "old" {
+			t.Errorf("stored comment with a non-canonical side: %+v", c)
+		}
+	}
+}
+
+// A suggestion replaces lines of the new file, so it cannot sit on the
+// old side however that side was spelled. The check used to run before
+// the side was folded, so "OLD" slipped past it.
+func TestHandleAddCommentRejectsSuggestionOnFoldedOldSide(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[0]
+
+	for _, side := range []string{"old", "OLD", " Old "} {
+		t.Run(side, func(t *testing.T) {
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+				DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(), Side: side,
+				StartLine: 1, EndLine: 1, Body: "try this", Suggestion: "replacement",
+			}, nil)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %s, want 400", resp.Status)
+			}
+		})
 	}
 }
 
