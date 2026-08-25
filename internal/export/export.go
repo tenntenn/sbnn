@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -21,7 +23,13 @@ import (
 )
 
 // PayloadVersion is the schema version of the embedded data.
-const PayloadVersion = 1
+//
+// It is bumped when the absence of a field stops meaning what it used to.
+// Version 2 added the review fields: in a version 1 page an absent verdict
+// could equally mean "not reviewed" and "exported by a binary that did not
+// carry the verdict", and a reader has no way to tell those apart. From
+// version 2 on, an absent verdict means the review was not submitted.
+const PayloadVersion = 2
 
 // Preview is the Markdown or notebook JSON of one file, frozen at export
 // time.
@@ -49,6 +57,26 @@ type Payload struct {
 	Comments    []*model.Comment   `json:"comments"`
 	Previews    map[string]Preview `json:"previews"`
 	Images      map[string]Image   `json:"images"`
+
+	// ReviewedAt, ReviewNote and ReviewVerdict say how the review ended.
+	// Without them the page can only show the comments, and renders a
+	// submitted review as though it had never been submitted - no banner,
+	// no verdict on the button, and a prompt that tells an agent to address
+	// comments that in fact came with an approval.
+	//
+	// The names match model.Group, so a page reads a frozen review exactly
+	// the way it reads a live one.
+	ReviewedAt    time.Time     `json:"reviewedAt,omitzero"`
+	ReviewNote    string        `json:"reviewNote,omitempty"`
+	ReviewVerdict model.Verdict `json:"reviewVerdict,omitempty"`
+
+	// Reviewed is whether that verdict still covers the diffs on the page,
+	// as Group.Reviewed reports it: a diff that arrived after the review
+	// has not been reviewed, and the live page says so because the status
+	// summary tells it. An exported page has no status to ask, so a page
+	// exported one diff after an approval would otherwise show that
+	// approval against a change nobody has looked at.
+	Reviewed bool `json:"reviewed"`
 }
 
 // Build freezes a group into a payload. Markdown, notebook and image files
@@ -65,6 +93,11 @@ func Build(g *model.Group, saVersion string, now time.Time) *Payload {
 		Comments:    g.Comments,
 		Previews:    map[string]Preview{},
 		Images:      map[string]Image{},
+
+		ReviewedAt:    g.ReviewedAt,
+		ReviewNote:    g.ReviewNote,
+		ReviewVerdict: g.ReviewVerdict,
+		Reviewed:      g.Reviewed(),
 	}
 	if p.Comments == nil {
 		p.Comments = []*model.Comment{}
@@ -155,36 +188,147 @@ func Render(payload *Payload, assets fs.FS, opts Options) (string, error) {
 }
 
 // readAssets collects the stylesheet and the script Vite produced.
+//
+// index.html is the source of truth for what the page loads and in which
+// order: the file names are content hashed, and a directory listing says
+// nothing about which of them is the entry module. Only what index.html
+// references is inlined, and a build that emitted more than one script is
+// rejected - see requireSingleChunk.
 func readAssets(assets fs.FS) (css, js string, err error) {
-	entries, err := fs.ReadDir(assets, "assets")
+	index, err := fs.ReadFile(assets, "index.html")
 	if err != nil {
 		return "", "", fmt.Errorf("the sbnn UI is not built into this binary: %w", err)
 	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() {
-			names = append(names, e.Name())
-		}
+	cssRefs, jsRefs := assetRefs(string(index))
+	if len(jsRefs) == 0 {
+		return "", "", fmt.Errorf("no script found in the embedded UI")
 	}
-	sort.Strings(names)
+	if err := requireSingleChunk(assets, jsRefs); err != nil {
+		return "", "", err
+	}
 
-	var cssParts, jsParts []string
-	for _, name := range names {
-		b, err := fs.ReadFile(assets, "assets/"+name)
+	read := func(ref string) (string, error) {
+		name, err := assetPath(ref)
+		if err != nil {
+			return "", err
+		}
+		b, err := fs.ReadFile(assets, name)
+		if err != nil {
+			return "", fmt.Errorf("the embedded UI references %s, which is not in the binary: %w", ref, err)
+		}
+		return string(b), nil
+	}
+
+	var cssParts []string
+	for _, ref := range cssRefs {
+		part, err := read(ref)
 		if err != nil {
 			return "", "", err
 		}
-		switch {
-		case strings.HasSuffix(name, ".css"):
-			cssParts = append(cssParts, string(b))
-		case strings.HasSuffix(name, ".js"):
-			jsParts = append(jsParts, string(b))
+		cssParts = append(cssParts, part)
+	}
+	if js, err = read(jsRefs[0]); err != nil {
+		return "", "", err
+	}
+	return strings.Join(cssParts, "\n"), js, nil
+}
+
+// requireSingleChunk rejects a code split build.
+//
+// The exported page inlines the script into one <script type="module">. That
+// module resolves no relative import and fetches no chunk, so a second .js
+// file - a vendor chunk, a lazily imported route - cannot be reached from it.
+// Concatenating the chunks instead only moves the failure to the browser, so
+// the export fails here, with the names that made it fail.
+func requireSingleChunk(assets fs.FS, jsRefs []string) error {
+	seen := map[string]bool{}
+	var chunks []string
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		chunks = append(chunks, name)
+	}
+	for _, ref := range jsRefs {
+		if name, err := assetPath(ref); err == nil {
+			add(name)
 		}
 	}
-	if len(jsParts) == 0 {
-		return "", "", fmt.Errorf("no script found in the embedded UI")
+	// A chunk that index.html does not mention is just as unreachable: it is
+	// pulled in by an import inside the entry, which the inlined module has
+	// no way to satisfy.
+	if entries, err := fs.ReadDir(assets, "assets"); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".js") {
+				add("assets/" + e.Name())
+			}
+		}
 	}
-	return strings.Join(cssParts, "\n"), strings.Join(jsParts, "\n"), nil
+	if len(chunks) > 1 {
+		sort.Strings(chunks)
+		return fmt.Errorf("the embedded UI is built as %d scripts (%s); the exported page inlines a single module and cannot load a chunk, so the UI has to be built as one chunk",
+			len(chunks), strings.Join(chunks, ", "))
+	}
+	return nil
+}
+
+var (
+	assetTagRe  = regexp.MustCompile(`(?is)<(script|link)\b([^>]*)>`)
+	assetAttrRe = regexp.MustCompile(`(?is)([a-z0-9-]+)\s*=\s*("[^"]*"|'[^']*'|[^\s"'>]+)`)
+)
+
+// assetRefs returns the stylesheets and the scripts index.html loads, in
+// document order.
+func assetRefs(html string) (cssRefs, jsRefs []string) {
+	for _, tag := range assetTagRe.FindAllStringSubmatch(html, -1) {
+		attrs := assetAttrs(tag[2])
+		switch strings.ToLower(tag[1]) {
+		case "script":
+			// An inline script carries the page's own code, not an asset.
+			if src := attrs["src"]; src != "" {
+				jsRefs = append(jsRefs, src)
+			}
+		case "link":
+			if !strings.EqualFold(attrs["rel"], "stylesheet") {
+				continue
+			}
+			if href := attrs["href"]; href != "" {
+				cssRefs = append(cssRefs, href)
+			}
+		}
+	}
+	return cssRefs, jsRefs
+}
+
+func assetAttrs(s string) map[string]string {
+	attrs := map[string]string{}
+	for _, m := range assetAttrRe.FindAllStringSubmatch(s, -1) {
+		v := m[2]
+		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') {
+			v = v[1 : len(v)-1]
+		}
+		attrs[strings.ToLower(m[1])] = v
+	}
+	return attrs
+}
+
+// assetPath turns a URL from index.html into a path inside the embedded
+// tree. An absolute URL cannot be inlined, and the exported page must not
+// reach out to the network for it.
+func assetPath(ref string) (string, error) {
+	clean := ref
+	if i := strings.IndexAny(clean, "?#"); i >= 0 {
+		clean = clean[:i]
+	}
+	if strings.HasPrefix(clean, "//") || strings.Contains(clean, "://") {
+		return "", fmt.Errorf("the embedded UI references %s, which is not part of the binary", ref)
+	}
+	clean = strings.TrimPrefix(strings.TrimPrefix(clean, "./"), "/")
+	if clean == "" {
+		return "", fmt.Errorf("the embedded UI references an empty asset URL")
+	}
+	return path.Clean(clean), nil
 }
 
 // escapeJSONForScript makes JSON safe to inline in a <script> element.

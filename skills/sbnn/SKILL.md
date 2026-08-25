@@ -1,6 +1,6 @@
 ---
 name: sbnn
-description: Review a diff with sbnn - show it to a human in the browser and read their line comments back, or review a change yourself by leaving comments on lines and submitting. Use after producing or being handed changes that someone should look at, when the user asks to review a diff or open a diff/review UI, or when review comments are waiting in sbnn.
+description: Review a diff with sbnn - show it to a human in the browser and read their line comments back, or review a change yourself by leaving comments on lines and submitting. Use after producing or being handed changes that someone should look at, when the user asks to review a diff or open a diff/review UI, when review comments are waiting in sbnn, or when the reviewer cannot open a localhost URL and needs the review as a self-contained page or artifact (on a phone, in a chat, over mail).
 license: MIT
 ---
 
@@ -142,10 +142,45 @@ Use `--json` when you want to parse the result:
 git diff | sbnn --target <topic> --json
 ```
 
-### 3. Hand the URL to the human, and decide how you come back
+### 3. Hand the URL to the human, or a page they can actually open
 
-Tell the user the URL sbnn printed and say what you want reviewed. Then pick
-one of these — never poll `sbnn comments` in a loop:
+Decide which of the two it is before handing anything over. The sbnn server
+listens on localhost, so its URL only works on the machine sbnn is running
+on.
+
+**The URL is the default.** Hand it over whenever you and the human are on
+the same machine and they can open a browser there.
+
+**When you cannot be sure of that, do not hand over the URL.** Inside a phone
+app, a chat bot or a CI box, `http://localhost:6280/` reaches nobody, and the
+human is left opening a link that does not exist for them. Write the review
+out as a self-contained page and give them that instead:
+
+```
+git diff | sbnn export --target <topic> review.html   # a file they can open
+git diff | sbnn export --fragment --target <topic>    # the body, on stdout
+```
+
+`--fragment` decides what you get; the filename only decides where it goes.
+With `--fragment` you get the page body alone — written to the file you name,
+or to stdout if you name none. Without it you get a whole self-contained page,
+again to a file or to stdout. Reach for `--fragment` only when the review is
+going inside something that brings its own `<html>` — an artifact, a message
+that renders HTML, a mail. Hand a human a whole page.
+
+The user can also just ask. If they want a file, an artifact, or something
+they can read on their phone, export one whether or not the URL would have
+worked.
+
+**An exported page does not come back to you.** Comments written on it stay
+in that browser and never reach a server, so steps 5–7 do not apply:
+`sbnn comments` will return nothing however long you wait. The human presses
+**Copy prompt** on the page and paste the text back to you. Say that when you
+hand the page over, not after they have finished writing.
+
+When the URL is the right answer, tell the user the URL sbnn printed and say
+what you want reviewed. Then pick one of these — never poll `sbnn comments`
+in a loop:
 
 - **They are reviewing now and you can wait**: `sbnn wait --target <topic>`
   blocks until they press Submit review and then prints the comments. Give it
@@ -158,11 +193,35 @@ one of these — never poll `sbnn comments` in a loop:
   sbnn hook --target <topic> --on-review '<command that resumes the work>'
   ```
 
-  The command gets the review prompt on its stdin and `SBNN_GROUP`, `SBNN_URL`,
-  `SBNN_COMMENTS` and `SBNN_REVIEW_NOTE` in its environment. Ask the user what
-  that command should be for their setup rather than guessing; if they do not
-  want one, tell them to run `sbnn comments` and paste the result to you when
-  they are back.
+  The command gets the review prompt on its stdin and the variables below in
+  its environment:
+
+  - `SBNN_GROUP` — the group that was reviewed: the name you passed to
+    `--target`, or `default` when you passed none.
+  - `SBNN_URL` — the review page of that group.
+  - `SBNN_SERVER` — the base URL of the sbnn server that started the hook.
+  - `SBNN_PORT` — the port of that same server. These two are how the hook
+    talks back to the server that started it: a hook that wants the comments
+    runs `sbnn comments --target "$SBNN_GROUP" --port "$SBNN_PORT"` rather
+    than assuming the review is on the default port.
+  - `SBNN_COMMENTS` — how many comments the review left, as a number. It is a
+    count, not the comments themselves; read those with `sbnn comments`.
+  - `SBNN_REVIEW_NOTE` — what the reviewer said about the change as a whole,
+    which is empty when they said nothing.
+  - `SBNN_VERDICT` — the verdict of the review as a whole, spelled the way the
+    JSON event spells it: `approved`, `commented` or `changes-requested`. It is
+    empty for a review that has none, so pick your own default rather than
+    reading one into it.
+  - `SBNN_BLOCKING` — `1` or `0`, the answer to "may the change go ahead?".
+    This is the same rule as `wait --exit-code` and `submit --exit-code`, so a
+    hook that branches on it agrees with a pipeline that branches on sbnn's
+    exit status. It is not the verdict: a review that only commented still
+    blocks while a comment of it is open, so branch on this rather than on
+    `SBNN_VERDICT`.
+
+  Ask the user what that command should be for their setup rather than
+  guessing; if they do not want one, tell them to run `sbnn comments` and
+  paste the result to you when they are back.
 - **Neither**: say you will pick the review up next time, and stop. Nothing
   is lost — the comments stay in the sbnn server until they are cleared.
 
@@ -185,7 +244,10 @@ it is, and the reader is told plainly rather than guessing.
 `--suggest` appends the replacement to the comment as a ` ```suggestion `
 block, so the human sees it as a proposed change and can copy it:
 
-```
+```suggestion
+if err != nil {
+    return fmt.Errorf("read config: %w", err)
+}
 ```
 
 Use it for what is genuinely worth a human's attention — a decision you had
@@ -205,12 +267,23 @@ range, the reviewed code and the comment body. For programmatic handling:
 sbnn comments --target <topic> --format json
 ```
 
-Every JSON entry has `id`, `path`, `author`, `side` (`new` or `old`),
-`startLine`, `endLine`, `body`, `snippet`, `suggestions`, `question` and
-`resolved`. Line
-numbers refer to the side named by `side`. `author` is empty for the comments
-the human wrote in the browser and set for the ones posted from the command
-line — including your own, so skip those when working through the list.
+Every JSON entry has `id`, `group`, `diffId`, `fileId`, `path`, `side` (`new`
+or `old`), `startLine`, `endLine`, `body`, `snippet`, `resolved`, `createdAt`
+and `updatedAt`. Line numbers refer to the side named by `side`, and `diffId`
+says which round the comment came from, which is how you tell an old comment
+from one left on the diff you just sent.
+
+Three more keys appear only when they are set, so read them with a default
+instead of by subscript — a missing key is the normal case, not an error:
+
+- `author` — who left the comment. It is **missing** for the comments the
+  human wrote in the browser, and present for the ones posted from the
+  command line, including your own, so skip those when working through the
+  list.
+- `question` — present only as `true`; missing means the comment asks for a
+  change rather than an answer.
+- `suggestions` — present only when the body carries a suggestion block;
+  missing means there is nothing to apply.
 
 A comment may carry suggested replacements, written as fenced
 ` ```suggestion ` blocks inside the comment itself, the same convention
@@ -226,8 +299,9 @@ for a change, and replace the named lines exactly as written where a comment
 carries a suggestion; when you disagree or a comment cannot be acted on, say
 so explicitly in your reply to the user rather than silently skipping it.
 
-A comment marked as a **question** (`"question": true`, and "This one is a
-question: answer it." in the Markdown output) is asking for an answer.
+A comment marked as a **question** (`"question": true` — the key is absent on
+every other comment, and "This one is a question: answer it." in the Markdown
+output) is asking for an answer.
 Answer it in words in your reply, and change the code only if your own
 answer says it should change. Rewriting code in place of answering is the
 one response that leaves the reviewer having to ask again.
@@ -308,118 +382,33 @@ someone else, an artifact — write the review out as a single HTML file:
 git diff | sbnn export --target <topic> review.html
 ```
 
-The page carries the diff and the same UI, needs no server, and the comments
-written on it stay in that browser. Use `--fragment` when the page is
-embedded into something that brings its own `<html>` (for example an
-artifact).
-
-## Fitting sbnn into what you were already doing
-
-sbnn is one command among the ones you already run, so let the shell do the
-joining rather than looking for a flag:
+The page carries the diff and the same UI and needs no server. Use
+`--fragment` when the page is embedded into something that brings its own
+`<html>` (for example an artifact); with no filename it writes to stdout, so
+the markup can go straight into whatever you are building:
 
 ```
-git diff | sbnn                          # anything that writes a diff feeds it
-sbnn comments | pbcopy                   # anything that reads text takes it
-sbnn reviews --format jsonl | jq ...     # a line per review, for whatever asks
+git diff | sbnn export --fragment --target <topic>
 ```
 
-`sbnn comments` and `sbnn wait` say what they found in their exit status too — 0
-when there is nothing to address, 1 when there is, and 2 from `sbnn wait` when
-the review has not happened yet — so a review can gate what comes next
-without anyone reading the output:
+This is also the fallback step 3 sends you here for, and the same limit
+applies: the comments written on such a page stay in that browser and never
+reach a server, so `sbnn comments` has nothing to return. The human presses
+**Copy prompt** on the page and pastes the text back to you, and that is the
+only way the review reaches you.
 
-```
-git diff | sbnn --target <topic>
-sbnn wait --target <topic> -q && git commit -m "<message>"
-```
+## Reference material
 
-That is the recommended way round committing, and it is worth being plain
-with the user about why: send what you are about to commit, wait for the
-review, and commit only once it comes back with nothing to address. sbnn has
-no idea what a commit is and stays out of the way of one — it writes nothing
-into the working tree, so `git status` says exactly what it said before you
-started. When a review does have comments, address them and send the next
-round before committing rather than committing over them.
+The workflow above is the whole of what you need to run a review. The rest is
+material to look something up in, kept in its own files so that reading the
+skill does not mean reading all of it:
 
-If the change is already committed, review it the same way: `git show | sbnn`,
-or `git diff <base>..HEAD | sbnn`. Use `--title` to say which is which, since
-sbnn only sees the text.
-
-## Learning from past reviews
-
-Every submitted review is kept, which makes the reviewer's habits readable
-rather than guessed at:
-
-```
-sbnn reviews --stats                     # which files draw comments, how many per review
-sbnn reviews --comments --since 30d      # one line per comment, to read properly
-```
-
-For any question `--stats` does not answer, `--comments` emits one record
-per comment and ordinary tools do the counting. Parse the jsonl form — one
-flat JSON object per line, and the only form that carries whole comment
-bodies; the tab-separated text form (date, group, path:lines, author,
-first body line) is for reading and quick pipes:
-
-```
-sbnn reviews --comments --format jsonl | jq -r 'select(.suggestions) | .path'
-sbnn reviews --comments | cut -f3 | cut -d: -f1 | sort | uniq -c | sort -rn
-```
-
-Worth doing before you hand over a change of the same shape: if the last ten
-reviews of this repository were mostly about error messages and test names,
-check yours before asking. Say what you found and what you changed because of
-it — a pattern you read out of the log is a claim about the human, so let
-them correct it.
-
-## Command reference
-
-| Command | What it does |
-| --- | --- |
-| `<diff producer> \| sbnn` | Add a diff to the default group and print its URL |
-| `... \| sbnn -t <name>` | Add it to a named group (its own URL and comments) |
-| `... \| sbnn --title "..."` | Give the diff a title shown in the UI |
-| `... \| sbnn --collapse '<glob>'` | Fold generated files away, repeatable |
-| `... \| sbnn --no-open` | Do not open a browser (useful in headless runs) |
-| `sbnn comment <path>:<line> -m "..."` | Leave a comment of your own (pass `--author`) |
-| `sbnn comment ... --question` | Mark it as wanting an answer, not a change |
-| `sbnn comment --json` | Post many comments at once, read from stdin |
-| `sbnn comments [-t <name>]` | Print open comments as Markdown |
-| `sbnn comments --format json` | Print comments as JSON |
-| `sbnn comments --include-resolved` | Include comments the human resolved |
-| `sbnn comments --clear` | Remove the comments of the group |
-| `sbnn --status [--json]` | Show the running server, its groups and comment counts |
-| `sbnn --clear [-t <name>]` | Close a review: its diffs, comments and hooks |
-| `sbnn --clear --all` | Close every review on the server |
-| `sbnn submit [-t <name>] [-m "..."]` | End the round yourself, as the Submit button does |
-| `sbnn wait [-t <name>]` | Block until the review is submitted, then print it |
-| `sbnn hook --on-review '<cmd>'` | Have the server run something when the review lands |
-| `sbnn hook [--clear]` | List or drop those hooks |
-| `sbnn reviews [--stats] [--since 7d]` | The reviews that were submitted, and what they say together |
-| `sbnn reviews --comments [--format jsonl]` | One record per comment, for sort/uniq/awk/jq |
-| `sbnn --shutdown` | Stop the server |
-| `... \| sbnn export <file>` | Write the review as one self-contained HTML page |
-| `... \| sbnn export --fragment <file>` | The same, body only, for embedding |
-
-`--port` (default 6280) selects the server; use it only if the user runs sbnn
-on a non-default port.
-
-## Notes
-
-- New files are shown as a unified diff, because there is no old side to put
-  next to them.
-- Markdown files get a preview pane next to the diff. The preview shows the
-  working tree file when it exists; otherwise sbnn rebuilds what it can from
-  the diff, and unified diffs only carry the changed hunks, so such a preview
-  is partial by nature.
-- A comment can also be made by selecting text in that preview, in which case
-  its line range covers the whole Markdown blocks the selection touched -
-  paragraphs, list, code fence - rather than only the words highlighted. The
-  quoted snippet is what was selected.
-- Comments are stored by the sbnn server, not in the browser, which is why they
-  survive a reload and why you can read them from the command line.
-- `sbnn --status --json` is the reliable way to check whether comments are
-  waiting: it reports `comments`, `unresolved` and `reviewed` per group.
-  `reviewed` is true once the human has submitted, and false again as soon as
-  a newer diff arrives.
+- [`references/commands.md`](references/commands.md) — every command and flag
+  the workflow uses, when you need the exact syntax of a step you have decided
+  to take.
+- [`references/pipelines.md`](references/pipelines.md) — how sbnn joins onto
+  the commands you already run, when you are scripting it rather than typing it.
+- [`references/review-history.md`](references/review-history.md) — what
+  `sbnn reviews` records, when you want to know what past reviews asked for.
+- [`references/notes.md`](references/notes.md) — behaviour worth knowing but
+  rarely decisive, when something surprises you.
