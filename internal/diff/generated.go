@@ -47,7 +47,14 @@ var generatedMarkers = []*regexp.Regexp{
 	// way @generated is. The topic marker は is what carries that - "この
 	// ファイルの生成ロジック" is a generator talking about its own work and
 	// is left alone.
-	regexp.MustCompile(`この(ファイル|コード)は.{0,30}生成さ`),
+	//
+	// Being generated has to be the whole of what the sentence says, though.
+	// "このコードはテンプレートから生成されるデータを扱う" names this file
+	// as the handler of generated data, not as the generated thing, and the
+	// only way to tell the two apart is that a declaration stops once it has
+	// been made: it ends on 生成され(た|ます|ました), with nothing after it
+	// but a full stop and the closer of the comment it lives in.
+	regexp.MustCompile(`この(ファイル|コード)は[^。]{0,30}生成され(ました|ます|ています|ている|た)` + jaLineEnd),
 	// A sentence whose predicate is "is a generated file", and which ends
 	// there. "自動生成されたコードが正しいかを検証する" is the same words
 	// used as the subject of another clause, and is not a declaration.
@@ -57,7 +64,20 @@ var generatedMarkers = []*regexp.Regexp{
 // jaGenerated is a Japanese file saying it was generated. The English verb is
 // in here too, because a header that mixes the two - "編集不可: generator が
 // 上書きします" - is a real thing generators emit.
-const jaGenerated = `(自動生成|自動的に生成|自動作成|自動的に作成|生成され|生成する|(?i:generat(e|es|ed|or|ors|ing|ion)))`
+//
+// The bare verb is deliberately not in here. "生成する" is what a package
+// does ("ID を生成する") and "生成され" is any clause about generated
+// something ("生成される値"); pairing either with a "do not edit" that
+// happens to be about a different thing on the same line folds hand-written
+// code away - "// ID を生成する。結果は変更しないこと。" is a comment on a
+// function, not a header. English is read the same way: "generated" is
+// matched, "generate" only as the stem of "generator"/"generating", and no
+// pattern here matches a file that merely talks about generating.
+const jaGenerated = `(自動生成|自動的に生成|自動作成|自動的に作成|生成され(ました|ます|ている|ていました|た)|(?i:generat(e|es|ed|or|ors|ing|ion)))`
+
+// jaLineEnd is what may follow a declaration while it is still the last thing
+// the line says: a full stop, and the closer of the comment it sits in.
+const jaLineEnd = `[。．.!！、\s]*((-->|\*/|\*\)|-}|\?>)\s*)?$`
 
 // jaDoNotEdit is a Japanese file saying not to edit it.
 const jaDoNotEdit = `((編集|変更|修正|改変)(を|は)?(し)?ない|(編集|変更|修正|改変)(禁止|不可)|(手|変更)を加えない|書き換えない)`
