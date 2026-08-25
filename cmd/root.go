@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -40,6 +41,7 @@ var (
 	doRestart   bool
 	doClear     bool
 	clearAll    bool
+	assumeYes   bool
 	jsonOutput  bool
 	moBin       string
 	moPort      int
@@ -166,7 +168,7 @@ func init() {
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
 	f.StringVar(&title, "title", "", "Title of the diff (defaults to a generated name)")
 	f.StringArrayVar(&labelFlags, "label", nil,
-		"key=value kept with the diff, repeatable; sbnn stores it and reads nothing into it")
+		"key=value kept with the diff, repeatable once per key; spaces around the key and the value are dropped, and a repeated key is an error")
 	f.StringArrayVar(&collapseFlags, "collapse", nil,
 		"Fold files matching this pattern, repeatable (gitignore-style: go.sum, web/dist/**)")
 	f.BoolVar(&openBrowser, "open", false, "Always open the browser")
@@ -178,7 +180,8 @@ func init() {
 	f.BoolVar(&doRestart, "restart", false, "Restart the running server, keeping the session")
 	rootCmd.MarkFlagsMutuallyExclusive("shutdown", "restart")
 	f.BoolVar(&doClear, "clear", false, "Close the review: drop the diffs, comments and hooks of the group")
-	f.BoolVar(&clearAll, "all", false, "With --clear, close every review on the server")
+	f.BoolVar(&clearAll, "all", false, "Close every review on the server; only meaningful with --clear, and refused without it")
+	f.BoolVar(&assumeYes, "yes", false, "Skip the confirmation of --clear")
 	f.BoolVar(&jsonOutput, "json", false, "Print structured JSON on stdout")
 	f.StringVar(&moBin, "mo-bin", "mo", "mo executable used for mo's Markdown preview")
 	f.IntVar(&moPort, "mo-port", mo.DefaultPort, "Port of the mo server")
@@ -190,7 +193,7 @@ func init() {
 	f.StringVar(&onReviewURL, "on-review-url", "",
 		"URL the server POSTs to when the review of this group is submitted")
 	f.StringVar(&historyPath, "history-file", "",
-		`Where submitted reviews are written down ("off" for nowhere, or $SBNN_HISTORY)`)
+		historyFileHelp("Where submitted reviews are written down"))
 
 	rootCmd.AddCommand(commentCmd, commentsCmd, exportCmd, hookCmd, reviewsCmd, skillCmd, submitCmd, waitCmd)
 }
@@ -203,10 +206,37 @@ func moRunner() *mo.Runner {
 	return mo.New(moBin, moPort, moBind)
 }
 
+// validateClearFlags rejects --all on its own. clearAll is read inside
+// runClear and nowhere else, so sbnn --all used to fall through to the
+// ordinary "read stdin, add a diff, print the URL" path with the flag
+// ignored - a success message for something the user did not ask for, when
+// what they meant closes every review on the server.
+//
+// This is a hand check rather than cobra's "required together" pairing, which
+// reads "if one is given both are required" and would make plain sbnn
+// --clear, the ordinary way to close one review, an error.
+func validateClearFlags(doClear, clearAll bool) error {
+	if clearAll && !doClear {
+		return errors.New("--all only works with --clear (did you mean --clear --all?)")
+	}
+	return nil
+}
+
 func run(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
+	if err := validateClearFlags(doClear, clearAll); err != nil {
+		return err
+	}
+
 	group, err := groupName(target)
 	if err != nil {
+		return err
+	}
+	// --history-file is only acted on by the invocation that starts the
+	// server, but a value the flag refuses is refused wherever it is given.
+	// Pointed at a server that was already up, "sbnn --history-file -" said
+	// nothing and exited 0, which reads as "the log went somewhere".
+	if _, err := historyFile(historyPath); err != nil {
 		return err
 	}
 
@@ -233,7 +263,7 @@ func run(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	c := client.New(addr(), 5*time.Second)
+	c := client.New(addr(), uploadTimeout(len(content)))
 	_, started, err := ensureServer(ctx, c)
 	if err != nil {
 		return err
@@ -370,10 +400,20 @@ func runRestart(ctx context.Context) error {
 
 func runClear(ctx context.Context, group string) error {
 	c := client.New(addr(), 2*time.Second)
-	if _, err := c.Status(ctx); err != nil {
+	// The status already carries what is about to be lost, which is what the
+	// confirmation is built from - no new endpoint needed.
+	st, err := c.Status(ctx)
+	if err != nil {
 		return fmt.Errorf("no sbnn server found on %s", c.Addr)
 	}
 	if clearAll {
+		ok, err := askBeforeClear(clearAllQuestion(st.Groups))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errCancelled
+		}
 		removed, err := c.DeleteAllGroups(ctx)
 		if err != nil {
 			return err
@@ -381,11 +421,97 @@ func runClear(ctx context.Context, group string) error {
 		fmt.Fprintf(os.Stderr, "sbnn: closed %d review(s)\n", removed)
 		return nil
 	}
+	ok, err := askBeforeClear(clearGroupQuestion(st.Groups, group))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errCancelled
+	}
 	if err := c.DeleteGroup(ctx, group); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "sbnn: closed the review of %q\n", group)
 	return nil
+}
+
+// errCancelled ends a --clear that the user declined. Nothing was dropped,
+// which is not a failure, but it is not the job the caller asked for either:
+// a script that pipes an answer in, or runs into a prompt it cannot answer,
+// has to be able to tell "closed" from "left alone", and a status of 0 makes
+// the no-op invisible. Execute prints it as "sbnn: cancelled" and exits 1.
+var errCancelled = errors.New("cancelled")
+
+// stdinIsTerminal reports whether there is somebody there to answer. It is a
+// variable so a test can drive the prompt: stdin under "go test" is never a
+// terminal, and the answer to a destructive question is the thing worth
+// testing.
+var stdinIsTerminal = func() bool { return isTerminal(os.Stdin) }
+
+// askBeforeClear puts a question to the user before something is dropped. An
+// empty question means there is nothing to lose and so nothing to ask.
+// --yes skips it on purpose, and so does a stdin that is not a terminal: a
+// pipeline or a job has nobody there to answer, and blocking one on a prompt
+// would break the scripts that clear a review today.
+func askBeforeClear(question string) (bool, error) {
+	if question == "" || assumeYes || !stdinIsTerminal() {
+		return true, nil
+	}
+	return confirm(os.Stdin, os.Stderr, question)
+}
+
+// clearAllQuestion names every review --clear --all is about to close, with
+// what each one holds, so the count of open comments is in front of the user
+// before they answer. It returns "" when the server holds nothing, because
+// there is then nothing to lose by going ahead.
+func clearAllQuestion(groups []server.GroupSummary) string {
+	if len(groups) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("sbnn: this will close every review on the server:\n")
+	for _, g := range groups {
+		fmt.Fprintf(&b, "  %-16s %d diff(s), %d comment(s), %d open\n",
+			g.Name, g.Diffs, g.Comments, g.Unresolved)
+	}
+	fmt.Fprintf(&b, "Close all %d review(s)? [y/N]: ", len(groups))
+	return b.String()
+}
+
+// clearGroupQuestion asks about one review the way the browser does, and only
+// where the browser does: when comments are still open. An unknown group is
+// already empty, so it returns "" and the clear goes ahead as before.
+func clearGroupQuestion(groups []server.GroupSummary, group string) string {
+	for _, g := range groups {
+		if g.Name != group {
+			continue
+		}
+		if g.Unresolved == 0 {
+			return ""
+		}
+		return fmt.Sprintf("Close the review of %q? %d comment(s) are still open and will go with it. [y/N]: ",
+			group, g.Unresolved)
+	}
+	return ""
+}
+
+// confirm writes the question to out and reads the answer from in. Only "y"
+// and "yes" mean yes; a blank line, an EOF, or anything else means no, so the
+// default of a destructive prompt is to keep what is there. An EOF is an
+// answer, not a failure.
+func confirm(in io.Reader, out io.Writer, question string) (bool, error) {
+	if _, err := fmt.Fprint(out, question); err != nil {
+		return false, err
+	}
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	}
+	return false, nil
 }
 
 func waitForDown(ctx context.Context, c *client.Client, timeout time.Duration) error {
@@ -419,18 +545,52 @@ func readStdin() (string, error) {
 	return string(data), nil
 }
 
+// uploadTimeout is how long to give the calls this command makes, which is
+// decided by the diff it is carrying.
+//
+// The server has to read the body, unescape the JSON around the diff, parse
+// the diff and then answer with the parsed result, and near the 32MB limit
+// that whole round trip takes tens of seconds - measured at about 20s for a
+// diff of exactly 32MB. A flat five seconds is right for the small calls and
+// short enough that a large diff was reported as a timeout, which reads as a
+// server that is not answering rather than as an upload still in progress. So
+// the allowance grows with what is being sent, and stays at the old five
+// seconds when there is no diff to send at all.
+func uploadTimeout(size int) time.Duration {
+	const (
+		base  = 5 * time.Second
+		perMB = 2 * time.Second
+		oneMB = 1 << 20
+	)
+	if size <= 0 {
+		return base
+	}
+	mb := (size + oneMB - 1) / oneMB
+	return base + time.Duration(mb)*perMB
+}
+
 // parseLabels reads repeated key=value flags. The values are whatever the
 // sender wanted to remember - a revision, a branch, a ticket - and sbnn keeps
 // them without reading anything into them.
+//
+// A key may be given once. Labels are how a review is tied back to a PR or a
+// revision, so silently keeping one of two values is worse than refusing the
+// pair. An empty value stays legal; only an empty key is not.
 func parseLabels(flags []string) (map[string]string, error) {
 	if len(flags) == 0 {
 		return nil, nil
 	}
 	labels := make(map[string]string, len(flags))
 	for _, flag := range flags {
+		// Cut first, then trim: cutting on the first = is what lets a value
+		// hold one of its own ("a=b=c" is a -> b=c).
 		key, value, ok := strings.Cut(flag, "=")
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
 		if !ok || key == "" {
 			return nil, fmt.Errorf("--label wants key=value, got %q", flag)
+		}
+		if _, dup := labels[key]; dup {
+			return nil, fmt.Errorf("--label %q was given more than once", key)
 		}
 		labels[key] = value
 	}
