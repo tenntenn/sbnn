@@ -1,0 +1,125 @@
+{
+  "why": "Bodies whose suggestions internal/model and web/src/suggestion.ts must read the same way. Go reads this file from internal/model/model_test.go, the browser side from web/test/suggestion.test.ts, so a fix applied to one implementation and not the other fails here rather than in a review.",
+  "cases": [
+    {
+      "name": "no suggestion",
+      "why": "prose alone proposes nothing",
+      "body": "just a comment",
+      "want": []
+    },
+    {
+      "name": "one block",
+      "why": "the ordinary case",
+      "body": "please rename it\n\n```suggestion\nfunc parse() {\n```\n",
+      "want": ["func parse() {"]
+    },
+    {
+      "name": "two blocks",
+      "why": "a comment may propose more than one change",
+      "body": "a\n\n```suggestion\nfirst\n```\n\nb\n\n```suggestion\nsecond\nline\n```",
+      "want": ["first", "second\nline"]
+    },
+    {
+      "name": "tilde fence",
+      "why": "~~~ opens a block too, and holds backticks without escaping",
+      "body": "~~~suggestion\nwith ``` inside\n~~~",
+      "want": ["with ``` inside"]
+    },
+    {
+      "name": "longer fence around a code block",
+      "why": "the writer lengthened the fence to hold the nested one",
+      "body": "````suggestion\n```go\ncode\n```\n````",
+      "want": ["```go\ncode\n```"]
+    },
+    {
+      "name": "suggestion proposing a code block",
+      "why": "the nested fence is replacement text, not the end of the block",
+      "body": "```suggestion\n```go\nx\n```\n```",
+      "want": ["```go\nx\n```"]
+    },
+    {
+      "name": "suggestion proposing a tilde block",
+      "why": "nesting is tracked by fence character, not only by backticks",
+      "body": "~~~suggestion\n~~~go\nx\n~~~\n~~~",
+      "want": ["~~~go\nx\n~~~"]
+    },
+    {
+      "name": "nested fence indented inside a list item",
+      "why": "a fence keeps its meaning when the line is indented",
+      "body": "```suggestion\n- run it:\n\n  ```sh\n  go test ./...\n  ```\n```",
+      "want": ["- run it:\n\n  ```sh\n  go test ./...\n  ```"]
+    },
+    {
+      "name": "a run longer than the nested fence closes the suggestion",
+      "why": "a close never needs to be longer than what it closes, so the longer run is the suggestion's",
+      "body": "````suggestion\n```\n````",
+      "want": ["```"]
+    },
+    {
+      "name": "an unclosed nested fence still ends at the suggestion fence",
+      "why": "the suggestion's own fence wins when the nested block is never closed",
+      "body": "```suggestion\n~~~\n```",
+      "want": ["~~~"]
+    },
+    {
+      "name": "plain code block is not a suggestion",
+      "why": "only the suggestion info string proposes a change",
+      "body": "```go\ncode\n```",
+      "want": []
+    },
+    {
+      "name": "quoted suggestion is not a suggestion",
+      "why": "a comment teaching the format shows a block, it does not propose one",
+      "body": "Here is how you write one:\n\n`````markdown\n```suggestion\nnot a real one\n```\n`````\n",
+      "want": []
+    },
+    {
+      "name": "quoted inside a tilde block",
+      "why": "the quoting block need not use the same fence character",
+      "body": "~~~markdown\n```suggestion\nnot a real one\n```\n~~~",
+      "want": []
+    },
+    {
+      "name": "a quoting fence no longer than the one it holds",
+      "why": "the first bare fence closes the quoting block, so nothing is proposed",
+      "body": "```markdown\n```suggestion\nx\n```\n```",
+      "want": []
+    },
+    {
+      "name": "a real suggestion after a quoted one still counts",
+      "why": "skipping the quoted block must not swallow the rest of the body",
+      "body": "like this:\n\n````markdown\n```suggestion\nquoted\n```\n````\n\nso:\n\n```suggestion\nreal\n```",
+      "want": ["real"]
+    },
+    {
+      "name": "a quoted suggestion beside a real one holding a code block",
+      "why": "only tracking nested fences and skipping quoted blocks together give one whole suggestion",
+      "body": "````markdown\n```suggestion\nnope\n```\n````\n\n```suggestion\n```go\nx\n```\n```",
+      "want": ["```go\nx\n```"]
+    },
+    {
+      "name": "a suggestion quoted inside a diff block",
+      "why": "an agent quoting a diff opens a block that runs to its own close, so what it holds is shown rather than proposed",
+      "body": "```diff\n-a\n+b\n\n```suggestion\nreal\n```",
+      "want": []
+    },
+    {
+      "name": "empty suggestion deletes the lines",
+      "why": "an empty block is a proposal to remove the commented lines",
+      "body": "drop it\n\n```suggestion\n```",
+      "want": [""]
+    },
+    {
+      "name": "a fence written mid-line opens nothing",
+      "why": "a fence has to start the line, or prose with code spans would open blocks",
+      "body": "a `code` span and ```suggestion\nno\n```",
+      "want": []
+    },
+    {
+      "name": "the info string is matched without case",
+      "why": "SUGGESTION is the same word",
+      "body": "```SUGGESTION\nupper\n```",
+      "want": ["upper"]
+    }
+  ]
+}
