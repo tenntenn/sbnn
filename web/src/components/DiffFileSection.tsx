@@ -418,6 +418,23 @@ function buildSplitRows(lines: Line[]): SplitRow[] {
 }
 
 function SplitTable({ hunks, selection, onSelect, onSelectLine, onDragOver, renderExtras }: TableProps) {
+  // Pairing the rows and diffing them word by word depends on the hunks and
+  // on nothing else, but it used to run inside the render, so every hover,
+  // every drag over the gutter and every keystroke in a comment form redid
+  // the whole file. wordDiff walks grapheme clusters on a line that is not
+  // ASCII, which is not free, and a large review has thousands of rows.
+  const rows = useMemo(
+    () =>
+      hunks.map((hunk) =>
+        buildSplitRows(hunk.lines).map((row) => ({
+          row,
+          segments: row.paired
+            ? wordDiff(row.left?.content ?? '', row.right?.content ?? '')
+            : ([null, null] as const),
+        })),
+      ),
+    [hunks],
+  )
   return (
     <table className="diff-table side-by-side">
       <colgroup>
@@ -435,10 +452,8 @@ function SplitTable({ hunks, selection, onSelect, onSelectLine, onDragOver, rend
                 {hunk.header}
               </td>
             </tr>
-            {buildSplitRows(hunk.lines).map((row, ri) => {
-              const [oldSegments, newSegments] = row.paired
-                ? wordDiff(row.left?.content ?? '', row.right?.content ?? '')
-                : [null, null]
+            {rows[hi].map(({ row, segments }, ri) => {
+              const [oldSegments, newSegments] = segments
               const leftExtras = row.left ? renderExtras('old', row.left.oldNumber) : null
               const rightExtras = row.right ? renderExtras('new', row.right.newNumber) : null
               const hasExtras = Boolean(leftExtras || rightExtras)
