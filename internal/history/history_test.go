@@ -189,7 +189,20 @@ func TestParseSince(t *testing.T) {
 			t.Errorf("ParseSince(%q) = %s, want %s", tt.in, got, tt.want)
 		}
 	}
-	if _, err := history.ParseSince("last tuesday", now); err == nil {
-		t.Error("ParseSince should refuse what it cannot read")
+	for _, in := range []string{
+		"last tuesday",
+		// Only the documented forms are read; anything that merely starts
+		// with a number and a "d" is not seven days.
+		"7days",
+		"7dx",
+		"7d3h",
+		"7dd",
+		"7 d",
+		"-7d",
+		"0d",
+	} {
+		if got, err := history.ParseSince(in, now); err == nil {
+			t.Errorf("ParseSince(%q) = %s, want an error", in, got)
+		}
 	}
 }
