@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -283,12 +284,39 @@ func (l *flexLines) UnmarshalJSON(b []byte) error {
 		l.Start, l.End = start, end
 		return nil
 	}
-	var n int
-	if err := json.Unmarshal(b, &n); err != nil {
+	var num json.Number
+	if err := json.Unmarshal(b, &num); err != nil {
 		return fmt.Errorf("line must be a number or a string like \"12-18\": %w", err)
+	}
+	n, err := lineFromNumber(num)
+	if err != nil {
+		return err
 	}
 	l.Start, l.End = n, n
 	return nil
+}
+
+// lineFromNumber reads a JSON number as a line number. JSON has a single
+// numeric type, so 12 and 12.0 are the same number and both name line 12;
+// generators that do arithmetic (jq, Python, anything in JavaScript) emit the
+// second spelling for whole numbers. Only a real fraction is refused.
+func lineFromNumber(num json.Number) (int, error) {
+	text := num.String()
+	if strings.ContainsAny(text, ".eE") {
+		f, err := num.Float64()
+		if err != nil {
+			return 0, fmt.Errorf("line %s is not a line number", text)
+		}
+		if f != math.Trunc(f) {
+			return 0, fmt.Errorf("line must be a whole number, not %s", text)
+		}
+		text = strconv.FormatFloat(f, 'f', -1, 64)
+	}
+	n, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("line %s is out of range for a line number", text)
+	}
+	return n, nil
 }
 
 func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
@@ -342,7 +370,7 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 }
 
 func normalizeSide(side string) (string, error) {
-	switch side {
+	switch strings.ToLower(strings.TrimSpace(side)) {
 	case "", "new":
 		return "new", nil
 	case "old":
@@ -373,13 +401,31 @@ func parseLines(s string) (start, end int, err error) {
 	if m == nil {
 		return 0, 0, fmt.Errorf("%q is not a line or a line range", s)
 	}
-	start, _ = strconv.Atoi(m[1])
+	start, err = lineNumber(m[1])
+	if err != nil {
+		return 0, 0, err
+	}
 	end = start
 	if m[2] != "" {
-		end, _ = strconv.Atoi(m[2])
+		end, err = lineNumber(m[2])
+		if err != nil {
+			return 0, 0, err
+		}
 	}
 	if start <= 0 || end < start {
 		return 0, 0, fmt.Errorf("%q is not a line range", s)
 	}
 	return start, end, nil
+}
+
+// lineNumber converts one run of digits. The pattern lets through a number
+// too large to hold, which Atoi answers with both MaxInt and an error; taking
+// the value and dropping the error anchors the comment to a line no file will
+// ever have, and nothing downstream notices.
+func lineNumber(digits string) (int, error) {
+	n, err := strconv.Atoi(digits)
+	if err != nil {
+		return 0, fmt.Errorf("line %s is out of range for a line number", digits)
+	}
+	return n, nil
 }
