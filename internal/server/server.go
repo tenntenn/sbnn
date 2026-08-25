@@ -584,8 +584,20 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	if req.Side != "old" {
 		req.Side = "new"
 	}
-	if req.EndLine < req.StartLine {
+	// Line numbers are 1-based; 0 means "not on this side" and is not a
+	// place a comment can point at. The CLI already refuses these, and a
+	// stored comment with a non-positive range anchors to nothing.
+	if req.StartLine < 1 {
+		http.Error(w, fmt.Sprintf("startLine must be 1 or more, got %d", req.StartLine), http.StatusBadRequest)
+		return
+	}
+	if req.EndLine == 0 {
+		// A client that comments on a single line may send startLine alone.
 		req.EndLine = req.StartLine
+	}
+	if req.EndLine < req.StartLine {
+		http.Error(w, fmt.Sprintf("endLine %d is before startLine %d", req.EndLine, req.StartLine), http.StatusBadRequest)
+		return
 	}
 	if req.FileID == "" {
 		if req.Path == "" {

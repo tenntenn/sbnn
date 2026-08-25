@@ -975,3 +975,60 @@ func TestSubmitReviewWithoutABrowser(t *testing.T) {
 		t.Errorf("flattened = %+v", got)
 	}
 }
+
+// A comment has to point at a line that can exist. The Line model uses
+// 1-based numbers with 0 meaning "not on this side", so a non-positive
+// startLine names nothing, and an endLine before the start is not a range.
+func TestHandleAddCommentRejectsNonPositiveLines(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[0]
+
+	cases := []struct {
+		name      string
+		startLine int
+		endLine   int
+		want      int
+		wantEnd   int // the stored endLine, checked when want is 200
+	}{
+		{"a negative start line", -5, -1, http.StatusBadRequest, 0},
+		{"line zero", 0, 0, http.StatusBadRequest, 0},
+		{"an end line before the start", 3, 2, http.StatusBadRequest, 0},
+		{"no end line at all means the one line", 2, 0, http.StatusOK, 2},
+		{"a proper range", 2, 3, http.StatusOK, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var comment model.Comment
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+				DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(), Side: "new",
+				StartLine: tc.startLine, EndLine: tc.endLine, Body: "hi",
+			}, nil)
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+			}
+			if tc.want != http.StatusOK {
+				return
+			}
+			// The accepted ones must also be stored with the range asked for.
+			resp = postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+				DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(), Side: "new",
+				StartLine: tc.startLine, EndLine: tc.endLine, Body: "hi",
+			}, &comment)
+			if comment.StartLine != tc.startLine || comment.EndLine != tc.wantEnd {
+				t.Errorf("stored range = %d-%d, want %d-%d",
+					comment.StartLine, comment.EndLine, tc.startLine, tc.wantEnd)
+			}
+		})
+	}
+
+	// Nothing that was refused may have reached the store.
+	var comments []*model.Comment
+	getJSON(t, ts.URL+"/_/api/groups/default/comments", &comments)
+	for _, c := range comments {
+		if c.StartLine < 1 || c.EndLine < c.StartLine {
+			t.Errorf("stored comment with an impossible range: %+v", c)
+		}
+	}
+}
