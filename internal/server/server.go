@@ -3,6 +3,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,8 +27,31 @@ import (
 	"github.com/tenntenn/sbnn/internal/model"
 )
 
-// maxDiffSize bounds a single diff sent to the server.
-const maxDiffSize = 32 << 20 // 32MB
+// MaxDiffSize bounds a single diff sent to the server. It is exported so that
+// cmd can bound stdin by this number rather than by a copy of it; cmd still
+// keeps its own maxDiffSize today, and TestMaxDiffSizeMatchesTheCommandLine
+// fails if the two ever stop agreeing.
+const MaxDiffSize = 32 << 20 // 32MB
+
+// maxDiffBodySize bounds the request that carries a diff.
+//
+// The diff is bounded by MaxDiffSize, but it reaches the server inside a JSON
+// object, and JSON only ever makes a string longer: a quote or a backslash
+// doubles, a newline becomes two bytes, and the object itself adds its keys.
+// Bounding the body by MaxDiffSize therefore rejected diffs that were inside
+// the limit while telling them they were not - a 32,999,998-byte diff, well
+// under 32MB, arrived as a 33,804,914-byte body and came back as "the diff is
+// too large (max 32MB)".
+//
+// So the body gets its own, larger bound, and the diff is measured after
+// decoding, where its real size is known and the message can be true. Twice
+// MaxDiffSize covers a diff that is half quotes and backslashes, which no
+// diff of source text is; a body past that is not a diff sbnn can help with
+// and is refused as a body, in those words.
+const maxDiffBodySize = 2*MaxDiffSize + maxBodySize
+
+// maxBodySize bounds the small JSON bodies: a comment, a review note, a hook.
+const maxBodySize = 1 << 20 // 1MB
 
 // Options configures a Server.
 type Options struct {
@@ -46,6 +71,12 @@ type Options struct {
 	Revision string
 	// AllowRemote must be set to bind to a non-loopback address.
 	AllowRemote bool
+	// IdleTimeout ends the server once it has held nothing to review for this
+	// long. Zero, the default, keeps it resident until it is told to stop.
+	IdleTimeout time.Duration
+	// Verbose turns on the per-request log. SBNN_LOG=info does the same for
+	// a server that was already started.
+	Verbose bool
 }
 
 // Server is the resident sbnn server.
@@ -79,7 +110,11 @@ func New(opts Options) (*Server, error) {
 		shutdown: make(chan struct{}),
 	}
 	if err := s.store.Load(); err != nil {
+		// The background server's log lands in the state directory, where
+		// nobody is looking, so this also goes to stderr: losing a session
+		// is worth one line wherever the human is.
 		slog.Warn("could not restore session", "error", err)
+		fmt.Fprintf(os.Stderr, "sbnn: %v\n", err)
 	}
 	// Run replaces this with a previewer that knows the frame proxy.
 	s.prev = &previewer{mo: opts.Mo, cacheDir: opts.CacheDir}
@@ -126,6 +161,10 @@ func (s *Server) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
 
+	if s.opts.IdleTimeout > 0 {
+		go s.watchIdle(ctx, idleCheckInterval(s.opts.IdleTimeout))
+	}
+
 	select {
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -138,6 +177,75 @@ func (s *Server) Run(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// idleCheckInterval picks how often to test for idleness: often enough that
+// the timeout is honoured with reasonable precision, rarely enough that a
+// long timeout does not mean a busy ticker.
+func idleCheckInterval(timeout time.Duration) time.Duration {
+	check := min(timeout/4, 30*time.Second)
+	if check <= 0 {
+		check = time.Millisecond
+	}
+	return check
+}
+
+// watchIdle ends the server once it has had nothing to do for IdleTimeout.
+//
+// The first `git diff | sbnn` starts a resident server and detaches it, and
+// nothing has ever ended it: no idle timeout, no lifetime bound, no cleanup on
+// logout. The only ways out are `sbnn --shutdown`, POST /_/api/shutdown, or
+// killing the process, so a review from three months ago could still be
+// holding a port, a session file and its parsed diffs. It is invisible too -
+// the process reads like something running in a terminal, and nothing tells
+// the user it is still there.
+//
+// The timeout must be continuous: any sign of life resets it, so a server is
+// only collected after being useless for the whole stretch.
+func (s *Server) watchIdle(ctx context.Context, check time.Duration) {
+	t := time.NewTicker(check)
+	defer t.Stop()
+	var since time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.shutdown:
+			return
+		case now := <-t.C:
+			switch {
+			case !s.idle():
+				since = time.Time{}
+			case since.IsZero():
+				since = now
+			case now.Sub(since) >= s.opts.IdleTimeout:
+				slog.Info("shutting down: nothing left to review",
+					"idle", s.opts.IdleTimeout)
+				s.requestShutdown()
+				return
+			}
+		}
+	}
+}
+
+// idle reports whether the server is holding nothing worth staying alive for.
+//
+// Conservative on purpose. A review waiting for a human must never be
+// collected - that is the whole point of the hooks - so this asks "nothing
+// here at all" rather than "no recent activity". A group still holding a diff
+// is a review someone may come back to, an open event stream is a page
+// watching, and a registered hook is something waiting to fire. A server that
+// has none of the three has nothing to lose.
+func (s *Server) idle() bool {
+	if s.broker.count() > 0 {
+		return false
+	}
+	for _, g := range s.store.Summary("") {
+		if g.Diffs > 0 || g.Hooks > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) requestShutdown() {
@@ -173,8 +281,80 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /_/events", s.handleEvents)
 	mux.Handle("GET /", s.spaHandler())
 
-	return s.withSecurityHeaders(mux)
+	return s.withRequestLog(s.withSecurityHeaders(mux))
 }
+
+// withRequestLog logs one line per request: method, path, status, duration.
+//
+// The server runs detached and writes to a log file that holds, in a normal
+// session, exactly one line - "serving at ..." - and nothing else, forever.
+// Nothing records that a request arrived, so a background process that
+// misbehaves cannot be diagnosed from the only artefact it leaves behind: a
+// port that answers /diagram.png with 200 text/html, a hook that fails at
+// every submit, a session that is never saved. One line per request makes
+// those visible immediately.
+//
+// It is off by default, because nothing rotates that file. Verbose (a flag
+// the command line can set) or SBNN_LOG=debug|info (which works on a server
+// that is already running) turns it on.
+func (s *Server) withRequestLog(next http.Handler) http.Handler {
+	if !s.opts.Verbose && !requestLogEnabled() {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		slog.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rec.status,
+			"duration", time.Since(start).Round(time.Microsecond))
+	})
+}
+
+// requestLogEnabled reads SBNN_LOG. Only the levels below info would be
+// swallowed by a per-request line, so only those turn it on.
+func requestLogEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SBNN_LOG"))) {
+	case "debug", "info":
+		return true
+	}
+	return false
+}
+
+// statusRecorder remembers the status code on its way past.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	wrote  bool
+}
+
+func (rec *statusRecorder) WriteHeader(code int) {
+	if !rec.wrote {
+		rec.status, rec.wrote = code, true
+	}
+	rec.ResponseWriter.WriteHeader(code)
+}
+
+func (rec *statusRecorder) Write(b []byte) (int, error) {
+	if !rec.wrote {
+		rec.status, rec.wrote = http.StatusOK, true
+	}
+	return rec.ResponseWriter.Write(b)
+}
+
+// Flush keeps the event stream alive. handleEvents asserts http.Flusher on the
+// writer it is handed and gives up without one, and a wrapper that swallowed
+// Flush would turn the stream into a buffered response that never arrives.
+func (rec *statusRecorder) Flush() {
+	if f, ok := rec.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap lets http.ResponseController reach the real writer.
+func (rec *statusRecorder) Unwrap() http.ResponseWriter { return rec.ResponseWriter }
 
 // withSecurityHeaders sets a CSP for sbnn's own pages. The preview iframe is
 // the one cross origin the page is allowed to load.
@@ -230,7 +410,16 @@ func (s *Server) crossOrigin(r *http.Request) (string, bool) {
 	// Sec-Fetch-Site is sent by every current browser and by nothing else.
 	// "none" is the address bar, "same-origin" is sbnn's own page.
 	switch site := r.Header.Get("Sec-Fetch-Site"); site {
-	case "", "none", "same-origin":
+	case "none", "same-origin":
+		// The browser computed this against the page's real origin, and a
+		// page cannot forge it: Sec-Fetch-* are forbidden header names, so a
+		// request from anywhere else arrives as "cross-site" whatever it
+		// wants to claim. Answering here instead of falling through to the
+		// Origin check is what keeps writes working under --bind, where the
+		// address the user typed is one sbnn was never told.
+		return "", false
+	case "":
+		// Too old to send it, or not a browser at all. Origin decides.
 	default:
 		return "Sec-Fetch-Site: " + site, true
 	}
@@ -240,7 +429,7 @@ func (s *Server) crossOrigin(r *http.Request) (string, bool) {
 		// hooks it runs all land here.
 		return "", origin == "null"
 	}
-	if !s.ownOrigin(origin) {
+	if !s.ownOrigin(origin, r.Host) {
 		return "Origin: " + origin, true
 	}
 	return "", false
@@ -249,22 +438,34 @@ func (s *Server) crossOrigin(r *http.Request) (string, bool) {
 // ownOrigin reports whether an Origin header names this server. The page is
 // reached by whichever loopback name the user typed, so all of them count,
 // as long as the port is the one sbnn listens on.
-func (s *Server) ownOrigin(origin string) bool {
+//
+// host is the request's own Host header - the authority the client actually
+// dialled. An Origin that matches it is by definition same-origin, which is
+// the only thing that identifies sbnn's page when it is served on an address
+// opts.Bind does not name: under --bind 0.0.0.0 the user reaches the page at
+// the machine's LAN address, and the browser reports that back. A page on
+// another site cannot borrow this: the browser sets Host from the URL it is
+// dialling and Origin from the page it is dialling out of, so for a genuine
+// cross-origin request the two differ.
+func (s *Server) ownOrigin(origin, host string) bool {
 	u, err := url.Parse(origin)
 	if err != nil || u.Scheme != "http" {
 		return false
 	}
+	if host != "" && u.Host == host {
+		return true
+	}
 	if u.Port() != strconv.Itoa(s.opts.Port) {
 		return false
 	}
-	host := u.Hostname()
-	if host == s.opts.Bind {
+	hostname := u.Hostname()
+	if hostname == s.opts.Bind {
 		return true
 	}
-	if ip, err := netip.ParseAddr(host); err == nil {
+	if ip, err := netip.ParseAddr(hostname); err == nil {
 		return ip.IsLoopback()
 	}
-	return host == "localhost"
+	return hostname == "localhost"
 }
 
 // Status is the payload of GET /_/api/status.
@@ -279,6 +480,9 @@ type Status struct {
 	MoAvailable bool           `json:"moAvailable"`
 	MoError     string         `json:"moError,omitempty"`
 	Groups      []GroupSummary `json:"groups"`
+	// SessionError says why the session is not being written to disk. It is
+	// empty while the session file is up to date.
+	SessionError string `json:"sessionError,omitempty"`
 }
 
 func (s *Server) status() Status {
@@ -293,6 +497,9 @@ func (s *Server) status() Status {
 	}
 	if s.proxy != nil {
 		st.MoProxyURL = s.proxy.baseURL
+	}
+	if err := s.store.PersistError(); err != nil {
+		st.SessionError = err.Error()
 	}
 	if err := s.opts.Mo.Available(); err != nil {
 		st.MoError = err.Error()
@@ -358,7 +565,36 @@ func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request) {
 		// An empty group is a valid state: the UI shows "waiting for a diff".
 		g = &model.Group{Name: name, Diffs: []*model.Diff{}, Comments: []*model.Comment{}}
 	}
-	writeJSON(w, http.StatusOK, g)
+	// A group that exists but holds nothing has nil slices, and those
+	// marshal as null. Answering [] or null for the same state, depending
+	// only on how the group came to be, is a difference every consumer of
+	// the API would otherwise have to know about.
+	if g.Diffs == nil {
+		g.Diffs = []*model.Diff{}
+	}
+	if g.Comments == nil {
+		g.Comments = []*model.Comment{}
+	}
+	writeJSON(w, http.StatusOK, withoutRawDiffs(g))
+}
+
+// withoutRawDiffs drops the original diff text from a group about to be sent
+// to a client.
+//
+// This endpoint returns the whole group - every diff, file, hunk and line -
+// and the page refetches it on every change event, so its size is paid again
+// on each keystroke-sized edit anyone has open. Diff.Raw is the original diff
+// text, and it is dead weight here: nothing reads it. Dropping it measured
+// 7.7 KB of 52 KB at 4 files and 1.00 MB of 6.61 MB at 500. export.Build
+// already drops it for the same reason.
+//
+// The store keeps Raw - an export or a re-parse still wants it. g is the
+// store's own clone, so clearing the field here cannot reach it.
+func withoutRawDiffs(g *model.Group) *model.Group {
+	for _, d := range g.Diffs {
+		d.Raw = ""
+	}
+	return g
 }
 
 // handleDeleteAllGroups closes every review at once.
@@ -377,6 +613,9 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such group", http.StatusNotFound)
 		return
 	}
+	// The stored review notice outlives the group otherwise, and would be
+	// replayed to a reconnecting browser for a group that no longer exists.
+	s.broker.forgetReviews(name)
 	s.notify(name)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -407,8 +646,14 @@ func (s *Server) handleAddDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req AddDiffRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxDiffSize)).Decode(&req); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+	if !decodeBody(w, r, maxDiffBodySize, "the request body", &req) {
+		return
+	}
+	// Now that the diff is out of its envelope, its size is the one the
+	// sender knows and the one the command line prints.
+	if len(req.Content) > MaxDiffSize {
+		http.Error(w, fmt.Sprintf("the diff is too large (max %s)", byteLimit(MaxDiffSize)),
+			http.StatusRequestEntityTooLarge)
 		return
 	}
 	if strings.TrimSpace(req.Content) == "" {
@@ -568,8 +813,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req AddCommentRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+	if !decodeBody(w, r, maxBodySize, "the comment", &req) {
 		return
 	}
 	body := model.WithSuggestion(req.Body, req.Suggestion)
@@ -577,34 +821,91 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a comment needs a body or a suggestion", http.StatusBadRequest)
 		return
 	}
+	// The side is folded and trimmed so the API agrees with the CLI:
+	// new, old, or empty (meaning new). Anything else is a caller's
+	// mistake and has to be reported, not guessed at -- guessing put
+	// comments on lines nobody asked about.
+	switch side := strings.ToLower(strings.TrimSpace(req.Side)); side {
+	case "":
+		req.Side = "new"
+	case "new", "old":
+		req.Side = side
+	default:
+		http.Error(w, fmt.Sprintf("unknown side %q: use new or old", req.Side), http.StatusBadRequest)
+		return
+	}
 	if len(model.Suggestions(body)) > 0 && req.Side == "old" {
 		http.Error(w, "a suggestion replaces lines of the new file, not of the old one", http.StatusBadRequest)
 		return
 	}
-	if req.Side != "old" {
-		req.Side = "new"
+	// Line numbers are 1-based; 0 means "not on this side" and is not a
+	// place a comment can point at. The CLI already refuses these, and a
+	// stored comment with a non-positive range anchors to nothing.
+	if req.StartLine < 1 {
+		http.Error(w, fmt.Sprintf("startLine must be 1 or more, got %d", req.StartLine), http.StatusBadRequest)
+		return
 	}
-	if req.EndLine < req.StartLine {
+	if req.EndLine == 0 {
+		// A client that comments on a single line may send startLine alone.
 		req.EndLine = req.StartLine
 	}
-	if req.FileID == "" {
+	if req.EndLine < req.StartLine {
+		http.Error(w, fmt.Sprintf("endLine %d is before startLine %d", req.EndLine, req.StartLine), http.StatusBadRequest)
+		return
+	}
+	// Which file the comment is on. Both shapes of the request end up
+	// here: the page sends diffId and fileId, while a client that only
+	// knows the path - an agent on the command line - lets the server
+	// resolve it against the newest diff. The stored range is measured
+	// against that file, so the file has to be found for both shapes and
+	// not, as it once was, only for the path one.
+	var f *model.File
+	byPath := req.FileID == ""
+	if byPath {
 		if req.Path == "" {
 			http.Error(w, "a comment needs a fileId or a path", http.StatusBadRequest)
 			return
 		}
-		d, f, found := s.store.FindFileByPath(name, req.DiffID, req.Path)
-		if !found {
+		d, found, ok := s.store.FindFileByPath(name, req.DiffID, req.Path)
+		if !ok {
 			http.Error(w, fmt.Sprintf("no diff in group %q contains %s", name, req.Path), http.StatusNotFound)
 			return
 		}
+		f = found
 		req.DiffID, req.FileID = d.ID, f.ID
+	} else {
+		var ok bool
+		if _, f, ok = s.store.FileContext(name, req.DiffID, req.FileID); !ok {
+			// A fileId that names no file of this diff anchors the
+			// comment to nothing: the page keys its sections on
+			// diffId:fileId, so such a comment is counted in every total
+			// and shown on no line. An unknown diffId is left alone here,
+			// because AddComment below already reports that one.
+			if g, found := s.store.Group(name); found && g.FindDiff(req.DiffID) != nil {
+				http.Error(w, fmt.Sprintf("no file %q in diff %q", req.FileID, req.DiffID), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	if f != nil {
 		if req.Snippet == "" {
 			req.Snippet = diff.Snippet(f, req.Side, req.StartLine, req.EndLine)
 		}
-		if req.Snippet == "" {
+		if byPath && req.Snippet == "" {
 			http.Error(w, fmt.Sprintf("%s has no line %s in this diff", req.Path, lineSpec(req.StartLine, req.EndLine)),
 				http.StatusBadRequest)
 			return
+		}
+		// A snippet only has to be non-empty to be accepted, so a range
+		// whose start is inside a hunk but whose end runs past it used to
+		// be stored exactly as asked. The page draws a comment on the row
+		// matching its endLine, so an endLine the diff never showed put
+		// the comment on no row at all. Clamp instead of refusing: the
+		// range selection in the page overshoots by a line at the edges of
+		// a hunk, and a 400 there would break a gesture that works today.
+		if last := lastCoveredLine(f, req.Side, req.StartLine, req.EndLine); last > 0 && last < req.EndLine {
+			req.EndLine = last
 		}
 	}
 	c, err := s.store.AddComment(&model.Comment{
@@ -635,6 +936,36 @@ type UpdateCommentRequest struct {
 	Question *bool   `json:"question,omitempty"`
 }
 
+// lastCoveredLine reports the highest line number on this side that the
+// file really has within [start, end]: the last line a snippet taken over
+// that range covered. It picks lines by the same rule Snippet does, so the
+// two always agree on where a range stopped. It returns 0 when the range
+// covers nothing at all.
+func lastCoveredLine(f *model.File, side string, start, end int) int {
+	last := 0
+	for _, h := range f.Hunks {
+		for _, l := range h.Lines {
+			num := l.NewNumber
+			if side == "old" {
+				num = l.OldNumber
+			}
+			if num < start || num > end {
+				continue
+			}
+			if side == "old" && l.Kind == model.LineAdd {
+				continue
+			}
+			if side != "old" && l.Kind == model.LineDelete {
+				continue
+			}
+			if num > last {
+				last = num
+			}
+		}
+	}
+	return last
+}
+
 // lineSpec formats a line range for an error message.
 func lineSpec(start, end int) string {
 	if end > start {
@@ -649,8 +980,7 @@ func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req UpdateCommentRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+	if !decodeBody(w, r, maxBodySize, "the comment", &req) {
 		return
 	}
 	c, found := s.store.UpdateComment(name, r.PathValue("id"), CommentPatch{
@@ -722,9 +1052,15 @@ func (s *Server) handleSubmitReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req SubmitReviewRequest
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-			http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+	// ContentLength is -1 when the length is unknown, which is what a
+	// chunked request and many HTTP/2 clients send. Only 0 promises there
+	// is no body, so decode for anything else: a verdict dropped here is
+	// recorded as a plain "commented", and --exit-code downstream then
+	// reports the opposite of what the reviewer decided.
+	if r.ContentLength != 0 {
+		// The body may still turn out to be empty, which is not an error:
+		// the fields are all optional and default to a commented review.
+		if !decodeOptionalBody(w, r, maxBodySize, "the review", &req) {
 			return
 		}
 	}
@@ -766,8 +1102,7 @@ func (s *Server) handleAddHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var h model.Hook
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&h); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+	if !decodeBody(w, r, maxBodySize, "the hook", &h) {
 		return
 	}
 	added, err := s.store.AddHook(name, &model.Hook{Command: h.Command, URL: h.URL})
@@ -783,7 +1118,17 @@ func (s *Server) handleDeleteHooks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	removed := s.store.DeleteHooks(name, r.PathValue("id"))
+	id := r.PathValue("id")
+	removed := s.store.DeleteHooks(name, id)
+	// The by-id route has to say when it matched nothing, or a typo'd or
+	// already-deleted id looks exactly like a success. Every other by-id
+	// delete in the API answers 404 for that. The clear-all route keeps
+	// its 200 and its count: removing nothing from an empty list is what
+	// was asked for, not a miss.
+	if id != "" && removed == 0 {
+		http.Error(w, "no such hook", http.StatusNotFound)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]int{"removed": removed})
 }
 
@@ -804,14 +1149,45 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+	// Take the slot before promising a stream, so a refusal is a plain 503
+	// and not a 200 that ends immediately.
+	ch, ok := s.broker.subscribe()
+	if !ok {
+		slog.Warn("refused an event subscriber: too many are already connected",
+			"max", maxSubscribers)
+		http.Error(w, "too many event subscribers", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.broker.unsubscribe(ch)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
+	// Set the reconnect delay rather than leaving it to the browser default.
+	io.WriteString(w, "retry: 2000\n\n")
 	flusher.Flush()
 
-	ch := s.broker.subscribe()
-	defer s.broker.unsubscribe(ch)
+	// Replay the review notices this client has not seen - but only for a
+	// client that says where it left off. A browser resends the last id it
+	// got as Last-Event-ID when it reconnects, and that is the one case
+	// where a stored notice is news.
+	//
+	// A client opening the stream for the first time has missed nothing by
+	// definition, and replaying to it is actively wrong: `sbnn wait` opens a
+	// fresh stream with no Last-Event-ID, so handing it every group's last
+	// review made it return a review submitted before anyone asked it to
+	// wait. The diffs sent since then would have gone unreviewed with the
+	// caller told otherwise. runWait already answers "the review is already
+	// in" from the group's own state before it ever reaches the stream.
+	if v := r.Header.Get("Last-Event-ID"); v != "" {
+		if since, err := strconv.ParseUint(v, 10, 64); err == nil {
+			for _, ev := range s.broker.missedReviews(since) {
+				writeEvent(w, ev)
+			}
+			flusher.Flush()
+		}
+	}
 
 	ping := time.NewTicker(25 * time.Second)
 	defer ping.Stop()
@@ -821,14 +1197,23 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-s.shutdown:
 			return
-		case msg := <-ch:
-			fmt.Fprintf(w, "data: %s\n\n", msg)
+		case ev := <-ch:
+			writeEvent(w, ev)
 			flusher.Flush()
 		case <-ping.C:
 			io.WriteString(w, ": ping\n\n")
 			flusher.Flush()
 		}
 	}
+}
+
+// writeEvent frames one SSE message. Only review notices carry an id, which is
+// what a reconnecting client echoes back in Last-Event-ID.
+func writeEvent(w io.Writer, ev event) {
+	if ev.id != 0 {
+		fmt.Fprintf(w, "id: %d\n", ev.id)
+	}
+	fmt.Fprintf(w, "data: %s\n\n", ev.data)
 }
 
 // notifyReview tells everyone listening that a review was submitted. An
@@ -844,7 +1229,7 @@ func (s *Server) notifyReview(g *model.Group) {
 	if err != nil {
 		return
 	}
-	s.broker.publish(msg)
+	s.broker.publishReview(g.Name, msg)
 }
 
 // notify tells connected browsers that a group changed.
@@ -853,7 +1238,70 @@ func (s *Server) notify(group string) {
 	if err != nil {
 		return
 	}
-	s.broker.publish(msg)
+	s.broker.publishChange(msg)
+}
+
+// decodeBody decodes a JSON request body under a size limit, answering the
+// client itself when it cannot.
+//
+// The limit used to be an io.LimitReader, which does not report that it
+// truncated - it simply ends the stream. The decoder then met a body cut
+// mid-JSON and blamed the JSON, so a large but perfectly valid diff came back
+// as "400 invalid request: unexpected EOF": nothing named the limit, and
+// nothing said a limit was involved. http.MaxBytesReader reports the overrun
+// as *http.MaxBytesError, which lets us say what actually happened, and it
+// stops the upload instead of letting the client finish sending a body that
+// is already rejected.
+func decodeBody(w http.ResponseWriter, r *http.Request, limit int64, what string, dst any) bool {
+	return decodeJSON(w, r, limit, what, dst, false)
+}
+
+// decodeOptionalBody is decodeBody for a request whose body may legitimately
+// be absent. An empty body leaves dst at its zero value instead of failing;
+// an overrun and malformed JSON are answered exactly as decodeBody answers
+// them.
+func decodeOptionalBody(w http.ResponseWriter, r *http.Request, limit int64, what string, dst any) bool {
+	return decodeJSON(w, r, limit, what, dst, true)
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, what string, dst any, emptyOK bool) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		if emptyOK && errors.Is(err, io.EOF) {
+			return true
+		}
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			http.Error(w, fmt.Sprintf("%s is too large (max %s)", what, byteLimit(limit)),
+				http.StatusRequestEntityTooLarge)
+			return false
+		}
+		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// byteLimit renders a limit the way the command line words one: "32MB",
+// "65MB", "512KB", "900B".
+//
+// Dividing by a megabyte and stopping there was not enough: every limit under
+// a megabyte came out as "0MB", so a refusal could name a limit of nothing and
+// leave the sender no idea what would fit.
+func byteLimit(n int64) string {
+	scaled := func(unit int64, suffix string) string {
+		if n%unit == 0 {
+			return strconv.FormatInt(n/unit, 10) + suffix
+		}
+		return strconv.FormatFloat(float64(n)/float64(unit), 'f', 1, 64) + suffix
+	}
+	switch {
+	case n >= 1<<20:
+		return scaled(1<<20, "MB")
+	case n >= 1<<10:
+		return scaled(1<<10, "KB")
+	default:
+		return strconv.FormatInt(n, 10) + "B"
+	}
 }
 
 func (s *Server) groupParam(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -894,25 +1342,56 @@ func isLoopback(host string) bool {
 	return true
 }
 
+// maxSubscribers bounds how many event streams can be open at once.
+//
+// /_/events is a GET, so crossOrigin deliberately lets it through: CORS keeps
+// another site from *reading* the events. It does not keep that site from
+// *holding the connection open*, and sbnn has no authentication by design. Any
+// page the user visits can point unlimited EventSources at localhost:6280 and
+// keep them, and each one costs a goroutine, a channel and a 25-second ticker.
+// A cap turns that from unbounded growth into a refusal.
+const maxSubscribers = 64
+
+// event is one server-sent event. A non-zero id marks a review notice, which
+// is kept for replay and is not dropped when a subscriber falls behind; change
+// notices carry id 0.
+type event struct {
+	id   uint64
+	data []byte
+}
+
 // broker fans server side events out to every connected browser.
 type broker struct {
 	mu   sync.Mutex
-	subs map[chan []byte]struct{}
+	subs map[chan event]struct{}
+	// seq numbers review notices so a reconnecting client can say what it
+	// already has, via SSE's id:/Last-Event-ID.
+	seq uint64
+	// reviews holds the most recent review notice per group, so a client that
+	// missed one while catching up still gets it when it reconnects.
+	reviews map[string]event
 }
 
 func newBroker() *broker {
-	return &broker{subs: map[chan []byte]struct{}{}}
+	return &broker{
+		subs:    map[chan event]struct{}{},
+		reviews: map[string]event{},
+	}
 }
 
-func (b *broker) subscribe() chan []byte {
-	ch := make(chan []byte, 8)
+// subscribe registers a listener, reporting false when the cap is reached.
+func (b *broker) subscribe() (chan event, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if len(b.subs) >= maxSubscribers {
+		return nil, false
+	}
+	ch := make(chan event, 8)
 	b.subs[ch] = struct{}{}
-	return ch
+	return ch, true
 }
 
-func (b *broker) unsubscribe(ch chan []byte) {
+func (b *broker) unsubscribe(ch chan event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.subs, ch)
@@ -926,13 +1405,94 @@ func (b *broker) count() int {
 	return len(b.subs)
 }
 
-func (b *broker) publish(msg []byte) {
+// missedReviews returns the stored review notices newer than since, oldest
+// first. since is what the client reported in Last-Event-ID; zero means it has
+// seen nothing and wants every group's latest.
+func (b *broker) missedReviews(since uint64) []event {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	var out []event
+	for _, ev := range b.reviews {
+		if ev.id > since {
+			out = append(out, ev)
+		}
+	}
+	slices.SortFunc(out, func(a, b event) int { return cmp.Compare(a.id, b.id) })
+	return out
+}
+
+// forgetReviews drops the stored review notice for a group, so that closing a
+// review does not leave a notice behind to be replayed for a group that is
+// gone. Without it b.reviews only ever grows.
+func (b *broker) forgetReviews(group string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.reviews, group)
+}
+
+// publishChange tells subscribers a group changed. Losing one of these costs
+// nothing: the next one supersedes it, and the browser refetches the group.
+func (b *broker) publishChange(msg []byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.fanout(event{data: msg})
+}
+
+// publishReview tells subscribers a review was submitted, and remembers it.
+// This is the notice that wakes `sbnn wait`, so it is numbered, stored for
+// replay, and not dropped in favour of change notices.
+func (b *broker) publishReview(group string, msg []byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.seq++
+	ev := event{id: b.seq, data: msg}
+	b.reviews[group] = ev
+	b.fanout(ev)
+}
+
+// fanout queues ev for every subscriber. b.mu must be held.
+func (b *broker) fanout(ev event) {
 	for ch := range b.subs {
+		deliver(ch, ev)
+	}
+}
+
+// deliver queues one event for one subscriber without blocking the publisher.
+//
+// A change notice is dropped if the queue is full, as it always was: a slow
+// browser refetches on the next event anyway. A review notice is not. Its
+// reasoning only held while more events were coming, and the review notice is
+// typically the *last* of a burst - a subscriber more than a queue behind when
+// a review lands never learned it happened, and `sbnn wait` then blocked
+// forever on a review that already finished. So make room for it by discarding
+// queued change notices, keeping any review notices in order.
+func deliver(ch chan event, ev event) {
+	select {
+	case ch <- ev:
+		return
+	default:
+	}
+	if ev.id == 0 {
+		return
+	}
+	keep := make([]event, 0, cap(ch)+1)
+drain:
+	for {
 		select {
-		case ch <- msg:
-		default: // a slow browser refetches on the next event anyway
+		case old := <-ch:
+			if old.id != 0 {
+				keep = append(keep, old)
+			}
+		default:
+			break drain
+		}
+	}
+	keep = append(keep, ev)
+	for _, q := range keep {
+		select {
+		case ch <- q:
+		default:
+			slog.Warn("dropped a review notice: the event queue is full", "id", q.id)
 		}
 	}
 }

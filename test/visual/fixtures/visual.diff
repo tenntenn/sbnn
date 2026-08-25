@@ -1,0 +1,94 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 1111111..2222222 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1,6 +1,7 @@
+ name: CI
+ on:
+   push:
++    branches: [main]
+ jobs:
+   build:
+     runs-on: ubuntu-latest
+diff --git a/src/utils (legacy)/helper.ts b/src/utils (legacy)/helper.ts
+index 3333333..4444444 100644
+--- a/src/utils (legacy)/helper.ts	
++++ b/src/utils (legacy)/helper.ts	
+@@ -1,5 +1,5 @@
+ export function helper(value: string): string {
+-  return value.trim();
++  return value.trim().toLowerCase();
+ }
+ 
+ export const VERSION = "1.0.0";
+diff --git a/packages/very-long-package-name/src/internal/deeply/nested/directory/structure/that/keeps/going/module.ts b/packages/very-long-package-name/src/internal/deeply/nested/directory/structure/that/keeps/going/module.ts
+index 5555555..6666666 100644
+--- a/packages/very-long-package-name/src/internal/deeply/nested/directory/structure/that/keeps/going/module.ts
++++ b/packages/very-long-package-name/src/internal/deeply/nested/directory/structure/that/keeps/going/module.ts
+@@ -1,3 +1,4 @@
+ export const name = "module";
++export const enabled = true;
+ export default name;
+ 
+diff --git a/docs/guide.md b/docs/guide.md
+index 7777777..8888888 100644
+--- a/docs/guide.md
++++ b/docs/guide.md
+@@ -1,8 +1,11 @@
+ # Guide
+ 
+ An overview of the project.
+ 
++![architecture](./images/architecture.png)
++
+ ## Getting started
+ 
+-Run the binary.
++Run the binary with `--help` to see the flags.
++
++See [the reference](./reference.md) for the rest.
+ 
+diff --git a/cmd/newthing.go b/cmd/newthing.go
+new file mode 100644
+index 0000000..9999999
+--- /dev/null
++++ b/cmd/newthing.go
+@@ -0,0 +1,12 @@
++package cmd
++
++import "fmt"
++
++// NewThing prints a thing.
++func NewThing(name string) error {
++	if name == "" {
++		return fmt.Errorf("empty name")
++	}
++	fmt.Println("thing:", name)
++	return nil
++}
+diff --git a/internal/old_name.go b/internal/new_name.go
+similarity index 92%
+rename from internal/old_name.go
+rename to internal/new_name.go
+index aaaaaaa..bbbbbbb 100644
+--- a/internal/old_name.go
++++ b/internal/new_name.go
+@@ -1,5 +1,5 @@
+ package internal
+ 
+-const Label = "old"
++const Label = "new"
+ 
+ var Enabled = true
+diff --git a/assets/logo.png b/assets/logo.png
+index ccccccc..ddddddd 100644
+Binary files a/assets/logo.png and b/assets/logo.png differ
+diff --git a/legacy/removed.txt b/legacy/removed.txt
+deleted file mode 100644
+index eeeeeee..0000000
+--- a/legacy/removed.txt
++++ /dev/null
+@@ -1,3 +0,0 @@
+-this file is gone
+-along with its contents
+-and its trailing line

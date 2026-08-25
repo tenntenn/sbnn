@@ -1,0 +1,79 @@
+name: Bug report
+description: Something in sbnn does not do what it says it does
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        sbnn's entire input is the diff text it is handed, so most bugs are
+        impossible to reproduce without it. The fields below ask for the
+        things that turn "the diff looks wrong" into something fixable.
+
+  - type: input
+    id: version
+    attributes:
+      label: sbnn version
+      description: The output of `sbnn --version`.
+      placeholder: sbnn version dev
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: >-
+        Which OS, and which version. sbnn keeps its state in a different place
+        on each one, so this decides where to look.
+      placeholder: macOS 15.3 / Ubuntu 24.04 / Windows 11
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: The command that produced the diff
+      description: >-
+        How the diff got to sbnn, verbatim - sbnn never runs git itself, so
+        this is the only record of what it was given.
+      placeholder: git diff main... | sbnn --target my-topic
+    validations:
+      required: true
+
+  - type: textarea
+    id: diff
+    attributes:
+      label: The diff itself
+      description: >-
+        Paste the diff sbnn was fed. Redact anything you need to - renamed
+        paths and scrambled contents are fine, as long as the structure that
+        triggers the bug survives. Without this, a parsing bug usually cannot
+        be reproduced at all.
+      render: diff
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected to happen
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened
+      description: >-
+        Include any error output. Screenshots help for anything about the
+        review page.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Browser, hooks you had registered, flags you passed.
+    validations:
+      required: false
