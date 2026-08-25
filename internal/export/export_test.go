@@ -242,24 +242,23 @@ func TestRenderEmbedsReadableJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	const prefix = "window.__SBNN_DATA__ = "
-	start := strings.Index(page, prefix)
-	if start < 0 {
+	_, rest, ok := strings.Cut(page, prefix)
+	if !ok {
 		t.Fatal("no payload in the page")
 	}
-	rest := page[start+len(prefix):]
-	end := strings.Index(rest, ";</script>")
-	if end < 0 {
+	payload, _, ok := strings.Cut(rest, ";</script>")
+	if !ok {
 		t.Fatal("payload is not terminated")
 	}
 	var decoded export.Payload
-	if err := json.Unmarshal([]byte(rest[:end]), &decoded); err != nil {
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
 		t.Fatalf("payload is not valid JSON: %v", err)
 	}
 	if decoded.Group != "default" || len(decoded.Diffs) != 1 {
 		t.Errorf("payload = %+v", decoded)
 	}
 	// encoding/json escapes the characters that could end the script early.
-	if strings.Contains(rest[:end], "</script") {
+	if strings.Contains(payload, "</script") {
 		t.Error("payload can terminate its own script element")
 	}
 }
@@ -572,14 +571,13 @@ func TestRenderEmbedsWhetherTheReviewIsCurrent(t *testing.T) {
 func payloadJSON(t *testing.T, page string) []byte {
 	t.Helper()
 	const prefix = "window.__SBNN_DATA__ = "
-	start := strings.Index(page, prefix)
-	if start < 0 {
+	_, rest, ok := strings.Cut(page, prefix)
+	if !ok {
 		t.Fatal("no payload in the page")
 	}
-	rest := page[start+len(prefix):]
-	end := strings.Index(rest, ";</script>")
-	if end < 0 {
+	payload, _, ok := strings.Cut(rest, ";</script>")
+	if !ok {
 		t.Fatal("payload is not terminated")
 	}
-	return []byte(rest[:end])
+	return []byte(payload)
 }
