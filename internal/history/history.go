@@ -342,7 +342,8 @@ func tally(counts map[string]int) []Count {
 	return out
 }
 
-// ParseSince reads "7d", "36h", "90m" or an RFC3339 date as a starting point.
+// ParseSince reads "7d", "36h", "90m" or an RFC3339 date as a starting
+// point. A date without a zone is read in the local zone.
 func ParseSince(s string, now time.Time) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -358,7 +359,11 @@ func ParseSince(s string, now time.Time) (time.Time, error) {
 		return now.Add(-d), nil
 	}
 	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
-		if t, err := time.Parse(layout, s); err == nil {
+		// In the reviewer's own zone: everything the reviews output shows
+		// is formatted with .Local(), so a bare date has to start where
+		// that date starts on their clock, not nine hours into it. An
+		// RFC3339 string carries its own offset and is unaffected.
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
 			return t, nil
 		}
 	}

@@ -1,6 +1,8 @@
 package history_test
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -168,6 +170,43 @@ func TestSummarize(t *testing.T) {
 	}
 }
 
+// TestParseSinceDateIsLocal pins the bare-date form to the reviewer's own
+// zone. time.Local is fixed when the process starts, so the only way to
+// read a date in a zone other than the test runner's is to run this test
+// again in one.
+func TestParseSinceDateIsLocal(t *testing.T) {
+	const zone = "Asia/Tokyo"
+	if os.Getenv("SBNN_TEST_IN_TZ") == "" {
+		if _, err := time.LoadLocation(zone); err != nil {
+			t.Skipf("no zone info for %s: %v", zone, err)
+		}
+		cmd := exec.Command(os.Args[0], "-test.run", "^"+t.Name()+"$", "-test.v")
+		cmd.Env = append(os.Environ(), "SBNN_TEST_IN_TZ=1", "TZ="+zone)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("in TZ=%s: %v\n%s", zone, err, out)
+		}
+		return
+	}
+	if time.Local.String() != zone {
+		t.Skipf("TZ was not honoured: time.Local is %s", time.Local)
+	}
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	got, err := history.ParseSince("2026-01-31", now)
+	if err != nil {
+		t.Fatalf("ParseSince = %v", err)
+	}
+	want := time.Date(2026, 1, 31, 0, 0, 0, 0, time.Local)
+	if !got.Equal(want) {
+		t.Errorf("ParseSince(\"2026-01-31\") = %s, want %s", got, want)
+	}
+	// The nine hours a UTC reading would have dropped are reviews the
+	// reviewer sees listed under 2026-01-31, so they have to be kept.
+	early := time.Date(2026, 1, 31, 0, 30, 0, 0, time.Local)
+	if early.Before(got) {
+		t.Errorf("a review at %s is before the start of its own day, %s", early, got)
+	}
+}
+
 func TestParseSince(t *testing.T) {
 	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	for _, tt := range []struct {
@@ -177,7 +216,8 @@ func TestParseSince(t *testing.T) {
 		{"7d", now.AddDate(0, 0, -7)},
 		{"36h", now.Add(-36 * time.Hour)},
 		{"90m", now.Add(-90 * time.Minute)},
-		{"2026-08-01", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+		{"2026-08-01", time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)},
+		{"2026-08-01T05:00:00+09:00", time.Date(2026, 8, 1, 5, 0, 0, 0, time.FixedZone("", 9*60*60))},
 		{"", time.Time{}},
 	} {
 		got, err := history.ParseSince(tt.in, now)
