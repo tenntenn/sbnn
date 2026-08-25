@@ -1770,6 +1770,18 @@ a {
   background: var(--bg);
 }
 
+/* Everything between the pane and the header has to agree to be narrower
+   than its contents, or the header's own shrink rules never get a chance.
+   A flex item defaults to min-width: auto - a content-based floor - so the
+   preview stack refused to go below the max-content width of the longest
+   path in it, and .content turned that into a sideways scroll instead of
+   clipping. Both levels opt out of the floor so the pane takes the width of
+   the screen and the path below is the thing that gives. */
+.preview-stack,
+.preview-section {
+  min-width: 0;
+}
+
 /* The preview header carries more than it used to - the renderer choice and
    the sync switch on top of the rest - so the parts that can give way do.
    The path is the first to shrink, the controls keep their size. */
