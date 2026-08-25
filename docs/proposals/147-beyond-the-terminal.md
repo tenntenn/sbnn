@@ -8,10 +8,11 @@
 ここで個別に設計しない。個別の設計はそれぞれの提案に委ねる:
 
 - MCP は [#125](https://github.com/tenntenn/sbnn/issues/125) の提案
+  （`docs/proposals/125-mcp-server.md`、main に入っている）
 - デスクトップは [#105](https://github.com/tenntenn/sbnn/issues/105) の提案
-- アーティファクト経路は #115 / #55
+  （`docs/proposals/105-desktop-wrapper.md`、main に入っている）
+- アーティファクト経路は #115（#55 は `daf7acb` で閉じている）
 
-同じ波でそれらが並行して書かれている。**この文書はそれらの中身を待たない。**
 ここで決めるのは「どの順で出すか」と「4 つが共通して必要としているものの正体」である。
 
 ## 決めること
@@ -26,14 +27,14 @@
 
 **API はもう揃っている。ただし文書がどこにも無い。**
 
-ルートは `internal/server/server.go:154`〜`178` に 1 か所でまとまっている。
+ルートは `internal/server/server.go` の `handler()` に 1 か所でまとまっている。
 `/_/api/` の下に 23 本、それに `GET /_/events` を足して**外向きは 24 本**である
 （`GET /` は SPA を返す `spaHandler`）。全表:
 
 | メソッド | パス | 本体 / 引数 | 返り |
 |---|---|---|---|
 | GET | `/_/api/status` | — | `Status` |
-| GET | `/_/api/reviews` | クエリ（`internal/server/server.go:349`） | `ReviewsResponse` |
+| GET | `/_/api/reviews` | クエリ（`handleReviews`） | `ReviewsResponse` |
 | GET | `/_/api/groups` | — | グループ一覧 |
 | DELETE | `/_/api/groups` | — | 消した数 |
 | GET | `/_/api/groups/{group}` | — | `model.Group` |
@@ -57,10 +58,10 @@
 | POST | `/_/api/shutdown` | — | — |
 | GET | `/_/events` | — | SSE |
 
-本体の型はすべて `internal/server/server.go` に、`AddDiffRequest`（`:416`）
-`AddDiffResponse`（`:429`）`AddCommentRequest`（`:574`）
-`UpdateCommentRequest`（`:685`）`SubmitReviewRequest`（`:763`）
-`Status`（`:296`）`ReviewsResponse`（`:341`）として定義されている。
+本体の型はすべて `internal/server/server.go` に、`AddDiffRequest`
+`AddDiffResponse` `AddCommentRequest` `UpdateCommentRequest`
+`SubmitReviewRequest` `Status` `ReviewsResponse` として定義されている。
+（行番号は波ごとに動くので、この文書はどこも関数名・型名で指す。）
 
 SSE の中身は 2 種類だけである（`internal/server/server.go` の
 `notifyReview` と `notify`）:
@@ -71,8 +72,11 @@ json.Marshal(map[string]any{"type": "review", "group": …, "reviewedAt": …,
 json.Marshal(map[string]string{"type": "change", "group": group})
 ```
 
-**そして `README.md` はこの 24 本を 1 本も書いていない。** README が
-説明しているのは CLI だけで、`docs/` には `docs/screenshot.png` しか無い。
+**そして `README.md` はこの 24 本を 1 本も書いていない**（`grep -c "_/api" README.md`
+→ 0）。README が説明しているのは CLI だけである。`docs/` にあるのは
+`docs/screenshot.png`、README の主張をバイナリと突き合わせる `docs/doccheck`、
+そして提案文書を置く `docs/proposals/` で、**API の文書は 1 本も無い**
+（`ls docs/api.md` → No such file or directory）。
 **issue の最後の主張「3 つとも同じもの（安定した、CLI ではない HTTP API）を
 必要としている」は正しく、しかもその「同じもの」は現在 0% 存在する。**
 API は動いているが、外向きの契約としては**存在していない**。
@@ -80,47 +84,94 @@ API は動いているが、外向きの契約としては**存在していな�
 **`internal/client` はその契約の Go 版として既にある。** `Status`
 `AddDiff` `Group` `AddComment` `Comments` `Prompt` `ClearComments`
 `DeleteGroup` `DeleteAllGroups` `Reviews` `Shutdown` `SubmitReview`
-`Hooks` `AddHook` `DeleteHooks` `WaitForReview` の 16 メソッド
-（`internal/client/client.go`）。ただし `internal/` の下なので外から使えない。
+`Hooks` `AddHook` `DeleteHooks` `DeleteHook` `WaitForReview` の 17 メソッド
+（`internal/client/client.go`。`BaseURL` / `url` / `do` を除いた数。
+`DeleteHook` は `sbnn hook --remove` と一緒に増えた）。
+ただし `internal/` の下なので外から使えない。
 
-**エクスポート経路の実測（#115 / #55 が「経路 + フォント 1 つ」で済むか）。**
-`internal/export/export.go:121` の `Render` は
-`readAssets`（`:158`）が集めたものだけを埋め込む:
+**エクスポート経路の実測（#55 は済んでいる）。** この文書の初稿は
+「単体の HTML にするとアイコンフォントが必ず落ちるので、`readAssets` に
+`.woff2` の分岐を足すのが次の 1 PR だ」と書いていた。**その前提は
+`daf7acb`（#298, closes #55）で消えている。** #298 が触ったのは Go ではなく
+web で、`internal/export` は 1 行も変わっていない。
 
-```go
-case strings.HasSuffix(name, ".css"):
-	cssParts = append(cssParts, string(b))
-case strings.HasSuffix(name, ".js"):
-	jsParts = append(jsParts, string(b))
+- `web/src/components/Icon.tsx` が `document.fonts` を見るようになった。
+  フォントが取れないときはグリフ名を素の文字として出さず、幅 1em の空箱に
+  畳む。「見出しに意味不明の英単語が並ぶ」症状はこれで出なくなった。
+- `web/vite.config.ts` に
+
+  ```ts
+  assetsInlineLimit: (filePath: string) =>
+    filePath.endsWith('.woff2') ? true : undefined,
+  ```
+
+  が入り、**`.woff2` はビルド時に CSS へ data URL として内包される。**
+  `web/src/styles.css` のソースは `url('./assets/…woff2')` のままだが、
+  `readAssets` が読むのは `web/dist` の CSS なので結果に影響しない。
+
+実測（Go は 1 行も触らず、現 main で `web/dist` を作り直しただけ）:
+
+```console
+$ cd web && pnpm install --frozen-lockfile --offline && pnpm run build
+dist/assets/index-mi7SVdIL.css  374.95 kB
+$ grep -o "url(data:font/woff2;base64,[A-Za-z0-9+/]\{0,20\}" web/dist/assets/*.css
+url(data:font/woff2;base64,d09GMgABAAAAA/kMAA0A
+$ grep -c "url(/assets/[^)]*woff2[^)]*)" web/dist/assets/*.css
+0
+$ go build -o /tmp/sbnn . && git diff | /tmp/sbnn export /tmp/out.html
+$ grep -c "url(data:font/woff2;base64," /tmp/out.html
+1
+$ grep -o "/assets/[^\"')]*" /tmp/out.html | wc -l
+0
+$ git diff | /tmp/sbnn export --fragment | grep -o "/assets/[^\"')]*" | wc -l
+0
 ```
 
-**`.css` と `.js` だけである。** ところが `web/src/styles.css:243` に
+**初稿が「次の 1 PR」の完了条件として挙げた 2 つ**
+（`url(data:font/woff2;base64,` が現れる / `assets/` 参照が 1 つも残らない）
+**は、現 main で `web/dist` を再生成するだけで満たされる。**
+`readAssets` に `.woff2` の分岐を足す作業はもう無い。
 
-```css
-src: url('./assets/material-symbols-outlined-subset.woff2') format('woff2');
+残っているのは Go の問題ではなく、コミット済み `web/dist` が古いことだけである。
+`web/dist` は波ごとにまとめて再生成される運用なので、いま木にあるビルドは
+#298 より前のものである。そのままの木から建てたバイナリで測ると:
+
+```console
+$ go build -o /tmp/sbnn-stale . && git diff | /tmp/sbnn-stale export /tmp/stale.html
+$ grep -o "/assets/[^\"')]*" /tmp/stale.html | sort -u
+/assets/material-symbols-outlined-subset-CC1o3iId.woff2
+$ grep -c "url(data:font/woff2;base64," /tmp/stale.html
+0
 ```
 
-があり、この相対 URL は書き換えられない。**単体の HTML として配ると
-アイコンフォントが必ず落ちる。** `.icon` の要素はフォントのグリフ名
-（`web/src/components/Icon.tsx` が置く文字列）をそのまま素の文字として
-表示するので、見出しに意味不明の英単語が並ぶ。**#55 の「garbled header」の
-正体はこれ 1 つであり、#147 の「one inlined font」という見積もりは正確である。**
-直しは `readAssets` に `.woff2` を data URL として取り込む分岐を足し、
-CSS の `url(...)` を置換する、実質 1 関数の変更になる。
+つまり**いまリリースすればまだフォントは落ちる**が、落ちても `Icon.tsx` が
+空箱に畳むので #55 の見た目の症状は出ないし、直すのに要るのは
+`task web` と `web/dist` のコミットであって、この文書が扱うような設計の
+PR ではない。**アーティファクト経路で残っている設計の作業は #115 だけである。**
 
 **スキルはエクスポート経路に案内している。** `skills/sbnn/SKILL.md` の
 「Sharing a review without sbnn」節に
 `git diff | sbnn export --target <topic> review.html` があり、
 `--fragment` がアーティファクト向けだと書いてある
-（`cmd/export.go:61` の `--fragment` フラグ）。**#115 の
-「スキルが案内していない」は、少なくとも現在の SKILL.md には当てはまらない。**
-案内はある。壊れているのは案内先の出力である。
+（`cmd/export.go` の `--fragment` フラグ）。**ただし #115 が問題にしているのは
+「案内が無いこと」ではない。** #115 は、到達できるかどうかを確かめないまま
+localhost の URL を人に渡すことを問題にしている。現 main の step 3 は今も
 
-**コメントは本当に診断の形をしている。** `internal/model/model.go:147` の
+```
+### 3. Hand the URL to the human, and decide how you come back
+
+Tell the user the URL sbnn printed and say what you want reviewed.
+```
+
+であり、電話やチャットの向こうの人に `http://localhost:6280/` を渡させる。
+**初稿の「壊れているのは案内先の出力である」というまとめは二重に外れていた。**
+出力はもう壊れておらず、壊れているのは案内の分岐のほうである。
+
+**コメントは本当に診断の形をしている。** `internal/model` の
 `Comment` は `Path` `Side` `StartLine` `EndLine` `Body` を持ち、
 LSP の `Diagnostic`（`range` + `message`）に素直に写る。
 `Resolved` は診断を出すかどうか、`Question` は `severity` に、
-`model.Suggestions(c.Body)`（`internal/model/model.go:185`）が返す置換文字列は
+`model.Suggestions(c.Body)` が返す置換文字列は
 `CodeAction` の `WorkspaceEdit` に対応する。**issue のこの主張は正しい。**
 ただし 1 つ食い違う: LSP の `Range` は**0 始まりで文字位置まで持つ**のに対し、
 `Comment` は**1 始まりの行だけ**で、しかも `Side` が `"old"` のときは
@@ -152,8 +203,8 @@ LSP の `Diagnostic`（`range` + `message`）に素直に写る。
   MCP のツール表もデスクトップの集約も拡張の診断も、
   同じ 1 枚の表を参照して書けるようになり、**食い違いが 3 倍になる経路が
   そもそも生まれない。** そして 2 番目が一番小さい:
-  上で測ったとおり #55 は `readAssets` の 1 関数で、
-  #115 は案内先が直れば済む。**手を動かした結果が最初に出るのが早い。**
+  上で測ったとおり #55 は #298 で済んでおり、アーティファクト経路に
+  残っているのは #115 の文言だけである。**手を動かした結果が最初に出るのが早い。**
 - 払う代償: シェルの無いホストが使えるようになるのが 1 つ後ろにずれる。
   API リファレンスそのものはユーザに何も新しいことをさせない。
 
@@ -171,8 +222,9 @@ LSP の `Diagnostic`（`range` + `message`）に素直に写る。
 
 0. **HTTP API リファレンスを書く**（`docs/api.md`）。上の 24 本の表に、
    本体と返りの形、エラーの返り方、そして**何を安定と約束するか**を書く。
-1. **アーティファクト経路**（#55 → #115）。#55 が先。案内先が壊れている
-   うちに案内を増やしても意味がない。
+1. **アーティファクト経路**（#115）。#55 は `daf7acb`（#298）で閉じており、
+   出力はもう壊れていない。残るのは、到達できない URL を渡さないよう
+   スキルの案内を分岐させることだけである。
 2. **MCP**（#125）。0 番が済んでいれば、ツール表は API 表の写像として書ける。
 3. **デスクトップ**（#105）。
 4. **エディタ拡張 / LSP。**
@@ -183,9 +235,9 @@ LSP の `Diagnostic`（`range` + `message`）に素直に写る。
   「3 つとも同じものを必要としている」で終わっている。その同じものが
   0% しか無いことを上で確かめた。**先に書かなければ、最初に来た実装の
   都合が契約になる。**
-- **1 番と 2 番を入れ替える理由は大きさである。** #55 は `readAssets` の
-  1 関数、#115 は文言。#125 は新しいサブコマンドと新しい依存と 3 つ目の
-  説明面。**小さいほうを先に出すと、0 番の表が最初の利用者を得て、
+- **1 番と 2 番を入れ替える理由は大きさである。** #55 は #298 で終わり、
+  #115 に残っているのは文言だけである。#125 は新しいサブコマンドと
+  新しい依存と 3 つ目の説明面。**小さいほうを先に出すと、0 番の表が最初の利用者を得て、
   書きっぱなしにならない。**
 
 **API の安定について約束すること**（0 番の中身の核）:
@@ -202,7 +254,7 @@ LSP の `Diagnostic`（`range` + `message`）に素直に写る。
   2 本目を作る日が来て、そのとき本当に困る。
 - **`internal/client` は公開しない。** 契約は HTTP であって Go の型ではない。
   Go から使いたい人は 24 本を叩けばよい。これは #128（`internal/diff` の
-  公開）とは別の話であり、混ぜない。
+  公開、`docs/proposals/128-export-diff-package.md`）とは別の話であり、混ぜない。
 
 **エディタ拡張と LSP は、いま決めない。** ただし**何が分かれば決まるかを決める**:
 上で見つけた `Comment.Side == "old"` の問題 — 旧側のコメントは
@@ -225,16 +277,18 @@ MCP を作っても作らなくても、デスクトップを作っても作ら�
 拡張を作っても作らなくても、この表は捨てずに済む。
 `docs/api.md` はこの表を移して、各行に本体と返りの形を足したものになる。
 
-**表が今この文書にあることの効果**: #125 の提案は
-「7 つのツールが既存 API でまかなえるか」を突き合わせる相手をここに持てる。
-#105 の提案は「集約が何を読めばできるか」を `GET /_/api/status` の
-`Status.Groups`（`[]GroupSummary`）として指せる。
-どちらも他方の提案を待たずに書ける。
+**表が今この文書にあることの効果**は既に出ている。main に入った
+`docs/proposals/125-mcp-server.md` は 7 つのツールを 1 本ずつ `/_/api/...` に
+対応づけた表を持ち、`docs/proposals/105-desktop-wrapper.md` は集約を
+`GET /_/api/status` の返りとして指している。**どちらも他方の提案を
+待たずに書けた。** 残っているのは、その参照先を提案文書ではなく
+`docs/api.md` にすることだけである。
 
 ## やらないこと
 
-- **#125 / #105 / #115 / #55 の個別設計。** それぞれの提案に属する。
+- **#125 / #105 / #115 の個別設計。** それぞれの提案に属する。
   この文書がそれらに対して持つ拘束は**順序だけ**である。
+  （#55 は `daf7acb` で閉じたので、もうこの並びに入らない。）
 - **API に認証を足すこと。** `--dangerously-allow-remote-access` が
   いまの立場（ループバックだけ、認証なし）を名前で言っている。
   リモートを本気で支えるなら別 issue が要る。
@@ -246,33 +300,53 @@ MCP を作っても作らなくても、デスクトップを作っても作ら�
 
 ## 次の 1 PR の範囲
 
-**題: 単体の HTML としてエクスポートしたページのアイコンを直す（#55）。**
+**題: HTTP API リファレンスを書く（`docs/api.md`）。**
 
-順序では 0 番（API リファレンス）が先だが、**次の 1 PR は 1 番の #55 にする。**
-0 番は複数のレーンの提案が出そろってから 1 枚にまとめたほうが食い違わないのに対し、
-#55 はいま 1 関数で直り、直った瞬間に #115 の案内先が正しくなるからである。
+初稿はここに「単体の HTML としてエクスポートしたページのアイコンを直す（#55）」を
+置いていた。**その仕事はもう無い。** `daf7acb`（#298）が `Icon.tsx` と
+`vite.config.ts` で閉じており、上の実測のとおり `web/dist` を再生成した現 main の
+バイナリの `sbnn export` 出力には `/assets/` 参照が 0 件、
+`url(data:font/woff2;base64,` が 1 件ある。初稿が挙げた完了条件は
+既に満たされているので、そのまま書けば `readAssets` に要らない分岐を足す作業になる。
+
+初稿が 0 番を後回しにした理由（「複数のレーンの提案が出そろってから
+1 枚にまとめたほうが食い違わない」）も、もう成り立たない。
+`docs/proposals/125-mcp-server.md` と `docs/proposals/105-desktop-wrapper.md` は
+どちらも main に入っており、**どちらも既に `/_/api/...` を名指しで参照している**:
+
+```console
+$ grep -c "_/api" docs/proposals/125-mcp-server.md docs/proposals/105-desktop-wrapper.md
+docs/proposals/125-mcp-server.md:8
+docs/proposals/105-desktop-wrapper.md:3
+```
+
+`105-desktop-wrapper.md` は「4 つが共通して必要とする HTTP API の文書化は
+#147 の担当なので」と書いて、この文書に投げてきている。**待つ相手はもういない。**
 
 触るファイル:
 
-- `internal/export/export.go` — `readAssets` が `.woff2` も読み、
-  返り値に「フォント名 → data URL」を足す。`Render` が CSS の
-  `url('./assets/…woff2')` を data URL に置換してから埋め込む。
-- `internal/export/export_test.go` — 表駆動で足す。
+- `docs/api.md`（新規）— 上の 24 本の表に、要求本体と返りの形、
+  エラーの返り方、そして「何を安定と約束するか」（この文書の
+  「API の安定について約束すること」をそのまま規約として書く）を足す。
+- `README.md` — Development 節あたりから 1 行で指す。
+- `docs/doccheck` — README の主張をバイナリと突き合わせる既存のテストと
+  同じやり方で、`docs/api.md` に書いたパスとメソッドが
+  `internal/server` の `handler()` の登録と一致することを確かめる。
+  **表を手で書き写した瞬間からずれ始めるので、これは同じ PR に入れる。**
 
-完了条件:
+完了条件（いずれも現 main では未達であることを実測済み）:
 
-- 生成された HTML に `url(data:font/woff2;base64,` が現れる。
-- 生成された HTML に `./assets/` で始まる URL が 1 つも残らない
-  （`--fragment` の場合も含めて）。
-- フォントが埋め込まれていない古い `dist` を与えたときに
-  `Render` がエラーにならず、CSS をそのまま通す（`web/dist` は
-  波ごとに再生成されるので、無いものを必須にしない）。
+- `ls docs/api.md` が通る（現状: No such file or directory）。
+- `grep -c "_/api" README.md` が 0 より大きい（現状: 0）。
+- `handler()` に登録されている 23 本の `/_/api/...` と `GET /_/events` が
+  `docs/api.md` に 1 本残らず載っている。載っていない行、あるいは
+  実在しない行があればテストが落ちる。
 - `go build ./... && go vet ./... && go test ./...` が通る。
 
 そのあとに来る PR（この 1 本には含めない）:
 
-1. `docs/api.md` — 上の 24 本の表に本体と返りの形を足し、
-   安定の約束を書く。`README.md` から 1 行で指す。
-2. #115 — `skills/sbnn/SKILL.md` の案内を、モバイル / アーティファクトの
-   場合に `sbnn export --fragment` へ確実に向ける。
+1. #115 — `skills/sbnn/SKILL.md` の step 3 を、URL が到達できるかどうかで
+   分岐させる。到達できないときは `sbnn export` で人が開けるページを渡す。
+2. `web/dist` の再生成（#298 のビルド結果を木に入れる）。設計の判断は
+   要らないので、波ごとの再生成に任せてよい。
 3. #125 の提案の「次の 1 PR」。
