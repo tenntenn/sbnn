@@ -471,10 +471,44 @@ func normalizeVerdict(s string) string {
 	return b.String()
 }
 
-// Blocking reports whether the verdict says the change should not go ahead
-// yet. It is what an exit status and a waiting agent act on.
+// Blocking reports whether the verdict, on its own, says the change should
+// not go ahead yet.
+//
+// It answers only half the question. A review that merely commented, or
+// that carried no verdict at all, still blocks when it left a comment
+// open - see Blocks, which is the rule sbnn actually ends on.
 func (v Verdict) Blocking() bool {
 	return v == VerdictChangesRequested
+}
+
+// Blocks reports whether a submitted review stops the change going ahead:
+// the question sbnn answers with the exit status of wait --exit-code and
+// submit --exit-code, and the one a review hook is told through
+// SBNN_BLOCKING.
+//
+// The verdict outranks the comments but does not always settle it. An
+// approval with three remarks on it is still an approval, and a review
+// that asked for changes blocks even if it pointed at no line in
+// particular. A review that only commented - or carried no verdict at all,
+// as every review did before verdicts existed - blocks exactly when it
+// left a comment open, which is the rule sbnn had before there was a
+// verdict to consult.
+//
+// Both callers go through here so that the status sbnn exits with and the
+// answer it hands a hook cannot drift apart.
+func Blocks(v Verdict, comments []*Comment) bool {
+	switch v {
+	case VerdictApproved:
+		return false
+	case VerdictChangesRequested:
+		return true
+	}
+	for _, c := range comments {
+		if !c.Resolved {
+			return true
+		}
+	}
+	return false
 }
 
 // String makes a verdict readable in a sentence.

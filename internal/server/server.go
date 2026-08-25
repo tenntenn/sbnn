@@ -389,6 +389,16 @@ func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request) {
 		// An empty group is a valid state: the UI shows "waiting for a diff".
 		g = &model.Group{Name: name, Diffs: []*model.Diff{}, Comments: []*model.Comment{}}
 	}
+	// A group that exists but holds nothing has nil slices, and those
+	// marshal as null. Answering [] or null for the same state, depending
+	// only on how the group came to be, is a difference every consumer of
+	// the API would otherwise have to know about.
+	if g.Diffs == nil {
+		g.Diffs = []*model.Diff{}
+	}
+	if g.Comments == nil {
+		g.Comments = []*model.Comment{}
+	}
 	writeJSON(w, http.StatusOK, withoutRawDiffs(g))
 }
 
