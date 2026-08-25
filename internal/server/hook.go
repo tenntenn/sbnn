@@ -79,12 +79,18 @@ func (s *Server) runHook(h *model.Hook, event ReviewEvent) {
 //
 // SBNN_VERDICT carries the verdict exactly as the JSON event spells it, and
 // stays empty for a review that has none - a hook that wants a default picks
-// its own rather than being handed an invented one. SBNN_BLOCKING is the
-// answer to the question every hook would otherwise re-implement: may the
-// change go ahead?
+// its own rather than being handed an invented one.
+//
+// SBNN_BLOCKING is the answer to the question every hook would otherwise
+// re-implement: may the change go ahead? It is model.Blocks, the same rule
+// wait --exit-code and submit --exit-code end on, so a hook that branches on
+// it and a pipeline that branches on sbnn's exit status agree. That is more
+// than the verdict alone: a review that only commented still blocks while it
+// has a comment open, which is why the verdict is not consulted by itself
+// here.
 func (s *Server) hookEnv(event ReviewEvent) []string {
 	blocking := "0"
-	if event.Verdict.Blocking() {
+	if model.Blocks(event.Verdict, event.Comments) {
 		blocking = "1"
 	}
 	return []string{

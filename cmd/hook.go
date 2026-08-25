@@ -40,9 +40,15 @@ thing as JSON, where the verdict is the "verdict" field.
 
 SBNN_VERDICT is what the reviewer decided - approved, commented or
 changes-requested - and is empty when the review carried no verdict, so a
-hook that wants a default picks its own. SBNN_BLOCKING answers the question
-a hook would otherwise re-implement: it is 1 when the verdict stops the
-change going ahead and 0 when it does not.
+hook that wants a default picks its own.
+
+SBNN_BLOCKING answers the question a hook would otherwise re-implement: it
+is 1 when the review stops the change going ahead and 0 when it does not.
+It is the same answer sbnn wait --exit-code and sbnn submit --exit-code end
+on, so a hook and a pipeline reading the exit status never disagree. An
+approval is not blocking however many remarks it carries, changes-requested
+always is, and a review that only commented blocks while it still has an
+open comment.
 
   $ sbnn hook --on-review '[ "$SBNN_BLOCKING" = 1 ] && notify-send "changes requested"'
 

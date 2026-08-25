@@ -102,17 +102,37 @@ func TestRunHooksPostsTheVerdict(t *testing.T) {
 // SBNN_BLOCKING is the rule every hook would otherwise re-implement, and
 // SBNN_VERDICT is spelled the way the JSON spells it so that a script can
 // compare the two without a translation table.
+//
+// SBNN_BLOCKING first shipped as Verdict.Blocking(), which is only half the
+// rule: it says a review that merely commented never blocks, while sbnn
+// itself exits 1 for that review as long as it left a comment open. A hook
+// branching on SBNN_BLOCKING and a pipeline branching on sbnn's exit status
+// then disagreed about the same review. Both now go through model.Blocks,
+// and this table is the table model.Blocks is tested against.
 func TestHookEnvCarriesTheVerdict(t *testing.T) {
+	open := []*model.Comment{{Body: "a remark"}}
+	settled := []*model.Comment{{Body: "a remark", Resolved: true}}
+
 	cases := []struct {
 		name         string
 		verdict      model.Verdict
+		comments     []*model.Comment
 		wantVerdict  string
 		wantBlocking string
 	}{
-		{"approved", model.VerdictApproved, "approved", "0"},
-		{"changes requested", model.VerdictChangesRequested, "changes-requested", "1"},
-		{"commented", model.VerdictCommented, "commented", "0"},
-		{"none", "", "", "0"},
+		{"approved", model.VerdictApproved, nil, "approved", "0"},
+		{"an approval with a remark on it is still an approval",
+			model.VerdictApproved, open, "approved", "0"},
+		{"changes requested", model.VerdictChangesRequested, nil, "changes-requested", "1"},
+		{"changes requested blocks with nothing left open",
+			model.VerdictChangesRequested, settled, "changes-requested", "1"},
+		// The one the two rules disagreed about.
+		{"commented, with a comment still open",
+			model.VerdictCommented, open, "commented", "1"},
+		{"commented, everything resolved", model.VerdictCommented, settled, "commented", "0"},
+		{"commented, nothing said at all", model.VerdictCommented, nil, "commented", "0"},
+		{"no verdict, with a comment still open", "", open, "", "1"},
+		{"no verdict, nothing left open", "", settled, "", "0"},
 	}
 	s := newHookServer(t)
 	for _, tc := range cases {
@@ -122,13 +142,22 @@ func TestHookEnvCarriesTheVerdict(t *testing.T) {
 				URL:      "http://localhost:6280/g/api",
 				Note:     "one thing",
 				Verdict:  tc.verdict,
-				Comments: []*model.Comment{{Body: "a remark"}},
+				Comments: tc.comments,
 			}))
 			if got := env["SBNN_VERDICT"]; got != tc.wantVerdict {
 				t.Errorf("SBNN_VERDICT = %q, want %q", got, tc.wantVerdict)
 			}
 			if got := env["SBNN_BLOCKING"]; got != tc.wantBlocking {
 				t.Errorf("SBNN_BLOCKING = %q, want %q", got, tc.wantBlocking)
+			}
+			// What a hook is told and what sbnn itself ends on are the
+			// same question, so they are answered by the same call.
+			want := "0"
+			if model.Blocks(tc.verdict, tc.comments) {
+				want = "1"
+			}
+			if got := env["SBNN_BLOCKING"]; got != want {
+				t.Errorf("SBNN_BLOCKING = %q, but model.Blocks says %q", got, want)
 			}
 		})
 	}
