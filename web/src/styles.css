@@ -1,19 +1,121 @@
+/* ===== token layer start ===== */
+
+/* Everything below the closing sentinel reaches for a name defined here, so
+   "which value do I use?" has an answer other than "whatever the last rule
+   used". Only token definitions live between the two sentinels, in four
+   selectors: the light palette, the two ways a dark theme can be asked for,
+   and the reduced-motion guard. Colours are declared once per theme; the
+   dimensions are theme-independent and declared once. */
+
 :root {
+  /* Surfaces, from the page backwards to the things that float above it. */
   --bg: #ffffff;
   --bg-soft: #f6f8fa;
   --bg-inset: #eef1f4;
+  --bg-elevated: #ffffff;
+
   --fg: #1f2328;
-  --fg-muted: #636c76;
+  --fg-muted: #5a626c;
+
   --border: #d0d7de;
-  --accent: #0969da;
+  --border-strong: #b8c0c9;
+
+  /* One accent cannot be both text and fill: as text it needs contrast with
+     the page, as a fill it needs contrast with the label sitting on it. */
+  --accent-fg: #0969da;
+  --accent-fill: #0969da;
+  --accent-on-fill: #ffffff;
+  --accent-subtle: #ddf4ff;
+  --accent-border: #0969da;
+
+  /* Diff line backgrounds. Deliberately not the file-status scale below:
+     these tint whole rows of code and have to stay behind text. */
   --add-bg: #e6ffec;
   --add-strong: #abf2bc;
   --del-bg: #ffebe9;
   --del-strong: #ffc9c6;
-  --warn: #9a6700;
-  --danger: #cf222e;
-  --selected: #fff8c5;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* File status chips, which carry their own text and so need a foreground
+     that clears 4.5:1 against the background printed with it. */
+  --status-added-fg: #0a5b26;
+  --status-added-bg: #dafbe1;
+  --status-removed-fg: #a40e26;
+  --status-removed-bg: #ffdcd9;
+  --status-modified-fg: #0550ae;
+  --status-modified-bg: #ddf4ff;
+  --status-renamed-fg: #7a4d00;
+  --status-renamed-bg: #fff3d4;
+
+  /* Pointing at a row and having chosen one are different states, so they
+     are different colours; the marker is a hue no file status uses. */
+  --surface-hover: #eef1f4;
+  --surface-selected: #fff8c5;
+  --selected-marker: #8250df;
+
+  --ok-fg: #0a5b26;
+  --ok-bg: #dafbe1;
+  --warn-fg: #7a4d00;
+  --warn-bg: #fff3d4;
+  --danger-fg: #a40e26;
+  --danger-bg: #ffebe9;
+
+  /* One elevation, for things that genuinely float. */
+  --shadow-overlay: 0 8px 24px rgba(31, 35, 40, 0.16);
+  --scrim: rgba(31, 35, 40, 0.4);
+
+  /* --- dimensions: theme-independent, so defined once --- */
+
+  --font-sans: system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+
+  --space-2xs: 2px;
+  --space-xs: 4px;
+  --space-sm: 6px;
+  --space-md: 8px;
+  --space-lg: 12px;
+  --space-xl: 16px;
+  --space-2xl: 24px;
+
+  /* Four steps, and which one a rule takes follows from what the box is,
+     not from how it looked on the day: --radius-sm for something drawn
+     inside a line of text, --radius-md for a control or a block of content,
+     --radius-lg for a surface floating over the page, --radius-pill where
+     the radius is the shape rather than a corner treatment. The perfect
+     circle stays a literal 50%; it is a ratio, not a step on this scale. */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+
+  /* The three weights the file already used by accident: a separator, a
+     "you are here" marker, and a block rule down the side of a quote. */
+  --border-width-hairline: 1px;
+  --border-width-marker: 2px;
+  --border-width-block: 3px;
+
+  --motion-duration: 120ms;
+  --motion-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Label components: an explicit vertical metric so a pill centres the same
+     wherever it is dropped, and equal-width digits so two counts line up. */
+  --pill-line-height: 1;
+  --pill-padding-block: 3px;
+  --pill-padding-inline: var(--space-sm);
+  --pill-min-width: 18px;
+  --pill-numeric: tabular-nums;
+
+  /* Measured by script and published as a custom property on the stack, so
+     a file header parks under the toolbar rather than at the very top. The
+     value here is the height before anything has been measured. */
+  --diff-toolbar-h: 0px;
+  --preview-toolbar-h: 0px;
 }
 
 /* The palette above is the light theme. A host that states no preference
@@ -22,20 +124,54 @@
    Exported pages are read inside such hosts, which is why both exist. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-  --bg: #0d1117;
-  --bg-soft: #161b22;
-  --bg-inset: #1c2128;
-  --fg: #e6edf3;
-  --fg-muted: #8d96a0;
-  --border: #30363d;
-  --accent: #4493f8;
-  --add-bg: #12261e;
-  --add-strong: #1f6f36;
-  --del-bg: #25171c;
-  --del-strong: #a03b45;
-  --warn: #d29922;
-  --danger: #f85149;
-  --selected: #2d2a11;
+    --bg: #0d1117;
+    --bg-soft: #161b22;
+    --bg-inset: #1c2128;
+    --bg-elevated: #1c2128;
+
+    --fg: #e6edf3;
+    --fg-muted: #9198a1;
+
+    --border: #30363d;
+    --border-strong: #444c56;
+
+    --accent-fg: #4493f8;
+    --accent-fill: #1f6feb;
+    --accent-on-fill: #ffffff;
+    --accent-subtle: #121d2f;
+    --accent-border: #4493f8;
+
+    --add-bg: #12261e;
+    --add-strong: #1f6f36;
+    --del-bg: #25171c;
+    --del-strong: #a03b45;
+
+    --status-added-fg: #3fb950;
+    --status-added-bg: #0f2b17;
+    --status-removed-fg: #ff7b72;
+    --status-removed-bg: #2d1214;
+    --status-modified-fg: #6cb6ff;
+    --status-modified-bg: #10233a;
+    --status-renamed-fg: #e3b341;
+    --status-renamed-bg: #2b2110;
+
+    --surface-hover: #1c2128;
+    --surface-selected: #2d2a11;
+    --selected-marker: #a371f7;
+
+    --ok-fg: #3fb950;
+    --ok-bg: #0f2b17;
+    --warn-fg: #e3b341;
+    --warn-bg: #2b2110;
+    --danger-fg: #ff7b72;
+    --danger-bg: #2d1214;
+
+    /* A drop shadow alone is invisible against a dark page, so the elevation
+       carries a hairline that draws the edge of the floating thing. */
+    --shadow-overlay:
+      0 0 0 1px #444c56,
+      0 8px 24px rgba(1, 4, 9, 0.7);
+    --scrim: rgba(1, 4, 9, 0.6);
   }
 }
 
@@ -43,18 +179,60 @@
   --bg: #0d1117;
   --bg-soft: #161b22;
   --bg-inset: #1c2128;
+  --bg-elevated: #1c2128;
+
   --fg: #e6edf3;
-  --fg-muted: #8d96a0;
+  --fg-muted: #9198a1;
+
   --border: #30363d;
-  --accent: #4493f8;
+  --border-strong: #444c56;
+
+  --accent-fg: #4493f8;
+  --accent-fill: #1f6feb;
+  --accent-on-fill: #ffffff;
+  --accent-subtle: #121d2f;
+  --accent-border: #4493f8;
+
   --add-bg: #12261e;
   --add-strong: #1f6f36;
   --del-bg: #25171c;
   --del-strong: #a03b45;
-  --warn: #d29922;
-  --danger: #f85149;
-  --selected: #2d2a11;
+
+  --status-added-fg: #3fb950;
+  --status-added-bg: #0f2b17;
+  --status-removed-fg: #ff7b72;
+  --status-removed-bg: #2d1214;
+  --status-modified-fg: #6cb6ff;
+  --status-modified-bg: #10233a;
+  --status-renamed-fg: #e3b341;
+  --status-renamed-bg: #2b2110;
+
+  --surface-hover: #1c2128;
+  --surface-selected: #2d2a11;
+  --selected-marker: #a371f7;
+
+  --ok-fg: #3fb950;
+  --ok-bg: #0f2b17;
+  --warn-fg: #e3b341;
+  --warn-bg: #2b2110;
+  --danger-fg: #ff7b72;
+  --danger-bg: #2d1214;
+
+  --shadow-overlay:
+    0 0 0 1px #444c56,
+    0 8px 24px rgba(1, 4, 9, 0.7);
+  --scrim: rgba(1, 4, 9, 0.6);
 }
+
+/* One guard for the whole file: every transition below is spelt with
+   --motion-duration, so zeroing it here is all that reduced motion needs. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration: 0ms;
+  }
+}
+
+/* ===== token layer end ===== */
 
 /* A small, hand-picked subset of Material Symbols - just the names this
    file actually uses - rather than the full multi-megabyte icon font. */
@@ -70,7 +248,7 @@
   font-family: 'sbnn Icons';
   font-weight: normal;
   font-style: normal;
-  font-size: 16px;
+  font-size: var(--text-lg);
   line-height: 1;
   letter-spacing: normal;
   text-transform: none;
@@ -84,7 +262,7 @@
 }
 
 .icon.sm {
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 
 * {
@@ -101,7 +279,7 @@ body,
 body {
   background: var(--bg);
   color: var(--fg);
-  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  font: var(--text-md) / 1.5 var(--font-sans);
 }
 
 .app {
@@ -115,24 +293,23 @@ body {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-lg);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: var(--border-width-hairline) solid var(--border);
   background: var(--bg-soft);
   flex: none;
 }
 
 .brand {
   font-weight: 700;
-  letter-spacing: 0.04em;
 }
 
 .group {
-  padding: 1px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  padding: var(--pill-padding-block) var(--space-md);
+  border: var(--border-width-hairline) solid var(--border);
+  border-radius: var(--radius-pill);
   background: var(--bg);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 
 .spacer {
@@ -142,7 +319,7 @@ body {
 .toolbar-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-lg);
 }
 
 .toolbar-divider {
@@ -154,7 +331,7 @@ body {
 
 button.icon-only,
 a.icon-only.button {
-  padding: 4px;
+  padding: var(--space-xs);
 }
 
 .settings-menu {
@@ -172,73 +349,72 @@ a.icon-only.button {
   z-index: 20;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-md);
   min-width: 200px;
-  padding: 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: var(--space-lg);
+  background: var(--bg-elevated);
+  border: var(--border-width-hairline) solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
 }
 
 .settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-lg);
 }
 
 .settings-label {
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--fg-muted);
 }
 
 .settings-divider {
-  height: 1px;
+  height: var(--border-width-hairline);
   background: var(--border);
-  margin: 2px 0;
+  margin: var(--space-2xs) 0;
 }
 
 .settings-item {
   background: none;
   color: var(--fg);
   border: none;
-  box-shadow: none;
   justify-content: flex-start;
-  padding: 5px 6px;
-  border-radius: 6px;
+  padding: var(--space-sm);
+  border-radius: var(--radius-md);
 }
 
 .settings-item:hover:not(:disabled) {
-  background: var(--bg-inset);
+  background: var(--surface-hover);
   filter: none;
 }
 
 .settings-item.danger {
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 .settings-item.danger:hover:not(:disabled) {
-  background: var(--del-bg);
+  background: var(--danger-bg);
 }
 
 .hint {
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 
 .switch {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
+  gap: var(--space-xs);
+  font-size: var(--text-xs);
   color: var(--fg-muted);
 }
 
 input[type='checkbox'] {
   width: 14px;
   height: 14px;
-  accent-color: var(--accent);
+  accent-color: var(--accent-fill);
   cursor: pointer;
 }
 
@@ -254,7 +430,7 @@ input[type='checkbox'] {
   flex: none;
   min-width: 0;
   overflow: auto;
-  padding: 8px;
+  padding: var(--space-md);
   background: var(--bg-soft);
   container-type: inline-size;
 }
@@ -330,7 +506,7 @@ input[type='checkbox'] {
 .pane-divider:focus-visible::before,
 .pane-divider.dragging::before {
   opacity: 1;
-  background: var(--accent);
+  background: var(--accent-fg);
 }
 
 .pane-divider:focus-visible {
@@ -344,7 +520,7 @@ input[type='checkbox'] {
   transform: translate(-50%, -50%);
   z-index: 1;
   display: flex;
-  gap: 3px;
+  gap: var(--space-2xs);
 }
 
 .divider-handle {
@@ -354,28 +530,27 @@ input[type='checkbox'] {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
-  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  border: var(--border-width-hairline) solid var(--border);
   background: var(--bg);
   color: var(--fg-muted);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   cursor: pointer;
   transition:
-    color 0.15s ease,
-    background-color 0.15s ease,
-    border-color 0.15s ease,
-    transform 0.05s ease;
+    color var(--motion-duration) var(--motion-ease),
+    background-color var(--motion-duration) var(--motion-ease),
+    border-color var(--motion-duration) var(--motion-ease),
+    transform var(--motion-duration) var(--motion-ease);
 }
 
 .divider-handle:hover {
   color: var(--fg);
-  background: var(--bg-inset);
-  border-color: var(--accent);
+  background: var(--surface-hover);
+  border-color: var(--accent-fg);
 }
 
 .divider-handle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: var(--border-width-marker) solid var(--accent-border);
+  outline-offset: var(--border-width-hairline);
 }
 
 /* The pointer keeps its meaning while a divider is dragged, wherever it
@@ -394,18 +569,17 @@ body.resizing iframe {
 /* ---------- sidebar ---------- */
 
 .diff-round {
-  margin-bottom: 12px;
+  margin-bottom: var(--space-lg);
 }
 
 .diff-round-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
-  font-size: 12px;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  font-size: var(--text-xs);
+  font-weight: 600;
   color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .diff-round-title {
@@ -424,11 +598,11 @@ body.resizing iframe {
 .file-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-sm);
   width: 100%;
-  padding: 4px 6px;
+  padding: var(--space-xs) var(--space-sm);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: none;
   color: inherit;
   font: inherit;
@@ -437,12 +611,15 @@ body.resizing iframe {
 }
 
 .file-item:hover {
-  background: var(--bg-inset);
+  background: var(--surface-hover);
 }
 
+/* Being the file on screen is said with a background, a weight and a marker
+   in a hue no file status uses - not with the colour links are drawn in. */
 .file-item.active {
-  background: var(--bg-inset);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--surface-selected);
+  font-weight: 600;
+  box-shadow: inset var(--border-width-marker) 0 0 var(--selected-marker);
 }
 
 .file-path {
@@ -463,30 +640,29 @@ body.resizing iframe {
 }
 
 .dot.status-added {
-  background: #2da44e;
+  background: var(--status-added-fg);
 }
 .dot.status-deleted {
-  background: var(--danger);
+  background: var(--status-removed-fg);
 }
 .dot.status-modified {
-  background: var(--accent);
+  background: var(--status-modified-fg);
 }
 .dot.status-renamed,
 .dot.status-copied {
-  background: var(--warn);
+  background: var(--status-renamed-fg);
 }
 
 .groups {
-  border-top: 1px solid var(--border);
-  padding-top: 8px;
+  border-top: var(--border-width-hairline) solid var(--border);
+  padding-top: var(--space-md);
 }
 
 .groups-title {
-  font-size: 12px;
+  font-size: var(--text-xs);
+  font-weight: 600;
   color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 0 6px 4px;
+  padding: 0 var(--space-sm) var(--space-xs);
 }
 
 .groups ul {
@@ -498,15 +674,15 @@ body.resizing iframe {
 .groups a {
   display: flex;
   justify-content: space-between;
-  gap: 8px;
-  padding: 4px 6px;
-  border-radius: 6px;
+  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-md);
   color: inherit;
   text-decoration: none;
 }
 
 .groups a:hover {
-  background: var(--bg-inset);
+  background: var(--surface-hover);
 }
 
 .groups a.active {
@@ -527,10 +703,10 @@ body.resizing iframe {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-lg);
   background: var(--bg-soft);
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--border-width-hairline) solid var(--border);
   /* A pane squeezed to a sliver hides its tools rather than reflowing them
      into a stack that pushes the content down. */
   overflow: hidden;
@@ -539,12 +715,11 @@ body.resizing iframe {
 .diff-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-md);
   min-width: 0;
   padding: 0;
   border: 0;
   background: none;
-  box-shadow: none;
   font: inherit;
   color: inherit;
   cursor: pointer;
@@ -562,50 +737,58 @@ body.resizing iframe {
 }
 
 .path {
-  font-family: var(--mono);
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .status {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 1px 6px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  line-height: var(--pill-line-height);
+  min-width: var(--pill-min-width);
+  padding: var(--pill-padding-block) var(--pill-padding-inline);
+  border-radius: var(--radius-pill);
+  border: var(--border-width-hairline) solid var(--border);
   color: var(--fg-muted);
 }
 
 .status-added {
-  border-color: #2da44e;
-  color: #2da44e;
+  border-color: var(--status-added-fg);
+  background: var(--status-added-bg);
+  color: var(--status-added-fg);
 }
 .status-deleted {
-  border-color: var(--danger);
-  color: var(--danger);
+  border-color: var(--status-removed-fg);
+  background: var(--status-removed-bg);
+  color: var(--status-removed-fg);
 }
 .status-modified {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--status-modified-fg);
+  background: var(--status-modified-bg);
+  color: var(--status-modified-fg);
 }
 .status-renamed,
 .status-copied {
-  border-color: var(--warn);
-  color: var(--warn);
+  border-color: var(--status-renamed-fg);
+  background: var(--status-renamed-bg);
+  color: var(--status-renamed-fg);
 }
 
 .stat {
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+  font-variant-numeric: var(--pill-numeric);
 }
 .stat.add {
-  color: #2da44e;
+  color: var(--status-added-fg);
 }
 .stat.del {
-  color: var(--danger);
+  color: var(--status-removed-fg);
 }
 
 .diff-tools {
@@ -614,27 +797,25 @@ body.resizing iframe {
 
 .toggle {
   display: inline-flex;
-  gap: 2px;
-  padding: 3px;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs);
   background: var(--bg-inset);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: var(--border-width-hairline) solid var(--border);
+  border-radius: var(--radius-md);
 }
 
 .toggle button {
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--fg-muted);
-  padding: 3px 10px;
+  padding: var(--space-xs) var(--space-lg);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-xs);
   cursor: pointer;
-  box-shadow: none;
   transition:
-    background-color 0.15s ease,
-    color 0.15s ease,
-    box-shadow 0.15s ease;
+    background-color var(--motion-duration) var(--motion-ease),
+    color var(--motion-duration) var(--motion-ease);
 }
 
 .toggle button:hover:not(.active):not(:disabled) {
@@ -643,16 +824,15 @@ body.resizing iframe {
 
 .toggle button.active {
   background: var(--bg);
-  color: var(--accent);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  color: var(--accent-fg);
 }
 
 .diff-table {
   width: 100%;
   table-layout: fixed;
   border-collapse: collapse;
-  font-family: var(--mono);
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   line-height: 1.55;
 }
 
@@ -681,7 +861,7 @@ body.resizing iframe {
   background: var(--bg-soft);
   user-select: none;
   font-variant-numeric: tabular-nums;
-  border-right: 1px solid var(--border);
+  border-right: var(--border-width-hairline) solid var(--border);
 }
 
 .diff-table .num.clickable {
@@ -689,7 +869,7 @@ body.resizing iframe {
 }
 
 .diff-table .num.clickable:hover {
-  background: var(--bg-inset);
+  background: var(--surface-hover);
   color: var(--fg);
 }
 
@@ -701,8 +881,8 @@ body.resizing iframe {
 .diff-table tr.hunk td {
   background: var(--bg-inset);
   color: var(--fg-muted);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  border-top: var(--border-width-hairline) solid var(--border);
+  border-bottom: var(--border-width-hairline) solid var(--border);
 }
 
 .unified tr.line.add td.code,
@@ -731,7 +911,7 @@ body.resizing iframe {
 .diff-table td.code mark {
   background: var(--add-strong);
   color: inherit;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .diff-table td.code.delete mark {
@@ -741,7 +921,7 @@ body.resizing iframe {
 .diff-table tr.line.selected td.code,
 .diff-table td.code.selected,
 .diff-table td.num.selected {
-  background: var(--selected);
+  background: var(--surface-selected);
 }
 
 .diff-table tr.extras td {
@@ -753,19 +933,19 @@ body.resizing iframe {
 
 .thread,
 .comment-form {
-  border-left: 3px solid var(--accent);
+  border-left: var(--border-width-block) solid var(--accent-fg);
   background: var(--bg-soft);
-  margin: 6px 0 6px 44px;
-  padding: 8px 10px;
-  border-radius: 0 6px 6px 0;
-  font-family: system-ui, sans-serif;
-  font-size: 13px;
+  margin: var(--space-sm) 0 var(--space-sm) 44px;
+  padding: var(--space-md) var(--space-lg);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
 }
 
 .comment + .comment {
-  border-top: 1px solid var(--border);
-  margin-top: 8px;
-  padding-top: 8px;
+  border-top: var(--border-width-hairline) solid var(--border);
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
 }
 
 .comment.resolved {
@@ -775,14 +955,14 @@ body.resizing iframe {
 .comment-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-sm);
   color: var(--fg-muted);
-  font-size: 12px;
-  margin-bottom: 4px;
+  font-size: var(--text-xs);
+  margin-bottom: var(--space-xs);
 }
 
 .comment-range {
-  font-family: var(--mono);
+  font-family: var(--font-mono);
 }
 
 .comment-body {
@@ -796,19 +976,19 @@ body.resizing iframe {
      preview opens, where it wraps rather than overflowing it. */
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin-top: 6px;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
 }
 
 .comment-input {
   width: 100%;
   resize: vertical;
   font: inherit;
-  font-family: var(--mono);
-  font-size: 12px;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: var(--space-sm);
+  border: var(--border-width-hairline) solid var(--border);
+  border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--fg);
 }
@@ -824,7 +1004,7 @@ body.resizing iframe {
 }
 
 .preview-error {
-  padding: 12px;
+  padding: var(--space-lg);
 }
 
 /* ---------- commenting on a selection in the preview ---------- */
@@ -836,7 +1016,7 @@ body.resizing iframe {
    reader puts it away. It is the colour the diff marks the lines a comment
    is being written about with, because it means the same thing here. */
 ::highlight(sbnn-selection) {
-  background-color: var(--selected);
+  background-color: var(--surface-selected);
   color: var(--fg);
 }
 
@@ -850,18 +1030,16 @@ body.resizing iframe {
   left: 0;
   visibility: hidden;
   z-index: 30;
-  padding: 4px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.18),
-    0 2px 6px rgba(0, 0, 0, 0.12);
+  padding: var(--space-xs);
+  background: var(--bg-elevated);
+  border: var(--border-width-hairline) solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
   /* A short screen can still run out of room once the button has grown into
      a form, so the menu scrolls itself rather than running off the edge.
      Sideways it never should: the action row wraps instead, and setting only
      overflow-y would leave the browser defaulting overflow-x to auto. */
-  max-height: calc(100vh - 16px);
+  max-height: calc(100vh - var(--space-xl));
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -872,22 +1050,22 @@ body.resizing iframe {
   width: 26px;
   height: 26px;
   padding: 0;
-  font-size: 16px;
+  font-size: var(--text-lg);
   line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
 }
 
 /* In the diff the form hangs off the gutter; here the card around it already
    is the frame, so it drops the offset and the rule down its left. */
 .selection-menu .comment-form {
   width: 320px;
-  max-width: calc(100vw - 32px);
+  max-width: calc(100vw - calc(var(--space-xl) * 2));
   margin: 0;
   border-left: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 
 /* The card is narrow enough that what the comment is about and the note
@@ -906,7 +1084,7 @@ body.resizing iframe {
 /* Every file gets its own section in the one long scroll; a divider
    between them keeps them from visually running together. */
 .file-section {
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--border-width-hairline) solid var(--border);
 }
 .file-section:last-child {
   border-bottom: none;
@@ -917,14 +1095,13 @@ body.resizing iframe {
 .diff-round-divider {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-lg);
+  font-size: var(--text-xs);
+  font-weight: 600;
   color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   background: var(--bg-soft);
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--border-width-hairline) solid var(--border);
 }
 
 .diff-toolbar,
@@ -934,19 +1111,19 @@ body.resizing iframe {
   z-index: 2;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-lg);
   background: var(--bg-soft);
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--border-width-hairline) solid var(--border);
 }
 
 /* Stacked below the toolbar, not at the very top, so a file's own sticky
    header does not slide underneath it as the reader scrolls past. */
 .diff-stack .diff-header {
-  top: var(--diff-toolbar-h, 0px);
+  top: var(--diff-toolbar-h);
 }
 .preview-stack .preview-header {
-  top: var(--preview-toolbar-h, 0px);
+  top: var(--preview-toolbar-h);
 }
 
 /* ---------- misc ---------- */
@@ -956,23 +1133,21 @@ button,
   font: inherit;
   font-weight: 500;
   white-space: nowrap;
-  font-size: 12px;
-  padding: 4px 12px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: var(--accent);
-  color: #fff;
+  font-size: var(--text-xs);
+  padding: var(--space-xs) var(--space-lg);
+  border: var(--border-width-hairline) solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--accent-fill);
+  color: var(--accent-on-fill);
   cursor: pointer;
   text-decoration: none;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  gap: var(--space-xs);
   transition:
-    filter 0.15s ease,
-    background-color 0.15s ease,
-    box-shadow 0.15s ease,
-    transform 0.05s ease;
+    filter var(--motion-duration) var(--motion-ease),
+    background-color var(--motion-duration) var(--motion-ease),
+    transform var(--motion-duration) var(--motion-ease);
 }
 
 button:hover:not(:disabled) {
@@ -982,13 +1157,12 @@ button:hover:not(:disabled) {
 button:active:not(:disabled) {
   filter: brightness(0.93);
   transform: translateY(1px);
-  box-shadow: none;
 }
 
 button:focus-visible,
 .button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: var(--border-width-marker) solid var(--accent-border);
+  outline-offset: var(--space-2xs);
 }
 
 button:disabled {
@@ -1001,86 +1175,126 @@ a.ghost.button {
   background: var(--bg);
   color: var(--fg);
   border-color: var(--border);
-  box-shadow: none;
 }
 
 button.ghost:hover:not(:disabled),
 a.ghost.button:hover {
-  background: var(--bg-inset);
+  background: var(--surface-hover);
   filter: none;
 }
 
 /* A ghost button that is itself a toggle (not part of a .toggle group)
    still needs to show whether it is currently on. */
 button.ghost.active {
-  color: var(--accent);
-  background: var(--bg-inset);
-  border-color: var(--accent);
+  color: var(--accent-fg);
+  background: var(--accent-subtle);
+  border-color: var(--accent-fg);
 }
 
 button.danger {
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 button.ghost.danger:hover:not(:disabled) {
-  background: var(--del-bg);
-  border-color: var(--danger);
+  background: var(--danger-bg);
+  border-color: var(--danger-fg);
 }
 
+/* A badge says one small thing about the row it sits on, but the things it
+   says are not one kind. An identity, a state, a warning and a count all
+   arrived as the same grey lozenge, so a reader scanning a file row had to
+   read three pills to learn that the first was a state, the second a file
+   type and the third a number.
+
+   Two marks split them. An outlined pill is a label about the row, and its
+   colour says which kind of label. A filled pill with no outline is not a
+   label at all: it is who wrote something, or how many there are. The
+   geometry is shared through --pill-*, so only fill, border and colour
+   carry the distinction. */
 .badge {
-  font-size: 11px;
-  padding: 0 6px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-2xs);
+  line-height: var(--pill-line-height);
+  font-variant-numeric: var(--pill-numeric);
+  min-width: var(--pill-min-width);
+  padding: var(--pill-padding-block) var(--pill-padding-inline);
+  border-radius: var(--radius-pill);
+  border: var(--border-width-hairline) solid var(--border);
   color: var(--fg-muted);
 }
 
-.badge.sm {
-  font-size: 10px;
+/* State: an open question is a different request from a change, so it does
+   not look like the resolved badge sitting next to it. */
+.badge.question {
+  border-color: var(--accent-border);
+  color: var(--accent-fg);
 }
 
-.badge.warn {
-  color: var(--warn);
-  border-color: var(--warn);
+/* Warning: the diff could not show everything it was asked to. An outlined
+   amber pill means this and nothing else. */
+.badge.warn:not(.sm) {
+  color: var(--warn-fg);
+  background: var(--warn-bg);
+  border-color: var(--warn-fg);
+}
+
+/* Identity: who left the comment. A name is not a state, so it drops the
+   outline rather than borrowing the state mark in another colour. */
+.badge.author {
+  border-color: transparent;
+  background: var(--accent-subtle);
+  color: var(--accent-fg);
+}
+
+/* Count: a number, not a word. Filled and unoutlined so it reads as a
+   quantity, and tabular so a column of them lines up and can be compared
+   without reading - the treatment .tab-count and .stat already use. Amber
+   because what is being counted is unresolved comments. */
+.badge.sm.warn {
+  border-color: transparent;
+  background: var(--warn-bg);
+  color: var(--warn-fg);
 }
 
 .empty {
-  padding: 16px;
+  padding: var(--space-xl);
   color: var(--fg-muted);
 }
 
 .error {
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 .error.banner {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--del-bg);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: var(--border-width-hairline) solid var(--border);
+  background: var(--danger-bg);
 }
 
 .error.inline {
-  margin-top: 6px;
-  font-size: 12px;
+  margin-top: var(--space-sm);
+  font-size: var(--text-xs);
 }
 
 .welcome {
-  padding: 32px;
+  padding: var(--space-2xl);
   max-width: 640px;
 }
 
 .welcome h1 {
-  font-size: 20px;
-  margin: 0 0 8px;
+  font-size: var(--text-xl);
+  margin: 0 0 var(--space-md);
 }
 
 .welcome pre {
   background: var(--bg-inset);
-  padding: 12px;
-  border-radius: 6px;
+  padding: var(--space-lg);
+  border-radius: var(--radius-md);
   overflow: auto;
-  font-family: var(--mono);
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 
 .welcome .groups {
@@ -1089,21 +1303,21 @@ button.ghost.danger:hover:not(:disabled) {
 }
 
 code {
-  font-family: var(--mono);
-  font-size: 0.92em;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   background: var(--bg-inset);
-  padding: 1px 4px;
-  border-radius: 4px;
+  padding: var(--border-width-hairline) var(--space-xs);
+  border-radius: var(--radius-sm);
 }
 
 a {
-  color: var(--accent);
+  color: var(--accent-fg);
 }
 
 /* ---------- rendered Markdown (exported pages) ---------- */
 
 .markdown {
-  padding: 16px 20px 40px;
+  padding: var(--space-xl) var(--space-2xl) 40px;
   overflow: auto;
   line-height: 1.7;
 }
@@ -1126,21 +1340,21 @@ a {
 }
 
 .markdown h1 {
-  font-size: 1.8em;
-  border-bottom: 1px solid var(--border);
+  font-size: var(--text-xl);
+  border-bottom: var(--border-width-hairline) solid var(--border);
   padding-bottom: 0.3em;
 }
 
 .markdown h2 {
-  font-size: 1.4em;
-  border-bottom: 1px solid var(--border);
+  font-size: var(--text-lg);
+  border-bottom: var(--border-width-hairline) solid var(--border);
   padding-bottom: 0.3em;
 }
 
 .markdown pre {
   background: var(--bg-inset);
-  padding: 12px;
-  border-radius: 6px;
+  padding: var(--space-lg);
+  border-radius: var(--radius-md);
   overflow: auto;
 }
 
@@ -1152,7 +1366,7 @@ a {
 .markdown blockquote {
   margin: 0 0 1em;
   padding: 0 1em;
-  border-left: 3px solid var(--border);
+  border-left: var(--border-width-block) solid var(--border);
   color: var(--fg-muted);
 }
 
@@ -1165,7 +1379,7 @@ a {
 
 .markdown th,
 .markdown td {
-  border: 1px solid var(--border);
+  border: var(--border-width-hairline) solid var(--border);
   padding: 4px 10px;
 }
 
@@ -1175,20 +1389,20 @@ a {
 
 .markdown hr {
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: var(--border-width-hairline) solid var(--border);
 }
 
 .markdown .frontmatter {
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--fg-muted);
-  border-left: 3px solid var(--border);
+  border-left: var(--border-width-block) solid var(--border);
   background: var(--bg-soft);
 }
 
 /* ---------- rendered images ---------- */
 
 .preview-image-wrap {
-  padding: 16px 20px 40px;
+  padding: var(--space-xl) var(--space-2xl) 40px;
   overflow: auto;
   text-align: center;
 }
@@ -1196,8 +1410,8 @@ a {
 .preview-image {
   max-width: 100%;
   max-height: 80vh;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: var(--border-width-hairline) solid var(--border);
+  border-radius: var(--radius-md);
   /* A checkerboard behind the image is what makes transparency visible
      against either theme's background. */
   background-image:
@@ -1212,7 +1426,7 @@ a {
 /* ---------- rendered Jupyter notebooks ---------- */
 
 .notebook {
-  padding: 16px 20px 40px;
+  padding: var(--space-xl) var(--space-2xl) 40px;
   overflow: auto;
   line-height: 1.7;
 }
@@ -1222,23 +1436,23 @@ a {
 }
 
 .nb-cell-label {
-  font-size: 12px;
-  font-family: ui-monospace, monospace;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
   color: var(--fg-muted);
-  margin-bottom: 4px;
+  margin-bottom: var(--space-xs);
 }
 
 .nb-code,
 .nb-output {
   background: var(--bg-inset);
-  padding: 12px;
-  border-radius: 6px;
+  padding: var(--space-lg);
+  border-radius: var(--radius-md);
   overflow: auto;
   margin: 0 0 0.5em;
 }
 
 .nb-error {
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 .nb-image img {
@@ -1252,7 +1466,7 @@ a {
 .tabs {
   display: flex;
   flex: none;
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--border-width-hairline) solid var(--border);
   background: var(--bg-soft);
 }
 
@@ -1261,28 +1475,33 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--space-sm);
   border: none;
   border-radius: 0;
-  border-bottom: 2px solid transparent;
+  border-bottom: var(--border-width-marker) solid transparent;
   background: none;
   color: var(--fg-muted);
-  padding: 10px 4px;
-  font-size: 13px;
+  padding: var(--space-lg) var(--space-xs);
+  font-size: var(--text-sm);
 }
 
 .tabs button.active {
   color: var(--fg);
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--accent-fg);
 }
 
 .tab-count {
-  font-size: 11px;
-  padding: 0 6px;
-  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-2xs);
+  line-height: var(--pill-line-height);
+  min-width: var(--pill-min-width);
+  padding: var(--pill-padding-block) var(--pill-padding-inline);
+  border-radius: var(--radius-pill);
   background: var(--bg-inset);
   color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--pill-numeric);
 }
 
 .sidebar.fill {
@@ -1293,8 +1512,8 @@ a {
 @media (max-width: 720px) {
   .topbar {
     flex-wrap: wrap;
-    row-gap: 6px;
-    padding: 8px 10px;
+    row-gap: var(--space-sm);
+    padding: var(--space-md) var(--space-lg);
   }
 
   /* The counts and the export stamp are context, not controls: they give up
@@ -1318,8 +1537,8 @@ a {
 
   .diff-header,
   .preview-header {
-    padding: 6px;
-    gap: 6px;
+    padding: var(--space-sm);
+    gap: var(--space-sm);
   }
 
   /* A comment sits under the line it belongs to; on a phone the gutter it
@@ -1330,7 +1549,7 @@ a {
   }
 
   .diff-table {
-    font-size: 12px;
+    font-size: var(--text-xs);
   }
 
   .diff-table col.col-num {
@@ -1342,7 +1561,7 @@ a {
   }
 
   .welcome {
-    padding: 20px 16px;
+    padding: var(--space-2xl) var(--space-xl);
   }
 
   .markdown {
@@ -1361,14 +1580,14 @@ a {
 .field-label {
   display: block;
   margin: 8px 0 4px;
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--fg-muted);
 }
 
 .suggestion {
-  margin-top: 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  margin-top: var(--space-md);
+  border: var(--border-width-hairline) solid var(--border);
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
@@ -1376,18 +1595,18 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 4px 8px;
+  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-md);
   background: var(--bg-inset);
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--fg-muted);
 }
 
 .suggestion-diff {
   width: 100%;
   border-collapse: collapse;
-  font-family: var(--mono);
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   line-height: 1.55;
   table-layout: fixed;
 }
@@ -1419,45 +1638,41 @@ a {
   touch-action: none;
 }
 
-/* A comment written from the command line says who left it. */
-.badge.author {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
+/* A comment written from the command line says who left it. The badge and
+   the rule down the side of the thread agree on one colour for that. */
 .comment:has(.badge.author) {
-  border-left-color: var(--warn);
+  border-left-color: var(--accent-fg);
 }
 
 /* ---------- submitting a review ---------- */
 
 .review-form {
   flex: none;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-lg) var(--space-lg);
+  border-bottom: var(--border-width-hairline) solid var(--border);
   background: var(--bg-soft);
 }
 
 .review-banner {
   flex: none;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-sm) var(--space-lg);
+  border-bottom: var(--border-width-hairline) solid var(--border);
   background: var(--bg-inset);
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 
 /* The three verdicts read as three different acts, so they do not look
    like one button repeated. */
 .comment-actions .verdict.approve {
-  background: var(--ok-bg, #1a7f37);
-  border-color: var(--ok-bg, #1a7f37);
-  color: #fff;
+  background: var(--ok-bg);
+  border-color: var(--ok-fg);
+  color: var(--ok-fg);
 }
 .comment-actions .verdict.changes {
   background: transparent;
-  border-color: var(--danger, #cf222e);
-  color: var(--danger, #cf222e);
+  border-color: var(--danger-fg);
+  color: var(--danger-fg);
 }
 .comment-actions .verdict:disabled {
   opacity: 0.6;
@@ -1474,68 +1689,61 @@ a {
 .file-search {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: var(--border-width-hairline) solid var(--border);
   position: sticky;
   top: 0;
-  background: var(--bg-elevated, var(--bg));
+  background: var(--bg-elevated);
   z-index: 1;
 }
 .file-search-input {
   flex: 1;
   min-width: 0;
-  padding: 0.3rem 0.5rem;
+  padding: var(--space-xs) var(--space-md);
   font: inherit;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   color: var(--fg);
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width-hairline) solid var(--border);
+  border-radius: var(--radius-md);
 }
 .file-search-input:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
+  outline: var(--border-width-marker) solid var(--accent-border);
+  outline-offset: calc(var(--border-width-hairline) * -1);
 }
 .file-search .hint {
   white-space: nowrap;
-}
-
-/* A question is a different request from a change, so it does not look
-   like the resolved badge next to it. */
-.badge.question {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 /* The key list, which is also where the keys are documented. */
 .help-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--scrim);
   display: grid;
   place-items: center;
   z-index: 50;
 }
 .help {
-  background: var(--bg-elevated, var(--bg));
+  background: var(--bg-elevated);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1.25rem 1.5rem;
+  border: var(--border-width-hairline) solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xl) var(--space-2xl);
   min-width: 20rem;
   max-width: min(92vw, 28rem);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-overlay);
 }
 .help h2 {
-  margin: 0 0 0.75rem;
-  font-size: 1rem;
+  margin: 0 0 var(--space-lg);
+  font-size: var(--text-lg);
 }
 .help dl {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 0.4rem 1rem;
-  margin: 0 0 0.75rem;
+  gap: var(--space-sm) var(--space-xl);
+  margin: 0 0 var(--space-lg);
   align-items: baseline;
 }
 .help dt {
@@ -1546,11 +1754,11 @@ a {
 }
 .help kbd {
   font: inherit;
-  font-size: 0.8rem;
-  padding: 0.1rem 0.4rem;
-  border: 1px solid var(--border);
-  border-bottom-width: 2px;
-  border-radius: 4px;
+  font-size: var(--text-xs);
+  padding: var(--space-2xs) var(--space-sm);
+  border: var(--border-width-hairline) solid var(--border);
+  border-bottom-width: var(--border-width-marker);
+  border-radius: var(--radius-sm);
   background: var(--bg);
 }
 
@@ -1582,7 +1790,7 @@ a {
 .diff-round-title.as-button {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-sm);
   flex: 1;
   min-width: 0;
   padding: 0;
@@ -1590,8 +1798,6 @@ a {
   background: none;
   font: inherit;
   color: inherit;
-  text-transform: inherit;
-  letter-spacing: inherit;
   cursor: pointer;
   text-align: left;
 }
@@ -1604,22 +1810,22 @@ a {
 }
 .diff-tabs {
   display: flex;
-  gap: 4px;
-  padding: 6px 6px 0;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-sm) 0;
   overflow-x: auto;
 }
 .diff-tab {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-lg);
+  border: var(--border-width-hairline) solid var(--border);
   border-bottom: 0;
-  border-radius: 6px 6px 0 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
   background: var(--bg-soft);
   color: var(--fg-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-xs);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -1628,14 +1834,14 @@ a {
   color: var(--fg);
 }
 .toggle.sm button {
-  padding: 2px 7px;
-  font-size: 11px;
+  padding: var(--space-2xs) var(--space-md);
+  font-size: var(--text-2xs);
 }
 
 .tab-remove {
   color: var(--fg-muted);
-  padding: 0 2px;
+  padding: 0 var(--space-2xs);
 }
 .tab-remove:hover {
-  color: var(--danger, #cf222e);
+  color: var(--danger-fg);
 }
