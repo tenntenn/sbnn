@@ -538,8 +538,7 @@ input[type='checkbox'] {
   transition:
     color var(--motion-duration) var(--motion-ease),
     background-color var(--motion-duration) var(--motion-ease),
-    border-color var(--motion-duration) var(--motion-ease),
-    transform var(--motion-duration) var(--motion-ease);
+    border-color var(--motion-duration) var(--motion-ease);
 }
 
 .divider-handle:hover {
@@ -622,6 +621,18 @@ body.resizing iframe {
   box-shadow: inset var(--border-width-marker) 0 0 var(--selected-marker);
 }
 
+/* The ellipsis belongs at the start of a truncated path, because the tail is
+   the part that identifies the file, and an RTL box is what puts it there.
+   That also flips the bidi paragraph direction, though, and every neutral
+   character at either end of the string - a leading dot, a bracket run - is
+   then resolved against RTL and painted on the wrong side.
+
+   The direction has to be given back to the string without being taken away
+   from the box, so the string is isolated instead: Sidebar.tsx wraps the path
+   in a <bdi>, which resolves its own direction from its own first strong
+   character. unicode-bidi: plaintext here would do the isolating and the
+   clipping both, and clipping is the half that must stay RTL - it moved the
+   ellipsis to the end of the path, hiding the file name. */
 .file-path {
   flex: 1;
   overflow: hidden;
@@ -732,8 +743,6 @@ body.resizing iframe {
 
 .diff-title .disclosure {
   color: var(--fg-muted);
-  flex: none;
-  display: flex;
 }
 
 .path {
@@ -843,12 +852,20 @@ body.resizing iframe {
   overflow-wrap: anywhere;
 }
 
+/* The widths of the columns that come before the code, named once so the
+   comment card below a line can be indented by exactly the gutter it has to
+   clear. Read back by --thread-gutter, so the two cannot drift apart. */
+.diff-table {
+  --col-num-w: 48px;
+  --col-marker-w: 18px;
+}
+
 .diff-table col.col-num {
-  width: 48px;
+  width: var(--col-num-w);
 }
 
 .diff-table col.col-marker {
-  width: 18px;
+  width: var(--col-marker-w);
 }
 
 .diff-table col.col-side {
@@ -931,11 +948,26 @@ body.resizing iframe {
 
 /* ---------- comments ---------- */
 
+/* A comment card is dropped in a row that spans the whole table, so it starts
+   at the table's left edge and has to be pushed clear of the gutter itself.
+   How wide that gutter is depends on the mode: split leads with one number
+   column, unified with two and the marker between them. A constant tuned for
+   one of them lands 52px off in the other, and the card jumps sideways when
+   the reader toggles, so the offset is derived from the same widths the
+   colgroup uses. */
+.diff-table.side-by-side {
+  --thread-gutter: var(--col-num-w);
+}
+
+.diff-table.unified {
+  --thread-gutter: calc(var(--col-num-w) * 2 + var(--col-marker-w));
+}
+
 .thread,
 .comment-form {
   border-left: var(--border-width-block) solid var(--accent-fg);
   background: var(--bg-soft);
-  margin: var(--space-sm) 0 var(--space-sm) 44px;
+  margin: var(--space-sm) 0 var(--space-sm) var(--thread-gutter, 0px);
   padding: var(--space-md) var(--space-lg);
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
   font-family: var(--font-sans);
@@ -948,8 +980,14 @@ body.resizing iframe {
   padding-top: var(--space-md);
 }
 
-.comment.resolved {
-  opacity: 0.6;
+/* Resolved is a state, and the row already says so twice: a badge, and the
+   comment dropping out of the open count. Fading the whole card said it a
+   third time in the language button:disabled uses, over controls the reader
+   can still act on - Reopen above all, which is the one thing they come to a
+   resolved comment for. Only the prose steps back, and it does it by taking
+   the muted foreground rather than by going translucent. */
+.comment.resolved .comment-body {
+  color: var(--fg-muted);
 }
 
 .comment-meta {
@@ -1251,11 +1289,26 @@ button.ghost.danger:hover:not(:disabled) {
 /* Count: a number, not a word. Filled and unoutlined so it reads as a
    quantity, and tabular so a column of them lines up and can be compared
    without reading - the treatment .tab-count and .stat already use. Amber
-   because what is being counted is unresolved comments. */
+   because what is being counted is unresolved comments.
+
+   It also has to be round. --pill-min-width is a floor for a word, and a
+   word's inline padding is what kept a single digit from ever reaching it:
+   under border-box the label padding and the hairline already spend more
+   across than the whole pill is tall, so the floor could never bite and one
+   digit stayed an oval. A count is one character wide, so it takes the
+   smallest inline step, and its floor is the pill's own height rather than
+   a fixed 18px - derived from the same tokens the height is built from, so
+   the two cannot drift apart. One digit is then a circle, and a count wide
+   enough to pass the floor grows sideways into a stadium at unchanged
+   height. */
 .badge.sm.warn {
   border-color: transparent;
   background: var(--warn-bg);
   color: var(--warn-fg);
+  padding-inline: var(--space-2xs);
+  min-width: calc(
+    var(--text-2xs) + 2 * var(--pill-padding-block) + 2 * var(--border-width-hairline)
+  );
 }
 
 .empty {
@@ -1548,12 +1601,12 @@ a {
     margin-left: 8px;
   }
 
+  /* Narrower type and narrower line numbers on a phone. The number column is
+     set through the shared width, so the gutter the comment card clears
+     follows it down. */
   .diff-table {
+    --col-num-w: 34px;
     font-size: var(--text-xs);
-  }
-
-  .diff-table col.col-num {
-    width: 34px;
   }
 
   .diff-table td {
@@ -1639,9 +1692,13 @@ a {
 }
 
 /* A comment written from the command line says who left it. The badge and
-   the rule down the side of the thread agree on one colour for that. */
+   this rule agree on one colour for that. A colour on its own painted
+   nothing, because .comment has no left border to colour - its only border
+   rule is the hairline between stacked comments - so the mark states its own
+   width and style and pays for the room it takes. */
 .comment:has(.badge.author) {
-  border-left-color: var(--accent-fg);
+  border-left: var(--border-width-marker) solid var(--accent-border);
+  padding-left: var(--space-md);
 }
 
 /* ---------- submitting a review ---------- */
@@ -1762,6 +1819,18 @@ a {
   background: var(--bg);
 }
 
+/* Everything between the pane and the header has to agree to be narrower
+   than its contents, or the header's own shrink rules never get a chance.
+   A flex item defaults to min-width: auto - a content-based floor - so the
+   preview stack refused to go below the max-content width of the longest
+   path in it, and .content turned that into a sideways scroll instead of
+   clipping. Both levels opt out of the floor so the pane takes the width of
+   the screen and the path below is the thing that gives. */
+.preview-stack,
+.preview-section {
+  min-width: 0;
+}
+
 /* The preview header carries more than it used to - the renderer choice and
    the sync switch on top of the rest - so the parts that can give way do.
    The path is the first to shrink, the controls keep their size. */
@@ -1804,8 +1873,19 @@ a {
 .diff-round-title.as-button:hover {
   color: var(--fg);
 }
+/* The box holds an .icon, so it is sized from the glyph rather than from the
+   text beside it: 0.8em against a 12px parent came to 9.6px, and the 14px
+   chevron it holds overhung its allotment by 4.4px into the title, sitting
+   2.5px above the label's centre because a plain box aligns on the baseline.
+   One rule for both places the component appears, centring the glyph in a
+   box that is --space-xl on a side - wider than .icon at 16px and .icon.sm
+   at 14px, so neither overhangs. */
 .disclosure {
-  width: 0.8em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-xl);
+  height: var(--space-xl);
   flex: none;
 }
 .diff-tabs {

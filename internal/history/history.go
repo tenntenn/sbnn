@@ -15,7 +15,10 @@ import (
 	"io"
 	"os"
 	"path"
+	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -111,19 +114,35 @@ func FromGroup(g *model.Group) Record {
 
 // Append writes a record to the log, one JSON object per line so that the
 // file stays readable by anything, sbnn included.
+//
+// The log is one file for the whole machine while a session file is one
+// per port, so several servers appending at once is the ordinary case, not
+// a corner. O_APPEND alone only settles where a write starts, not that it
+// arrives in one piece: a record carrying comment bodies and their
+// snippets is far past any size a write is promised to be atomic at, and
+// two of them landing inside one another make a line that no longer
+// parses - a review that quietly vanishes from sbnn reviews, since Read
+// skips what it cannot read. So the write is made under an exclusive
+// advisory lock on the file.
 func Append(path string, rec Record) error {
 	if path == "" {
 		return nil
+	}
+	// Marshalled before the lock is taken: the lock is for the write.
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	b, err := json.Marshal(rec)
+	unlock, err := lockForAppend(f)
 	if err != nil {
-		return err
+		return fmt.Errorf("locking %s: %w", path, err)
 	}
+	defer unlock()
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		return err
 	}
@@ -337,6 +356,15 @@ type Stats struct {
 	Deletions   int `json:"deletions"`
 	// Silent is how many reviews were submitted with nothing to say.
 	Silent int `json:"silent"`
+	// Approved, Commented and ChangesRequested are how many reviews
+	// decided each way. Counting comments does not answer what a review
+	// decided - an approval can carry three comments and a request for
+	// changes can carry none - which is the whole reason a verdict is
+	// written down, so a summary that leaves it out cannot be read for the
+	// one thing each review was for.
+	Approved         int `json:"approved"`
+	Commented        int `json:"commented"`
+	ChangesRequested int `json:"changesRequested"`
 	// CommentsPerReview is the mean, kept as a float on purpose: 2.8 says
 	// more than 3.
 	CommentsPerReview float64 `json:"commentsPerReview"`
@@ -364,6 +392,17 @@ func Summarize(records []Record) Stats {
 		s.Deletions += rec.Deletions
 		if len(rec.Comments) == 0 {
 			s.Silent++
+		}
+		// A record written before the verdict was recorded has an empty
+		// one, which reads as "commented" - the default ParseVerdict and
+		// the API already apply - so an old log is counted, not dropped.
+		switch rec.Verdict {
+		case model.VerdictApproved:
+			s.Approved++
+		case model.VerdictChangesRequested:
+			s.ChangesRequested++
+		default:
+			s.Commented++
 		}
 		if s.First.IsZero() || rec.ReviewedAt.Before(s.First) {
 			s.First = rec.ReviewedAt
@@ -415,7 +454,7 @@ func median(values []time.Duration) time.Duration {
 	if len(values) == 0 {
 		return 0
 	}
-	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	slices.Sort(values)
 	mid := len(values) / 2
 	if len(values)%2 == 1 {
 		return values[mid]
@@ -439,15 +478,20 @@ func tally(counts map[string]int) []Count {
 	return out
 }
 
-// ParseSince reads "7d", "36h", "90m" or an RFC3339 date as a starting point.
+// daysRE matches the "7d" form whole, so that "7days" or "7d3h" - which
+// plainly mean something other than seven days - are refused rather than
+// silently read as the part before the first "d".
+var daysRE = regexp.MustCompile(`^([0-9]+)d$`)
+
+// ParseSince reads "7d", "36h", "90m" or an RFC3339 date as a starting
+// point. A date without a zone is read in the local zone.
 func ParseSince(s string, now time.Time) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return time.Time{}, nil
 	}
-	if strings.HasSuffix(s, "d") {
-		var days int
-		if _, err := fmt.Sscanf(s, "%dd", &days); err == nil && days > 0 {
+	if m := daysRE.FindStringSubmatch(s); m != nil {
+		if days, err := strconv.Atoi(m[1]); err == nil && days > 0 {
 			return now.AddDate(0, 0, -days), nil
 		}
 	}
@@ -455,7 +499,11 @@ func ParseSince(s string, now time.Time) (time.Time, error) {
 		return now.Add(-d), nil
 	}
 	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
-		if t, err := time.Parse(layout, s); err == nil {
+		// In the reviewer's own zone: everything the reviews output shows
+		// is formatted with .Local(), so a bare date has to start where
+		// that date starts on their clock, not nine hours into it. An
+		// RFC3339 string carries its own offset and is unaffected.
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
 			return t, nil
 		}
 	}

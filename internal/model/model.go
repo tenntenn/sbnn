@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // FileStatus represents how a file was changed in a diff.
@@ -186,37 +187,68 @@ func Suggestions(body string) []string {
 	var out []string
 	lines := strings.Split(body, "\n")
 	for i := 0; i < len(lines); i++ {
-		fence, ok := suggestionFence(lines[i])
-		if !ok {
+		if _, _, ok := openFence(lines[i]); !ok {
 			continue
 		}
-		block := make([]string, 0, 4)
-		// inner is the fence of the code block nested inside the
-		// suggestion while the scan is inside one. Its lines are the
-		// replacement text, not Markdown to be read, so a suggestion
-		// may propose a file that itself contains a code block.
-		inner := ""
-		i++
-	scan:
-		for ; i < len(lines); i++ {
-			line := lines[i]
-			switch {
-			case endsSuggestion(line, fence, inner):
-				break scan
-			case inner != "":
-				if closesFence(line, inner) {
-					inner = ""
-				}
-			default:
-				if f, _, ok := openFence(line); ok {
-					inner = f
-				}
+		end := blockEnd(lines, i)
+		if _, ok := suggestionFence(lines[i]); ok {
+			block := make([]string, 0, end-i)
+			for j := i + 1; j < end; j++ {
+				block = append(block, strings.TrimSuffix(lines[j], "\r"))
 			}
-			block = append(block, strings.TrimSuffix(line, "\r"))
+			out = append(out, strings.Join(block, "\n"))
 		}
-		out = append(out, strings.Join(block, "\n"))
+		// What is written inside another fenced block is quoted text,
+		// not Markdown, so a suggestion block there was shown rather
+		// than proposed - which is what a comment explaining the
+		// format, or an agent quoting a diff that contains one, is
+		// doing. Either way the scan resumes after the block.
+		i = end
 	}
 	return out
+}
+
+// blockEnd returns the index of the line closing the fenced block opened at
+// lines[start], or len(lines) when the text never closes it.
+//
+// A suggestion block is measured differently from any other. A code block
+// nested inside one is replacement text rather than Markdown, so its closing
+// fence does not end the suggestion; every other block ends at the first
+// fence that can close it. Reading a suggestion and deciding whether a body
+// leaves a block open are the same question, so both ask it here.
+func blockEnd(lines []string, start int) int {
+	fence, _, ok := openFence(lines[start])
+	if !ok {
+		return start
+	}
+	if _, ok := suggestionFence(lines[start]); !ok {
+		for i := start + 1; i < len(lines); i++ {
+			if closesFence(lines[i], fence) {
+				return i
+			}
+		}
+		return len(lines)
+	}
+	// inner is the fence of the code block nested inside the suggestion
+	// while the scan is inside one, so a suggestion may propose a file
+	// that itself contains a code block.
+	inner := ""
+	for i := start + 1; i < len(lines); i++ {
+		line := lines[i]
+		switch {
+		case endsSuggestion(line, fence, inner):
+			return i
+		case inner != "":
+			if closesFence(line, inner) {
+				inner = ""
+			}
+		default:
+			if f, _, ok := openFence(line); ok {
+				inner = f
+			}
+		}
+	}
+	return len(lines)
 }
 
 // endsSuggestion reports whether a line ends a suggestion block opened with
@@ -301,7 +333,37 @@ func WithSuggestion(body, suggestion string) string {
 	if strings.TrimSpace(body) == "" {
 		return block
 	}
-	return strings.TrimRight(body, "\n") + "\n\n" + block
+	body = strings.TrimRight(body, "\n")
+	// A body that opens a fenced block and never closes it would hold the
+	// appended suggestion inside that block, where Suggestions reads it as
+	// quoted rather than proposed - `sbnn comment --suggest` would drop the
+	// replacement it was handed without saying so. Closing the block first
+	// puts the suggestion back at the top level. Nothing is lost: an
+	// unclosed block already ends at the end of the text, so the close only
+	// writes down where it was going to end anyway.
+	if dangling := danglingFence(body); dangling != "" {
+		body += "\n" + dangling
+	}
+	return body + "\n\n" + block
+}
+
+// danglingFence returns the fence of a block the text opens and never closes,
+// or "" when every block it opens is closed. At most one can be left open,
+// since every line after it belongs to it.
+func danglingFence(text string) string {
+	lines := strings.Split(text, "\n")
+	for i := 0; i < len(lines); i++ {
+		fence, _, ok := openFence(lines[i])
+		if !ok {
+			continue
+		}
+		end := blockEnd(lines, i)
+		if end == len(lines) {
+			return fence
+		}
+		i = end
+	}
+	return ""
 }
 
 // MarshalJSON adds the suggestions parsed out of the body, so that a client
@@ -361,24 +423,92 @@ const (
 
 // ParseVerdict reads a verdict, accepting the spellings people actually
 // type. An empty string is "commented".
+//
+// The separators are thrown away before matching, so that every permutation
+// of a two-word spelling means the same thing: "changes-requested" is what
+// sbnn stores, "changes_requested" is what a GitHub review payload reports
+// and "REQUEST_CHANGES" is what its API takes when submitting one. Whoever
+// is bridging the two should not have to guess which of them we accept.
 func ParseVerdict(s string) (Verdict, bool) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "":
+	// A verdict left empty is "commented" - `sbnn review` with no --verdict
+	// takes this path. It has to be decided on the raw text, before the
+	// separators are dropped: "-_-" also folds down to nothing, and reading
+	// that as a verdict would confirm a review, write it to the history and
+	// fire the hook on what is plainly a typo.
+	if strings.TrimSpace(s) == "" {
 		return VerdictCommented, true
-	case "approved", "approve", "lgtm":
+	}
+	switch normalizeVerdict(s) {
+	case "approved", "approve", "accept", "accepted", "lgtm", "ship", "shipit":
 		return VerdictApproved, true
 	case "commented", "comment":
 		return VerdictCommented, true
-	case "changes-requested", "changes_requested", "request-changes", "changes":
+	case "changesrequested", "requestchanges", "changes", "reject", "rejected":
 		return VerdictChangesRequested, true
 	}
 	return "", false
 }
 
-// Blocking reports whether the verdict says the change should not go ahead
-// yet. It is what an exit status and a waiting agent act on.
+// normalizeVerdict folds a written verdict down to letters, so that case and
+// the separator someone reached for stop mattering.
+func normalizeVerdict(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range strings.ToLower(s) {
+		// unicode.IsSpace, not a list of the ASCII ones: a verdict pasted out
+		// of a terminal or an editor arrives padded with whatever that
+		// program uses, and on a Japanese keyboard the leading space is
+		// routinely U+3000.
+		if unicode.IsSpace(r) {
+			continue
+		}
+		switch r {
+		case '-', '_', '.':
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// Blocking reports whether the verdict, on its own, says the change should
+// not go ahead yet.
+//
+// It answers only half the question. A review that merely commented, or
+// that carried no verdict at all, still blocks when it left a comment
+// open - see Blocks, which is the rule sbnn actually ends on.
 func (v Verdict) Blocking() bool {
 	return v == VerdictChangesRequested
+}
+
+// Blocks reports whether a submitted review stops the change going ahead:
+// the question sbnn answers with the exit status of wait --exit-code and
+// submit --exit-code, and the one a review hook is told through
+// SBNN_BLOCKING.
+//
+// The verdict outranks the comments but does not always settle it. An
+// approval with three remarks on it is still an approval, and a review
+// that asked for changes blocks even if it pointed at no line in
+// particular. A review that only commented - or carried no verdict at all,
+// as every review did before verdicts existed - blocks exactly when it
+// left a comment open, which is the rule sbnn had before there was a
+// verdict to consult.
+//
+// Both callers go through here so that the status sbnn exits with and the
+// answer it hands a hook cannot drift apart.
+func Blocks(v Verdict, comments []*Comment) bool {
+	switch v {
+	case VerdictApproved:
+		return false
+	case VerdictChangesRequested:
+		return true
+	}
+	for _, c := range comments {
+		if !c.Resolved {
+			return true
+		}
+	}
+	return false
 }
 
 // String makes a verdict readable in a sentence.
