@@ -212,13 +212,45 @@ func TestReviewLinesShowTheVerdict(t *testing.T) {
 // --stats has to answer the same question for the pile: how many went
 // through, how many were only remarked on, how many were stopped.
 func TestStatsCountTheVerdicts(t *testing.T) {
-	records := reviewedEachWay()
-	if want := (verdictTally{Approved: 1, Commented: 2, ChangesRequested: 1}); want != verdicts(records) {
-		t.Errorf("verdicts() = %+v, want %+v", verdicts(records), want)
+	stats := history.Summarize(reviewedEachWay())
+	if stats.Approved != 1 || stats.Commented != 2 || stats.ChangesRequested != 1 {
+		t.Errorf("Summarize counted %d approved, %d commented, %d changes requested; want 1, 2, 1",
+			stats.Approved, stats.Commented, stats.ChangesRequested)
 	}
 	var buf bytes.Buffer
-	printStats(&buf, history.Summarize(records), verdicts(records))
+	printStats(&buf, stats)
 	if want := "1 approved, 2 commented, 1 changes requested\n"; !strings.Contains(buf.String(), want) {
 		t.Errorf("--stats does not tally the verdicts:\nwant a line %q\ngot\n%s", want, buf.String())
+	}
+}
+
+// The tally lives in history.Stats rather than in this package, so that
+// --stats says the same thing in every format. Counting the verdicts only
+// on the way to the text output would have left json and jsonl - the
+// formats --stats was taught to honour at all in #50 - unable to answer the
+// question the listing is read for.
+func TestStatsCountTheVerdictsInEveryFormat(t *testing.T) {
+	for _, format := range []string{"json", "jsonl"} {
+		t.Run(format, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := printReviewStats(&buf, reviewedEachWay(), format); err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			line := strings.TrimRight(buf.String(), "\n")
+			if err := json.Unmarshal([]byte(line), &got); err != nil {
+				t.Fatalf("not a JSON object: %v\n%s", err, buf.String())
+			}
+			for key, want := range map[string]float64{"approved": 1, "commented": 2, "changesRequested": 1} {
+				n, ok := got[key].(float64)
+				if !ok {
+					t.Errorf("the aggregate has no %q: %s", key, line)
+					continue
+				}
+				if n != want {
+					t.Errorf("%q = %v, want %v", key, n, want)
+				}
+			}
+		})
 	}
 }

@@ -13,7 +13,6 @@ import (
 
 	"github.com/tenntenn/sbnn/internal/client"
 	"github.com/tenntenn/sbnn/internal/history"
-	"github.com/tenntenn/sbnn/internal/model"
 )
 
 var (
@@ -164,7 +163,7 @@ func printReviewStats(w io.Writer, records []history.Record, format string) erro
 			fmt.Fprintln(w, "no review has been submitted yet")
 			return nil
 		}
-		printStats(w, stats, verdicts(records))
+		printStats(w, stats)
 		return nil
 	default:
 		return fmt.Errorf("unknown format %q: use text, json or jsonl", format)
@@ -281,35 +280,6 @@ func printReviews(w io.Writer, records []history.Record) error {
 	return nil
 }
 
-// verdictTally is how many reviews decided each way. It is counted here
-// rather than in history.Stats so that the three numbers travel together
-// in the order a reader wants them: what went through, what was only
-// remarked on, what was stopped.
-type verdictTally struct {
-	Approved         int
-	Commented        int
-	ChangesRequested int
-}
-
-// verdicts counts what the reviews decided. A record written before the
-// verdict was recorded has an empty one, which model.Verdict reads as
-// "commented" - the same default ParseVerdict and the API apply - so an
-// old log is counted, not dropped.
-func verdicts(records []history.Record) verdictTally {
-	var t verdictTally
-	for _, rec := range records {
-		switch rec.Verdict {
-		case model.VerdictApproved:
-			t.Approved++
-		case model.VerdictChangesRequested:
-			t.ChangesRequested++
-		default:
-			t.Commented++
-		}
-	}
-	return t
-}
-
 // labelPairs puts the labels a review was sent with on its line, sorted so
 // that two runs read the same.
 func labelPairs(rec history.Record) string {
@@ -341,11 +311,11 @@ func waited(rec history.Record) string {
 	return ""
 }
 
-func printStats(w io.Writer, s history.Stats, v verdictTally) {
+func printStats(w io.Writer, s history.Stats) {
 	fmt.Fprintf(w, "%d review(s), %d comment(s) (%.1f per review), %d suggestion(s)\n",
 		s.Reviews, s.Comments, s.CommentsPerReview, s.Suggestions)
 	fmt.Fprintf(w, "%d approved, %d commented, %d changes requested\n",
-		v.Approved, v.Commented, v.ChangesRequested)
+		s.Approved, s.Commented, s.ChangesRequested)
 	fmt.Fprintf(w, "%d review(s) had nothing to say, %d comment(s) were resolved\n", s.Silent, s.Resolved)
 	fmt.Fprintf(w, "%d file(s) reviewed, +%d -%d\n", s.Files, s.Additions, s.Deletions)
 	if s.MedianWait > 0 {
