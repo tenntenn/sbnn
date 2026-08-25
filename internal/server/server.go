@@ -1009,8 +1009,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, what string
 		if emptyOK && errors.Is(err, io.EOF) {
 			return true
 		}
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			http.Error(w, fmt.Sprintf("%s is too large (max %s)", what, byteLimit(limit)),
 				http.StatusRequestEntityTooLarge)
 			return false
