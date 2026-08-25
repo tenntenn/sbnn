@@ -79,13 +79,33 @@ export function escapeHTML(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c)
 }
 
-// Links open away from the page, and they are the only elements that gain
-// an attribute here, so the hook only has to look at them.
+/**
+ * isExternalHref reports whether a link points somewhere that is genuinely
+ * another page, and so is worth opening in a tab of its own.
+ *
+ * Only an absolute http(s) URL is. A relative href and a bare fragment both
+ * resolve against the review page's own URL, which is the server root - not
+ * against the directory the previewed file lives in - so opening one in a new
+ * tab lands the reader on a second copy of sbnn (or, now that the server
+ * answers asset-looking paths with 404, on a blank error tab) rather than on
+ * the thing they clicked. A mailto: or tel: href is handed to another
+ * application entirely and gains nothing from target either.
+ */
+function isExternalHref(href: string): boolean {
+  return /^https?:\/\//i.test(href) || href.startsWith('//')
+}
+
+// Links are the only elements that gain an attribute here, so the hook only
+// has to look at them. target is removed rather than merely not set: the
+// Markdown comes from a diff and may carry its own <a target="_blank">.
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-  if (node.tagName === 'A' && node.hasAttribute('href')) {
+  if (node.tagName !== 'A' || !node.hasAttribute('href')) return
+  if (isExternalHref(node.getAttribute('href') ?? '')) {
     node.setAttribute('target', '_blank')
     node.setAttribute('rel', 'noreferrer noopener')
+    return
   }
+  node.removeAttribute('target')
 })
 
 /**
