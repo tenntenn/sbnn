@@ -34,8 +34,17 @@ review", with nobody waiting in between.
   $ sbnn hook --clear               # forget it
 
 The command runs through the shell with the review prompt on its stdin and
-these variables set: SBNN_GROUP, SBNN_URL, SBNN_SERVER, SBNN_PORT, SBNN_COMMENTS and
-SBNN_REVIEW_NOTE. The URL is sent the same thing as JSON.
+these variables set: SBNN_GROUP, SBNN_URL, SBNN_SERVER, SBNN_PORT, SBNN_COMMENTS,
+SBNN_REVIEW_NOTE, SBNN_VERDICT and SBNN_BLOCKING. The URL is sent the same
+thing as JSON, where the verdict is the "verdict" field.
+
+SBNN_VERDICT is what the reviewer decided - approved, commented or
+changes-requested - and is empty when the review carried no verdict, so a
+hook that wants a default picks its own. SBNN_BLOCKING answers the question
+a hook would otherwise re-implement: it is 1 when the verdict stops the
+change going ahead and 0 when it does not.
+
+  $ sbnn hook --on-review '[ "$SBNN_BLOCKING" = 1 ] && notify-send "changes requested"'
 
 Hooks belong to a group, survive a restart, and can also be registered while
 sending the diff:
