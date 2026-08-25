@@ -1,7 +1,49 @@
 import DOMPurify from 'dompurify'
-import { marked } from 'marked'
+import { Marked, marked, type Tokens } from 'marked'
 
 const MARKED_OPTIONS = { async: false, gfm: true, breaks: false } as const
+
+/**
+ * commentMarked renders a comment body, and draws every image as the link it
+ * was written as instead of as an <img>.
+ *
+ * Rendering the image would make the browser fetch its URL, and see
+ * renderComment for why a comment must never do that. A link is the closest
+ * honest thing: the alt text stays readable, the URL is still one click away,
+ * and nothing is fetched until the reader asks for it.
+ */
+const commentMarked = new Marked({
+  ...MARKED_OPTIONS,
+  renderer: {
+    image({ href, title, text }: Tokens.Image): string {
+      const label = text.trim() === '' ? href : text
+      const attrs = title == null || title === '' ? '' : ` title="${escapeHTML(title)}"`
+      return `<a href="${escapeHTML(href)}"${attrs}>${escapeHTML(label)}</a>`
+    },
+  },
+})
+
+/**
+ * renderComment renders the Markdown of a comment body.
+ *
+ * It is not renderMarkdown: a comment is not a file. The review page is opened
+ * locally and its comments are written by an agent, so an <img> in one would
+ * have the page fetch a URL of the comment's choosing the moment it is opened,
+ * telling that host the reader's address, the time and their browser. An
+ * exported page carries the comments with it, so it would do the same on every
+ * machine it reaches. Nothing about a review is worth announcing, so a comment
+ * loads no subresource at all: images become links (see commentMarked), and
+ * sanitizeComment drops the tags and attributes that fetch a URL on their own,
+ * which is what raw HTML in a body would have to use.
+ *
+ * The preview pane keeps renderMarkdown, images included: there the Markdown
+ * is the file under review and drawing it is the point. Whether the preview
+ * should hold back remote images too is #305, and this does not decide it.
+ */
+export function renderComment(source: string): string {
+  const html = commentMarked.parse(source)
+  return sanitizeComment(typeof html === 'string' ? html : '')
+}
 
 /**
  * renderMarkdown renders the Markdown of a preview.
@@ -88,6 +130,36 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 })
 
+// An exported page is one file with the diff frozen into it; nothing in a
+// preview should be reaching for anything else.
+const FORBID_TAGS = ['style', 'form', 'input', 'button', 'link', 'meta', 'base']
+
+// Elements the browser fetches a URL for as soon as it parses them, with no
+// click and no script. Forbidding the element is what keeps the request from
+// being made at all; a referrer policy or a CSP only changes what the request
+// looks like once it has been sent.
+const SUBRESOURCE_TAGS = [
+  'img',
+  'picture',
+  'source',
+  'video',
+  'audio',
+  'track',
+  'iframe',
+  'frame',
+  'frameset',
+  'embed',
+  'object',
+  'svg',
+  'math',
+  'image',
+  'use',
+]
+
+// The same thing spelled as an attribute: url() in an inline style, and the
+// URL-bearing attributes an element that is allowed here could still carry.
+const SUBRESOURCE_ATTRS = ['style', 'src', 'srcset', 'poster', 'background', 'lowsrc', 'dynsrc']
+
 /**
  * sanitize strips everything executable out of rendered Markdown.
  *
@@ -105,9 +177,20 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
  */
 export function sanitize(html: string): string {
   return DOMPurify.sanitize(html, {
-    // An exported page is one file with the diff frozen into it; nothing in
-    // a preview should be reaching for anything else.
-    FORBID_TAGS: ['style', 'form', 'input', 'button', 'link', 'meta', 'base'],
+    FORBID_TAGS,
+    ALLOW_DATA_ATTR: false,
+  })
+}
+
+/**
+ * sanitizeComment sanitises a comment body: everything sanitize strips, plus
+ * everything that would fetch a URL while the page is being drawn. See
+ * renderComment for why a comment is held to that and a preview is not.
+ */
+export function sanitizeComment(html: string): string {
+  return DOMPurify.sanitize(html, {
+    FORBID_TAGS: [...FORBID_TAGS, ...SUBRESOURCE_TAGS],
+    FORBID_ATTR: SUBRESOURCE_ATTRS,
     ALLOW_DATA_ATTR: false,
   })
 }

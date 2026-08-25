@@ -113,19 +113,35 @@ func FromGroup(g *model.Group) Record {
 
 // Append writes a record to the log, one JSON object per line so that the
 // file stays readable by anything, sbnn included.
+//
+// The log is one file for the whole machine while a session file is one
+// per port, so several servers appending at once is the ordinary case, not
+// a corner. O_APPEND alone only settles where a write starts, not that it
+// arrives in one piece: a record carrying comment bodies and their
+// snippets is far past any size a write is promised to be atomic at, and
+// two of them landing inside one another make a line that no longer
+// parses - a review that quietly vanishes from sbnn reviews, since Read
+// skips what it cannot read. So the write is made under an exclusive
+// advisory lock on the file.
 func Append(path string, rec Record) error {
 	if path == "" {
 		return nil
+	}
+	// Marshalled before the lock is taken: the lock is for the write.
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	b, err := json.Marshal(rec)
+	unlock, err := lockForAppend(f)
 	if err != nil {
-		return err
+		return fmt.Errorf("locking %s: %w", path, err)
 	}
+	defer unlock()
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		return err
 	}
