@@ -702,34 +702,59 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("endLine %d is before startLine %d", req.EndLine, req.StartLine), http.StatusBadRequest)
 		return
 	}
-	if req.FileID == "" {
+	// Which file the comment is on. Both shapes of the request end up
+	// here: the page sends diffId and fileId, while a client that only
+	// knows the path - an agent on the command line - lets the server
+	// resolve it against the newest diff. The stored range is measured
+	// against that file, so the file has to be found for both shapes and
+	// not, as it once was, only for the path one.
+	var f *model.File
+	byPath := req.FileID == ""
+	if byPath {
 		if req.Path == "" {
 			http.Error(w, "a comment needs a fileId or a path", http.StatusBadRequest)
 			return
 		}
-		d, f, found := s.store.FindFileByPath(name, req.DiffID, req.Path)
-		if !found {
+		d, found, ok := s.store.FindFileByPath(name, req.DiffID, req.Path)
+		if !ok {
 			http.Error(w, fmt.Sprintf("no diff in group %q contains %s", name, req.Path), http.StatusNotFound)
 			return
 		}
+		f = found
 		req.DiffID, req.FileID = d.ID, f.ID
+	} else {
+		var ok bool
+		if _, f, ok = s.store.FileContext(name, req.DiffID, req.FileID); !ok {
+			// A fileId that names no file of this diff anchors the
+			// comment to nothing: the page keys its sections on
+			// diffId:fileId, so such a comment is counted in every total
+			// and shown on no line. An unknown diffId is left alone here,
+			// because AddComment below already reports that one.
+			if g, found := s.store.Group(name); found && g.FindDiff(req.DiffID) != nil {
+				http.Error(w, fmt.Sprintf("no file %q in diff %q", req.FileID, req.DiffID), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	if f != nil {
 		if req.Snippet == "" {
 			req.Snippet = diff.Snippet(f, req.Side, req.StartLine, req.EndLine)
 		}
-		if req.Snippet == "" {
+		if byPath && req.Snippet == "" {
 			http.Error(w, fmt.Sprintf("%s has no line %s in this diff", req.Path, lineSpec(req.StartLine, req.EndLine)),
 				http.StatusBadRequest)
 			return
 		}
-	} else if g, ok := s.store.Group(name); ok {
-		// A fileId that names no file of this diff anchors the comment to
-		// nothing: the page keys its sections on diffId:fileId, so such a
-		// comment is counted in every total and shown on no line. An
-		// unknown diffId is left alone here, because AddComment below
-		// already reports that one.
-		if d := g.FindDiff(req.DiffID); d != nil && d.FindFile(req.FileID) == nil {
-			http.Error(w, fmt.Sprintf("no file %q in diff %q", req.FileID, req.DiffID), http.StatusBadRequest)
-			return
+		// A snippet only has to be non-empty to be accepted, so a range
+		// whose start is inside a hunk but whose end runs past it used to
+		// be stored exactly as asked. The page draws a comment on the row
+		// matching its endLine, so an endLine the diff never showed put
+		// the comment on no row at all. Clamp instead of refusing: the
+		// range selection in the page overshoots by a line at the edges of
+		// a hunk, and a 400 there would break a gesture that works today.
+		if last := lastCoveredLine(f, req.Side, req.StartLine, req.EndLine); last > 0 && last < req.EndLine {
+			req.EndLine = last
 		}
 	}
 	c, err := s.store.AddComment(&model.Comment{
@@ -758,6 +783,36 @@ type UpdateCommentRequest struct {
 	Body     *string `json:"body,omitempty"`
 	Resolved *bool   `json:"resolved,omitempty"`
 	Question *bool   `json:"question,omitempty"`
+}
+
+// lastCoveredLine reports the highest line number on this side that the
+// file really has within [start, end]: the last line a snippet taken over
+// that range covered. It picks lines by the same rule Snippet does, so the
+// two always agree on where a range stopped. It returns 0 when the range
+// covers nothing at all.
+func lastCoveredLine(f *model.File, side string, start, end int) int {
+	last := 0
+	for _, h := range f.Hunks {
+		for _, l := range h.Lines {
+			num := l.NewNumber
+			if side == "old" {
+				num = l.OldNumber
+			}
+			if num < start || num > end {
+				continue
+			}
+			if side == "old" && l.Kind == model.LineAdd {
+				continue
+			}
+			if side != "old" && l.Kind == model.LineDelete {
+				continue
+			}
+			if num > last {
+				last = num
+			}
+		}
+	}
+	return last
 }
 
 // lineSpec formats a line range for an error message.
