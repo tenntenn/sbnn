@@ -327,124 +327,18 @@ written on it stay in that browser. Use `--fragment` when the page is
 embedded into something that brings its own `<html>` (for example an
 artifact).
 
-## Fitting sbnn into what you were already doing
+## Reference material
 
-sbnn is one command among the ones you already run, so let the shell do the
-joining rather than looking for a flag:
+The workflow above is the whole of what you need to run a review. The rest is
+material to look something up in, kept in its own files so that reading the
+skill does not mean reading all of it:
 
-```
-git diff | sbnn                          # anything that writes a diff feeds it
-sbnn comments | pbcopy                   # anything that reads text takes it
-sbnn reviews --format jsonl | jq ...     # a line per review, for whatever asks
-```
-
-`sbnn comments` and `sbnn wait` say what they found in their exit status too — 0
-when there is nothing to address, 1 when there is, and 2 from `sbnn wait` when
-the review has not happened yet — so a review can gate what comes next
-without anyone reading the output:
-
-```
-git diff | sbnn --target <topic>
-sbnn wait --target <topic> -q && git commit -m "<message>"
-```
-
-That is the recommended way round committing, and it is worth being plain
-with the user about why: send what you are about to commit, wait for the
-review, and commit only once it comes back with nothing to address. sbnn has
-no idea what a commit is and stays out of the way of one — it writes nothing
-into the working tree, so `git status` says exactly what it said before you
-started. When a review does have comments, address them and send the next
-round before committing rather than committing over them.
-
-If the change is already committed, review it the same way: `git show | sbnn`,
-or `git diff <base>..HEAD | sbnn`. Use `--title` to say which is which, since
-sbnn only sees the text.
-
-## Learning from past reviews
-
-Every submitted review is kept, which makes the reviewer's habits readable
-rather than guessed at:
-
-```
-sbnn reviews --stats                     # which files draw comments, how many per review
-sbnn reviews --comments --since 30d      # one line per comment, to read properly
-```
-
-For any question `--stats` does not answer, `--comments` emits one record
-per comment and ordinary tools do the counting. Parse the jsonl form — one
-flat JSON object per line, and the only form that carries whole comment
-bodies; the tab-separated text form (date, group, path:lines, author,
-first body line) is for reading and quick pipes:
-
-```
-sbnn reviews --comments --format jsonl | jq -r 'select(.suggestions) | .path'
-sbnn reviews --comments | cut -f3 | cut -d: -f1 | sort | uniq -c | sort -rn
-```
-
-Worth doing before you hand over a change of the same shape: if the last ten
-reviews of this repository were mostly about error messages and test names,
-check yours before asking. Say what you found and what you changed because of
-it — a pattern you read out of the log is a claim about the human, so let
-them correct it.
-
-## Command reference: the commands and flags this workflow uses
-
-This table is scoped on purpose: it carries every flag the steps above tell
-you to pass, and nothing else. When you want a flag the workflow never asks
-for, `sbnn <command> --help` is the complete list.
-
-| Command | What it does |
-| --- | --- |
-| `sbnn --version` | Check sbnn is there before you build a plan on it |
-| `<diff producer> \| sbnn` | Add a diff to the default group and print its URL |
-| `... \| sbnn -t <name>` | Add it to a named group (its own URL and comments) |
-| `... \| sbnn --title "..."` | Name the diff, so a stack of them can be told apart |
-| `... \| sbnn --collapse '<glob>'` | Fold generated files away, repeatable |
-| `... \| sbnn --label <key>=<value>` | Keep a PR number or URL with the diff, repeatable |
-| `sbnn --status [--json]` | Show the running server, its groups and comment counts |
-| `sbnn --clear [-t <name>]` | Close a review: its diffs, comments and hooks |
-| `sbnn wait [-t <name>]` | Block until the review is submitted, then print it |
-| `sbnn wait --timeout <duration>` | Give up after that long; status 2 means "not reviewed yet" |
-| `sbnn wait -q` | Print nothing and answer in the exit status, for `&& git commit` |
-| `sbnn hook --on-review '<cmd>'` | Have the server run something when the review lands |
-| `sbnn hook [--clear]` | List or drop those hooks |
-| `sbnn comment <path>:<line> -m "..."` | Leave a comment of your own |
-| `sbnn comment ... --author <you>` | Say who is commenting — always pass it |
-| `sbnn comment ... --question` | Mark it as wanting an answer, not a change |
-| `sbnn comment ... --suggest "<text>"` | Propose a replacement for the commented lines |
-| `sbnn comment --json` | Post many comments at once, read from stdin |
-| `sbnn comments [-t <name>]` | Print open comments as Markdown |
-| `sbnn comments --format json` | Print them as JSON |
-| `sbnn comments --clear` | Remove the comments of the group, before the next round |
-| `sbnn submit [-t <name>] [-m "..."]` | End the round yourself, as the Submit button does |
-| `sbnn submit --approve` | Submit saying the change can go ahead |
-| `sbnn submit --request-changes` | Submit saying it should not, as it is |
-| `sbnn submit --exit-code` | Turn that verdict into a status: 1 blocks, 0 does not |
-| `sbnn reviews [--since 7d]` | The reviews that were submitted |
-| `sbnn reviews --stats` | What they say together: which files draw comments, how many per review |
-| `sbnn reviews --comments [--format jsonl]` | One record per comment, for sort/uniq/awk/jq |
-| `... \| sbnn export <file>` | Write the review as one self-contained HTML page |
-| `... \| sbnn export --fragment <file>` | The same, body only, for embedding |
-
-`--port` (default 6280) selects the server; use it only if the user runs sbnn
-on a non-default port. Inside a review hook you do not have to ask which port
-that is: the server passes its own in `SBNN_PORT`.
-
-## Notes
-
-- New files are shown as a unified diff, because there is no old side to put
-  next to them.
-- Markdown files get a preview pane next to the diff. The preview shows the
-  working tree file when it exists; otherwise sbnn rebuilds what it can from
-  the diff, and unified diffs only carry the changed hunks, so such a preview
-  is partial by nature.
-- A comment can also be made by selecting text in that preview, in which case
-  its line range covers the whole Markdown blocks the selection touched -
-  paragraphs, list, code fence - rather than only the words highlighted. The
-  quoted snippet is what was selected.
-- Comments are stored by the sbnn server, not in the browser, which is why they
-  survive a reload and why you can read them from the command line.
-- `sbnn --status --json` is the reliable way to check whether comments are
-  waiting: it reports `comments`, `unresolved` and `reviewed` per group.
-  `reviewed` is true once the human has submitted, and false again as soon as
-  a newer diff arrives.
+- [`references/commands.md`](references/commands.md) — every command and flag
+  the workflow uses, when you need the exact syntax of a step you have decided
+  to take.
+- [`references/pipelines.md`](references/pipelines.md) — how sbnn joins onto
+  the commands you already run, when you are scripting it rather than typing it.
+- [`references/review-history.md`](references/review-history.md) — what
+  `sbnn reviews` records, when you want to know what past reviews asked for.
+- [`references/notes.md`](references/notes.md) — behaviour worth knowing but
+  rarely decisive, when something surprises you.
