@@ -1,6 +1,6 @@
 ---
 name: sbnn
-description: Review a diff with sbnn - show it to a human in the browser and read their line comments back, or review a change yourself by leaving comments on lines and submitting. Use after producing or being handed changes that someone should look at, when the user asks to review a diff or open a diff/review UI, or when review comments are waiting in sbnn.
+description: Review a diff with sbnn - show it to a human in the browser and read their line comments back, or review a change yourself by leaving comments on lines and submitting. Use after producing or being handed changes that someone should look at, when the user asks to review a diff or open a diff/review UI, when review comments are waiting in sbnn, or when the reviewer cannot open a localhost URL and needs the review as a self-contained page or artifact (on a phone, in a chat, over mail).
 license: MIT
 ---
 
@@ -142,10 +142,45 @@ Use `--json` when you want to parse the result:
 git diff | sbnn --target <topic> --json
 ```
 
-### 3. Hand the URL to the human, and decide how you come back
+### 3. Hand the URL to the human, or a page they can actually open
 
-Tell the user the URL sbnn printed and say what you want reviewed. Then pick
-one of these — never poll `sbnn comments` in a loop:
+Decide which of the two it is before handing anything over. The sbnn server
+listens on localhost, so its URL only works on the machine sbnn is running
+on.
+
+**The URL is the default.** Hand it over whenever you and the human are on
+the same machine and they can open a browser there.
+
+**When you cannot be sure of that, do not hand over the URL.** Inside a phone
+app, a chat bot or a CI box, `http://localhost:6280/` reaches nobody, and the
+human is left opening a link that does not exist for them. Write the review
+out as a self-contained page and give them that instead:
+
+```
+git diff | sbnn export --target <topic> review.html   # a file they can open
+git diff | sbnn export --fragment --target <topic>    # the body, on stdout
+```
+
+`--fragment` decides what you get; the filename only decides where it goes.
+With `--fragment` you get the page body alone — written to the file you name,
+or to stdout if you name none. Without it you get a whole self-contained page,
+again to a file or to stdout. Reach for `--fragment` only when the review is
+going inside something that brings its own `<html>` — an artifact, a message
+that renders HTML, a mail. Hand a human a whole page.
+
+The user can also just ask. If they want a file, an artifact, or something
+they can read on their phone, export one whether or not the URL would have
+worked.
+
+**An exported page does not come back to you.** Comments written on it stay
+in that browser and never reach a server, so steps 5–7 do not apply:
+`sbnn comments` will return nothing however long you wait. The human presses
+**Copy prompt** on the page and paste the text back to you. Say that when you
+hand the page over, not after they have finished writing.
+
+When the URL is the right answer, tell the user the URL sbnn printed and say
+what you want reviewed. Then pick one of these — never poll `sbnn comments`
+in a loop:
 
 - **They are reviewing now and you can wait**: `sbnn wait --target <topic>`
   blocks until they press Submit review and then prints the comments. Give it
@@ -323,10 +358,20 @@ someone else, an artifact — write the review out as a single HTML file:
 git diff | sbnn export --target <topic> review.html
 ```
 
-The page carries the diff and the same UI, needs no server, and the comments
-written on it stay in that browser. Use `--fragment` when the page is
-embedded into something that brings its own `<html>` (for example an
-artifact).
+The page carries the diff and the same UI and needs no server. Use
+`--fragment` when the page is embedded into something that brings its own
+`<html>` (for example an artifact); with no filename it writes to stdout, so
+the markup can go straight into whatever you are building:
+
+```
+git diff | sbnn export --fragment --target <topic>
+```
+
+This is also the fallback step 3 sends you here for, and the same limit
+applies: the comments written on such a page stay in that browser and never
+reach a server, so `sbnn comments` has nothing to return. The human presses
+**Copy prompt** on the page and pastes the text back to you, and that is the
+only way the review reaches you.
 
 ## Fitting sbnn into what you were already doing
 
