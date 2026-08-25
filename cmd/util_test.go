@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -41,7 +43,7 @@ func TestHistoryFileOffWords(t *testing.T) {
 // $SBNN_HISTORY takes the same words as the flag; a value set once in a
 // shell profile is exactly where a silent mistake would live longest.
 func TestHistoryFileOffWordsFromEnv(t *testing.T) {
-	for _, word := range []string{"off", "none", "no", "false", "0", "disabled"} {
+	for _, word := range HistoryOffWords {
 		t.Run(word, func(t *testing.T) {
 			t.Setenv(HistoryEnv, word)
 			got, err := historyFile("")
@@ -123,5 +125,59 @@ func TestHistoryFileDefaultsToStateDir(t *testing.T) {
 	}
 	if filepath.Base(got) != "reviews.jsonl" {
 		t.Errorf("historyFile(\"\") = %q, want the default reviews.jsonl", got)
+	}
+}
+
+// Every spelling the flag accepts has to be in the flag's help. The list of
+// words grew from three to six while the help still named only "off", so
+// half the accepted spellings were undiscoverable and the near-misses the
+// flag now catches looked like plain paths. Driving this from
+// HistoryOffWords rather than from a copy of the words is the point: adding
+// a word to the list without touching the help fails here.
+func TestHistoryFileHelpNamesEveryOffWord(t *testing.T) {
+	usages := map[string]string{
+		"sbnn":         rootCmd.Flags().Lookup("history-file").Usage,
+		"sbnn reviews": reviewsCmd.Flags().Lookup("history-file").Usage,
+	}
+	for command, usage := range usages {
+		t.Run(command, func(t *testing.T) {
+			if usage == "" {
+				t.Fatalf("%s --history-file has no help", command)
+			}
+			for _, word := range HistoryOffWords {
+				if !strings.Contains(usage, strconv.Quote(word)) {
+					t.Errorf("%s --history-file help does not name %s, which historyFile accepts:\n\t%s",
+						command, strconv.Quote(word), usage)
+				}
+			}
+			if !strings.Contains(usage, strconv.Quote(historyStdinWord)) {
+				t.Errorf("%s --history-file help does not say %s is refused:\n\t%s",
+					command, strconv.Quote(historyStdinWord), usage)
+			}
+			if !strings.Contains(usage, "$"+HistoryEnv) {
+				t.Errorf("%s --history-file help does not name $%s:\n\t%s", command, HistoryEnv, usage)
+			}
+		})
+	}
+}
+
+// The help has to name the words because they work, so the words it names
+// are checked against historyFile itself: a word documented as "nowhere"
+// that historyFile turns into a path would be a worse lie than silence.
+func TestHistoryFileHelpWordsAreAccepted(t *testing.T) {
+	usage := rootCmd.Flags().Lookup("history-file").Usage
+	for _, word := range HistoryOffWords {
+		if !strings.Contains(usage, strconv.Quote(word)) {
+			continue
+		}
+		t.Setenv(HistoryEnv, "")
+		got, err := historyFile(word)
+		if err != nil {
+			t.Errorf("historyFile(%q), documented as keeping no log: %v", word, err)
+			continue
+		}
+		if got != "" {
+			t.Errorf("historyFile(%q) = %q, but the help says it keeps no log", word, got)
+		}
 	}
 }

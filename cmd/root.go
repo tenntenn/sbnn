@@ -190,7 +190,7 @@ func init() {
 	f.StringVar(&onReviewURL, "on-review-url", "",
 		"URL the server POSTs to when the review of this group is submitted")
 	f.StringVar(&historyPath, "history-file", "",
-		`Where submitted reviews are written down ("off" for nowhere, or $SBNN_HISTORY)`)
+		historyFileHelp("Where submitted reviews are written down"))
 
 	rootCmd.AddCommand(commentCmd, commentsCmd, exportCmd, hookCmd, reviewsCmd, skillCmd, submitCmd, waitCmd)
 }

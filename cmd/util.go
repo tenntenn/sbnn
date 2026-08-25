@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/pkg/browser"
@@ -34,6 +35,30 @@ const HistoryEnv = "SBNN_HISTORY"
 // with the reviews piling up in it.
 var HistoryOffWords = []string{"off", "none", "no", "false", "0", "disabled"}
 
+// historyStdinWord is the one spelling --history-file refuses outright: it
+// names a standard stream everywhere else in sbnn, and a log cannot be
+// appended to one.
+const historyStdinWord = "-"
+
+// historyFileHelp builds the help of a --history-file flag out of
+// HistoryOffWords itself, so that a spelling the flag accepts cannot stay
+// undocumented: the list grew from three words to six and the help still
+// named only "off", which is the very thing that makes a near-miss such as
+// --history-file false unguessable. lead is the part that differs between
+// the commands, e.g. "Where the log is kept".
+func historyFileHelp(lead string) string {
+	quoted := make([]string, 0, len(HistoryOffWords))
+	for _, word := range HistoryOffWords {
+		quoted = append(quoted, strconv.Quote(word))
+	}
+	words := quoted[0]
+	if len(quoted) > 1 {
+		words = strings.Join(quoted[:len(quoted)-1], ", ") + " or " + quoted[len(quoted)-1]
+	}
+	return fmt.Sprintf("%s (%s for nowhere, %q is refused, or $%s)",
+		lead, words, historyStdinWord, HistoryEnv)
+}
+
 // historyFile resolves where the reviews are written down: --history-file,
 // then $SBNN_HISTORY, then the state directory. It is a plain path on purpose:
 // a project that wants its reviews under version control points it into the
@@ -54,7 +79,7 @@ func historyFile(flag string) (string, error) {
 	if slices.Contains(HistoryOffWords, word) {
 		return "", nil
 	}
-	if word == "-" {
+	if word == historyStdinWord {
 		return "", fmt.Errorf("history file %q: a log cannot be written to a standard stream; pass a path, or %q to keep no log",
 			flag, HistoryOffWords[0])
 	}
