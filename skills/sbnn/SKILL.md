@@ -205,12 +205,23 @@ range, the reviewed code and the comment body. For programmatic handling:
 sbnn comments --target <topic> --format json
 ```
 
-Every JSON entry has `id`, `path`, `author`, `side` (`new` or `old`),
-`startLine`, `endLine`, `body`, `snippet`, `suggestions`, `question` and
-`resolved`. Line
-numbers refer to the side named by `side`. `author` is empty for the comments
-the human wrote in the browser and set for the ones posted from the command
-line — including your own, so skip those when working through the list.
+Every JSON entry has `id`, `group`, `diffId`, `fileId`, `path`, `side` (`new`
+or `old`), `startLine`, `endLine`, `body`, `snippet`, `resolved`, `createdAt`
+and `updatedAt`. Line numbers refer to the side named by `side`, and `diffId`
+says which round the comment came from, which is how you tell an old comment
+from one left on the diff you just sent.
+
+Three more keys appear only when they are set, so read them with a default
+instead of by subscript — a missing key is the normal case, not an error:
+
+- `author` — who left the comment. It is **missing** for the comments the
+  human wrote in the browser, and present for the ones posted from the
+  command line, including your own, so skip those when working through the
+  list.
+- `question` — present only as `true`; missing means the comment asks for a
+  change rather than an answer.
+- `suggestions` — present only when the body carries a suggestion block;
+  missing means there is nothing to apply.
 
 A comment may carry suggested replacements, written as fenced
 ` ```suggestion ` blocks inside the comment itself, the same convention
@@ -226,8 +237,9 @@ for a change, and replace the named lines exactly as written where a comment
 carries a suggestion; when you disagree or a comment cannot be acted on, say
 so explicitly in your reply to the user rather than silently skipping it.
 
-A comment marked as a **question** (`"question": true`, and "This one is a
-question: answer it." in the Markdown output) is asking for an answer.
+A comment marked as a **question** (`"question": true` — the key is absent on
+every other comment, and "This one is a question: answer it." in the Markdown
+output) is asking for an answer.
 Answer it in words in your reply, and change the code only if your own
 answer says it should change. Rewriting code in place of answering is the
 one response that leaves the reviewer having to ask again.
