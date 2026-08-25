@@ -46,7 +46,8 @@ type Store struct {
 	mu     sync.RWMutex
 	path   string
 	groups []*model.Group
-	seq    int
+	// seq counts the ids handed out, one counter per prefix.
+	seq map[string]int
 	// rounds counts the rounds a group has held, per group name. It only
 	// goes up, so two rounds of one review never share a default title.
 	rounds map[string]int
@@ -66,14 +67,31 @@ func NewStore(path string) *Store {
 }
 
 type persisted struct {
-	Version int            `json:"version"`
-	Seq     int            `json:"seq"`
-	Groups  []*model.Group `json:"groups"`
+	Version int `json:"version"`
+	// Seq is the single counter sbnn used before the counters were split
+	// per prefix. It is still written, high enough that an older sbnn
+	// reading this file cannot hand out an id that is already taken.
+	Seq int `json:"seq"`
+	// Seqs holds one counter per id prefix.
+	Seqs   map[string]int `json:"seqs,omitempty"`
+	Groups []*model.Group `json:"groups"`
 	// Rounds is how many rounds each group has held.
 	Rounds map[string]int `json:"rounds,omitempty"`
 }
 
 const persistVersion = 1
+
+// The id prefixes. Every kind of object counts on its own, so the first diff
+// of a session is d1 even when a hook was registered before it - which is
+// what `git diff | sbnn --on-review ...` does.
+const (
+	diffPrefix    = "d"
+	commentPrefix = "c"
+	hookPrefix    = "h"
+)
+
+// idPrefixes is every prefix nextID is called with.
+var idPrefixes = []string{diffPrefix, commentPrefix, hookPrefix}
 
 // Load restores the session from disk. A missing or unreadable file is not an
 // error: sbnn simply starts with an empty session.
@@ -134,7 +152,16 @@ func (s *Store) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.groups = p.Groups
-	s.seq = p.Seq
+	s.seq = p.Seqs
+	if s.seq == nil {
+		// A file written before the counters were split apart carries one
+		// shared counter. Starting every prefix at that value skips a few
+		// numbers, but no id the old session handed out can come back.
+		s.seq = make(map[string]int, len(idPrefixes))
+		for _, prefix := range idPrefixes {
+			s.seq[prefix] = p.Seq
+		}
+	}
 	s.rounds = p.Rounds
 	if s.rounds == nil {
 		// A file written before the rounds were counted has to carry on
@@ -188,7 +215,7 @@ func (s *Store) persist() {
 // write replaces the session file with the current session. The caller must
 // hold the lock.
 func (s *Store) write() (err error) {
-	b, err := json.Marshal(persisted{Version: persistVersion, Seq: s.seq, Groups: s.groups, Rounds: s.rounds})
+	b, err := json.Marshal(persisted{Version: persistVersion, Seq: s.sharedSeq(), Seqs: s.seq, Groups: s.groups, Rounds: s.rounds})
 	if err != nil {
 		return fmt.Errorf("encoding the session: %w", err)
 	}
@@ -279,8 +306,24 @@ func cleanTitle(title string) string {
 }
 
 func (s *Store) nextID(prefix string) string {
-	s.seq++
-	return fmt.Sprintf("%s%d", prefix, s.seq)
+	if s.seq == nil {
+		s.seq = make(map[string]int, len(idPrefixes))
+	}
+	s.seq[prefix]++
+	return fmt.Sprintf("%s%d", prefix, s.seq[prefix])
+}
+
+// sharedSeq is what the pre-split "seq" field is written as: the highest of
+// the per-prefix counters, so an sbnn old enough to read only that field
+// carries on without reusing an id. The caller must hold the lock.
+func (s *Store) sharedSeq() int {
+	highest := 0
+	for _, n := range s.seq {
+		if n > highest {
+			highest = n
+		}
+	}
+	return highest
 }
 
 // group returns the named group, creating it when create is set. The caller
@@ -386,7 +429,7 @@ func (s *Store) AddDiff(group string, d *model.Diff) *model.Diff {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := s.group(group, true)
-	d.ID = s.nextID("d")
+	d.ID = s.nextID(diffPrefix)
 	if d.CreatedAt.IsZero() {
 		d.CreatedAt = time.Now()
 	}
@@ -507,7 +550,7 @@ func (s *Store) AddHook(group string, h *model.Hook) (*model.Hook, error) {
 			return clone(existing), nil
 		}
 	}
-	h.ID = s.nextID("h")
+	h.ID = s.nextID(hookPrefix)
 	h.CreatedAt = time.Now()
 	g.Hooks = append(g.Hooks, h)
 	s.persist()
@@ -603,7 +646,7 @@ func (s *Store) AddComment(c *model.Comment) (*model.Comment, error) {
 		return nil, fmt.Errorf("unknown diff %q", c.DiffID)
 	}
 	now := time.Now()
-	c.ID = s.nextID("c")
+	c.ID = s.nextID(commentPrefix)
 	c.CreatedAt, c.UpdatedAt = now, now
 	g.Comments = append(g.Comments, c)
 	s.persist()

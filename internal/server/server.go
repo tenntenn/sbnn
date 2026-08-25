@@ -389,7 +389,36 @@ func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request) {
 		// An empty group is a valid state: the UI shows "waiting for a diff".
 		g = &model.Group{Name: name, Diffs: []*model.Diff{}, Comments: []*model.Comment{}}
 	}
-	writeJSON(w, http.StatusOK, g)
+	// A group that exists but holds nothing has nil slices, and those
+	// marshal as null. Answering [] or null for the same state, depending
+	// only on how the group came to be, is a difference every consumer of
+	// the API would otherwise have to know about.
+	if g.Diffs == nil {
+		g.Diffs = []*model.Diff{}
+	}
+	if g.Comments == nil {
+		g.Comments = []*model.Comment{}
+	}
+	writeJSON(w, http.StatusOK, withoutRawDiffs(g))
+}
+
+// withoutRawDiffs drops the original diff text from a group about to be sent
+// to a client.
+//
+// This endpoint returns the whole group - every diff, file, hunk and line -
+// and the page refetches it on every change event, so its size is paid again
+// on each keystroke-sized edit anyone has open. Diff.Raw is the original diff
+// text, and it is dead weight here: nothing reads it. Dropping it measured
+// 7.7 KB of 52 KB at 4 files and 1.00 MB of 6.61 MB at 500. export.Build
+// already drops it for the same reason.
+//
+// The store keeps Raw - an export or a re-parse still wants it. g is the
+// store's own clone, so clearing the field here cannot reach it.
+func withoutRawDiffs(g *model.Group) *model.Group {
+	for _, d := range g.Diffs {
+		d.Raw = ""
+	}
+	return g
 }
 
 // handleDeleteAllGroups closes every review at once.
@@ -608,12 +637,22 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a comment needs a body or a suggestion", http.StatusBadRequest)
 		return
 	}
+	// The side is folded and trimmed so the API agrees with the CLI:
+	// new, old, or empty (meaning new). Anything else is a caller's
+	// mistake and has to be reported, not guessed at -- guessing put
+	// comments on lines nobody asked about.
+	switch side := strings.ToLower(strings.TrimSpace(req.Side)); side {
+	case "":
+		req.Side = "new"
+	case "new", "old":
+		req.Side = side
+	default:
+		http.Error(w, fmt.Sprintf("unknown side %q: use new or old", req.Side), http.StatusBadRequest)
+		return
+	}
 	if len(model.Suggestions(body)) > 0 && req.Side == "old" {
 		http.Error(w, "a suggestion replaces lines of the new file, not of the old one", http.StatusBadRequest)
 		return
-	}
-	if req.Side != "old" {
-		req.Side = "new"
 	}
 	// Line numbers are 1-based; 0 means "not on this side" and is not a
 	// place a comment can point at. The CLI already refuses these, and a
@@ -775,8 +814,15 @@ func (s *Server) handleSubmitReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req SubmitReviewRequest
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+	// ContentLength is -1 when the length is unknown, which is what a
+	// chunked request and many HTTP/2 clients send. Only 0 promises there
+	// is no body, so decode for anything else: a verdict dropped here is
+	// recorded as a plain "commented", and --exit-code downstream then
+	// reports the opposite of what the reviewer decided.
+	if r.ContentLength != 0 {
+		// io.EOF means the body really was empty, which is not an error:
+		// the fields are all optional and default to a commented review.
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
 			return
 		}

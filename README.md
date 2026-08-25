@@ -164,7 +164,11 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   remembered. The preview shows the working tree file when it
   exists; otherwise sbnn rebuilds the new side from the diff, which is
   complete for new files and partial for modified ones (a unified diff only
-  carries the changed hunks).
+  carries the changed hunks). A partial rebuild says **partial** in its
+  header, and each stretch the diff does not carry is marked in the Markdown
+  itself, as a rule and a line saying how many lines are not there. Nothing
+  is written into a notebook that way: it is JSON, and sbnn's own sentence in
+  the middle of it would be the reason it could not be shown at all.
 - **Sync** makes the preview follow the diff as you scroll, by fraction
   rather than by line — the two documents do not agree on lines, and
   pretending they do lands you in the wrong place with more confidence.
@@ -550,10 +554,23 @@ because the embedded frontend is not part of it.
 | sbnn server | `localhost:6280` (`--port`) |
 | mo server | `localhost:6275` (`--mo-port`) |
 | Preview proxy | a loopback port picked at startup |
-| Session state (diffs, comments, hooks) | `$XDG_STATE_HOME/sbnn/session-<port>.json` |
-| Server log | `$XDG_STATE_HOME/sbnn/server-<port>.log` |
-| Rebuilt previews | `$XDG_CACHE_HOME/sbnn/preview/…` |
+| Session state (diffs, comments, hooks) | `<state>/session-<port>.json` |
+| Server log | `<state>/server-<port>.log` |
+| Review log | `<state>/reviews.jsonl` (`--history-file`, `$SBNN_HISTORY`) |
+| Rebuilt previews | `<cache>/preview/…` |
 | Exported pages | wherever you point `sbnn export` |
+
+`<state>` and `<cache>` are not the same directory on every platform:
+
+| Platform | `<state>` | `<cache>` |
+| --- | --- | --- |
+| Linux, BSD | `$XDG_STATE_HOME/sbnn`, or `~/.local/state/sbnn` | `$XDG_CACHE_HOME/sbnn`, or `~/.cache/sbnn` |
+| macOS | `~/Library/Application Support/sbnn` | `~/Library/Caches/sbnn` |
+| Windows | `%AppData%\sbnn` | `%LocalAppData%\sbnn` |
+
+`$XDG_STATE_HOME` takes precedence on every platform when it is set, so
+exporting it on macOS or Windows moves the state directory there. `$XDG_CACHE_HOME`
+is the exception: it is only consulted on Linux and BSD.
 
 sbnn binds to loopback and has no authentication; `--dangerously-allow-remote-access`
 is required to bind anywhere else.
