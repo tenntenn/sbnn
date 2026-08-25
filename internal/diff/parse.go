@@ -281,6 +281,9 @@ func (p *parser) readHunk() {
 
 	oldNo, newNo := h.OldStart, h.NewStart
 	oldLeft, newLeft := h.OldLines, h.NewLines
+	// Index one past the last surplus body line, computed once the counts run
+	// out. -1 means "not computed yet".
+	surplusEnd := -1
 	for p.i < len(p.lines) {
 		l := p.lines[p.i]
 		if strings.HasPrefix(l, "\\") { // "\ No newline at end of file"
@@ -291,7 +294,12 @@ func (p *parser) readHunk() {
 			continue
 		}
 		if oldLeft <= 0 && newLeft <= 0 {
-			break
+			if surplusEnd < 0 {
+				surplusEnd = p.surplusBodyEnd()
+			}
+			if p.i >= surplusEnd {
+				break
+			}
 		}
 		var kind model.LineKind
 		var content string
@@ -331,6 +339,56 @@ func (p *parser) readHunk() {
 		p.i++
 	}
 	f.Hunks = append(f.Hunks, h)
+}
+
+// surplusBodyEnd returns the index one past the last line that still belongs
+// to the hunk being read, scanning from the line the counts ran out on.
+//
+// The counts used to be trusted absolutely, so a header that promised fewer
+// lines than its body carried - a patch cut short by a pipe, a mail client
+// that reflowed it, a generator that miscounted - had its surplus lines
+// dropped without a word. That is the worst thing a review tool can do with
+// input it was handed: the reviewer approves the change they were shown, and
+// the change they were shown was smaller than the one that arrived.
+//
+// Past the counts the parser has no length to lean on, so it has to tell a
+// body line from whatever the patch is wrapped in, and the wrapping starts
+// with the same characters a body line does. Only a change line - a '+' or '-'
+// that is not a file header and not a run of dashes - extends the hunk, and it
+// carries along any context that sits between it and the counted body. What
+// trails the last change line is left alone, because a diffstat row and a
+// trailing blank are indistinguishable from context.
+//
+// That is what keeps `git format-patch` output whole: every one of its patches
+// ends with the "-- " signature, and taking that as a deletion both invents a
+// change nobody made and, since Deletions then stops being zero, flips an
+// add-only file out of the unified view.
+func (p *parser) surplusBodyEnd() int {
+	end := p.i
+	for i := p.i; i < len(p.lines); i++ {
+		l := p.lines[i]
+		switch {
+		case l == "" || l[0] == ' ' || l[0] == '\\':
+			// Context, an empty context line, or a "\ No newline" marker.
+			// Ambiguous on its own; kept only if a change line follows.
+		case l[0] == '+' && !strings.HasPrefix(l, "+++ "):
+			end = i + 1
+		case l[0] == '-' && !strings.HasPrefix(l, "--- ") && !isDashRun(l):
+			end = i + 1
+		default:
+			return end
+		}
+	}
+	return end
+}
+
+// isDashRun reports whether l is nothing but dashes, optionally with trailing
+// spaces: the "-- " signature git format-patch ends with, the "---" that
+// separates a commit message from its diffstat, and the "--" some mailers
+// leave behind.
+func isDashRun(l string) bool {
+	l = strings.TrimRight(l, " ")
+	return l != "" && strings.TrimLeft(l, "-") == ""
 }
 
 func (p *parser) readCombinedHunk() {
