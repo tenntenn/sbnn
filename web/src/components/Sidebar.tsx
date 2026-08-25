@@ -291,7 +291,8 @@ export function Sidebar({
                   aria-label="Remove this round"
                   title="Remove this round"
                   onClick={() => {
-                    void client.deleteDiff(group, diff.id).then(onChanged)
+                    if (!window.confirm(removeRoundQuestion(diff.title, roundSize(comments, diff.id)))) return
+                    void client.deleteDiff(group, diff.id).then(onChanged, reportRemoveFailure(diff.title))
                   }}
                 >
                   <Icon name="close" small />
@@ -340,7 +341,8 @@ export function Sidebar({
                 className="ghost danger"
                 title="Remove this round"
                 onClick={() => {
-                  void client.deleteDiff(group, diff.id).then(onChanged)
+                  if (!window.confirm(removeRoundQuestion(diff.title, roundSize(comments, diff.id)))) return
+                  void client.deleteDiff(group, diff.id).then(onChanged, reportRemoveFailure(diff.title))
                 }}
               >
                 <Icon name="close" small />
@@ -419,4 +421,29 @@ export function Sidebar({
       )}
     </aside>
   )
+}
+
+/** roundSize counts what a round takes with it: every comment on it, the
+ * resolved ones included, since the store deletes them all. */
+function roundSize(comments: Comment[], diffId: string): number {
+  return comments.filter((c) => c.diffId === diffId).length
+}
+
+/** removeRoundQuestion asks before a round goes.
+ *
+ * Removing one deletes the diff and every comment on it, at once and for
+ * good; the two ways in are both a small close icon, one of them on a tab
+ * the reader clicks to switch rounds. Closing a review - the page's other
+ * destructive control - already asks, and counts what goes, so this asks
+ * the same way. */
+export function removeRoundQuestion(title: string, comments: number): string {
+  if (comments === 0) return `Remove ${title}? This cannot be undone.`
+  return `Remove ${title}? ${comments} comment(s) on it will be deleted too.`
+}
+
+/** reportRemoveFailure says so when the removal did not happen. The round
+ * stays on screen either way, and silence there reads as success. */
+function reportRemoveFailure(title: string): (err: unknown) => void {
+  return (err) =>
+    window.alert(`Could not remove ${title}: ${err instanceof Error ? err.message : String(err)}`)
 }
