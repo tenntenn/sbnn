@@ -28,6 +28,17 @@ const DefaultPort = 6280
 // maxDiffSize bounds what sbnn reads from stdin.
 const maxDiffSize = 32 << 20
 
+// DefaultIdleTimeout is how long a background server stays up holding nothing
+// to review before it ends itself.
+//
+// Nothing else ever ends it: the server is detached on purpose, so without
+// this a single review from months ago keeps a port, a session file and its
+// parsed diffs until the machine reboots. The check is deliberately blunt -
+// no diffs, no hooks, no open event stream - so a review waiting for a human
+// is never collected, and half an hour of that is long enough that a user who
+// stepped away from an empty server does not come back to a restart.
+const DefaultIdleTimeout = 30 * time.Minute
+
 var (
 	target      string
 	port        int
@@ -47,6 +58,7 @@ var (
 	moPort      int
 	moBind      string
 	allowRemote bool
+	idleTimeout time.Duration
 
 	onReviewCommand string
 	onReviewURL     string
@@ -188,6 +200,8 @@ func init() {
 	f.StringVar(&moBind, "mo-bind", mo.DefaultBind, "Bind address of the mo server")
 	f.BoolVar(&allowRemote, "dangerously-allow-remote-access", false,
 		"Allow binding to a non-loopback address (no authentication!)")
+	f.DurationVar(&idleTimeout, "idle-timeout", DefaultIdleTimeout,
+		"Stop the server once it has held no diffs, hooks or open review pages for this long (0 keeps it up)")
 	f.StringVar(&onReviewCommand, "on-review", "",
 		"Shell command the server runs when the review of this group is submitted")
 	f.StringVar(&onReviewURL, "on-review-url", "",

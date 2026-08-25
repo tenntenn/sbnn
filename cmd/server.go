@@ -62,6 +62,7 @@ func runServer(ctx context.Context) error {
 		Version:     version.Version,
 		Revision:    version.Revision,
 		AllowRemote: allowRemote,
+		IdleTimeout: idleTimeout,
 	})
 	if err != nil {
 		return err
@@ -96,24 +97,13 @@ func spawnServer(ctx context.Context, c *client.Client) (*server.Status, error) 
 	if err != nil {
 		return nil, fmt.Errorf("cannot find the sbnn binary: %w", err)
 	}
-	args := []string{
-		"--foreground",
-		"--port", strconv.Itoa(port),
-		"--bind", bind,
-		"--mo-bin", moBin,
-		"--mo-port", strconv.Itoa(moPort),
-		"--mo-bind", moBind,
-	}
 	// The server is the one that writes the log, so it has to be told where
 	// this invocation wants it.
 	history, err := historyFileArgs(historyPath)
 	if err != nil {
 		return nil, err
 	}
-	args = append(args, history...)
-	if allowRemote {
-		args = append(args, "--dangerously-allow-remote-access")
-	}
+	args := backgroundServerArgs(history)
 
 	cmd := exec.Command(bin, args...)
 	logPath, logFile := openLog()
@@ -148,6 +138,32 @@ func spawnServer(ctx context.Context, c *client.Client) (*server.Status, error) 
 	}
 	fmt.Fprintf(os.Stderr, "sbnn: serving at %s (pid %d)\n", st.URL, st.PID)
 	return st, nil
+}
+
+// backgroundServerArgs is the command line the detached server is started
+// with, given the --history-file arguments historyFileArgs worked out.
+//
+// The background server is a separate process that parses these flags for
+// itself, so anything this invocation resolved and does not pass here is a
+// setting the server that outlives it never sees. --idle-timeout is the one
+// that hurts most quietly: left off, the only server that ever outlives
+// anything runs on the zero value and stays resident forever, while every
+// test that goes through server.Options still passes.
+func backgroundServerArgs(history []string) []string {
+	args := []string{
+		"--foreground",
+		"--port", strconv.Itoa(port),
+		"--bind", bind,
+		"--mo-bin", moBin,
+		"--mo-port", strconv.Itoa(moPort),
+		"--mo-bind", moBind,
+		"--idle-timeout", idleTimeout.String(),
+	}
+	args = append(args, history...)
+	if allowRemote {
+		args = append(args, "--dangerously-allow-remote-access")
+	}
+	return args
 }
 
 // historyFileArgs is the --history-file the background server is started with.

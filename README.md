@@ -112,6 +112,18 @@ it has served its purpose. Closing a review is not the same as stopping the
 server: `--shutdown` leaves everything where it is and `--restart` brings it
 back, while closing throws the review away.
 
+The server also ends itself once it is holding nothing at all — no diffs, no
+hooks, no open review page — for thirty minutes, so a review you finished with
+does not leave a process on the port until you next reboot. A review waiting
+for a human is never collected, however long it waits: the check asks whether
+anything is there, not whether anything happened recently. `--idle-timeout`
+sets the stretch, and `--idle-timeout 0` keeps the server resident:
+
+```console
+$ git diff | sbnn --idle-timeout 4h   # stay up longer
+$ git diff | sbnn --idle-timeout 0    # stay up until told to stop
+```
+
 ### Groups
 
 `--target` (`-t`) puts a diff in a named group with its own URL, its own
