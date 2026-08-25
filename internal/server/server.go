@@ -608,12 +608,22 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a comment needs a body or a suggestion", http.StatusBadRequest)
 		return
 	}
+	// The side is folded and trimmed so the API agrees with the CLI:
+	// new, old, or empty (meaning new). Anything else is a caller's
+	// mistake and has to be reported, not guessed at -- guessing put
+	// comments on lines nobody asked about.
+	switch side := strings.ToLower(strings.TrimSpace(req.Side)); side {
+	case "":
+		req.Side = "new"
+	case "new", "old":
+		req.Side = side
+	default:
+		http.Error(w, fmt.Sprintf("unknown side %q: use new or old", req.Side), http.StatusBadRequest)
+		return
+	}
 	if len(model.Suggestions(body)) > 0 && req.Side == "old" {
 		http.Error(w, "a suggestion replaces lines of the new file, not of the old one", http.StatusBadRequest)
 		return
-	}
-	if req.Side != "old" {
-		req.Side = "new"
 	}
 	// Line numbers are 1-based; 0 means "not on this side" and is not a
 	// place a comment can point at. The CLI already refuses these, and a
