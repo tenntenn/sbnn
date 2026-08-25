@@ -23,6 +23,9 @@ import (
 type Client struct {
 	Addr string
 	HTTP *http.Client
+	// MaxResponse bounds what a server may answer with. Zero means
+	// maxResponseSize.
+	MaxResponse int64
 }
 
 // New returns a client for the server at addr (host:port).
@@ -216,8 +219,35 @@ func (c *Client) do(ctx context.Context, method, u string, body, out any) error 
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return nil
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(out)
+	limit := c.MaxResponse
+	if limit <= 0 {
+		limit = maxResponseSize
+	}
+	// N is one past the limit, so a body that fills it is known to have
+	// overrun rather than merely reached the edge.
+	lr := &io.LimitedReader{R: resp.Body, N: limit + 1}
+	if err := json.NewDecoder(lr).Decode(out); err != nil {
+		if lr.N <= 0 {
+			return fmt.Errorf("%s %s: the answer is larger than %dMB, which sbnn cannot read",
+				method, u, limit>>20)
+		}
+		return err
+	}
+	return nil
 }
+
+// maxResponseSize bounds what a server may answer with.
+//
+// It used to be a flat 64MB read through an io.LimitReader, which is the same
+// mistake #155 is about, at the other end of the wire: the answer to a diff is
+// the *parsed* diff, where every line of the patch becomes an object, so 32MB
+// of patch comes back as about 128MB of JSON. The cap cut that in half, the
+// decoder met a body that stopped mid-object, and a diff the server had just
+// accepted was reported to the sender as "unexpected EOF".
+//
+// Eight times the largest diff sbnn accepts covers the measured four with room
+// to spare, and a body past that is reported as the oversized body it is.
+const maxResponseSize = 8 * server.MaxDiffSize
 
 // SubmitReview marks the review of a group as done, which is what wakes
 // anything waiting on it.
@@ -254,6 +284,20 @@ func (c *Client) DeleteHooks(ctx context.Context, group string) (int, error) {
 		Removed int `json:"removed"`
 	}
 	if err := c.do(ctx, http.MethodDelete, c.url("/_/api/groups/%s/hooks", url.PathEscape(group)), nil, &res); err != nil {
+		return 0, err
+	}
+	return res.Removed, nil
+}
+
+// DeleteHook removes one hook by ID and returns how many went, which is 0
+// when the group has no hook with that ID: the server reports that as a
+// count, not as an error, so the caller decides what it means.
+func (c *Client) DeleteHook(ctx context.Context, group, id string) (int, error) {
+	var res struct {
+		Removed int `json:"removed"`
+	}
+	u := c.url("/_/api/groups/%s/hooks/%s", url.PathEscape(group), url.PathEscape(id))
+	if err := c.do(ctx, http.MethodDelete, u, nil, &res); err != nil {
 		return 0, err
 	}
 	return res.Removed, nil
