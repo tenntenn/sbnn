@@ -56,6 +56,7 @@ func TestSpaHandler(t *testing.T) {
 			path:        "/default",
 			wantStatus:  http.StatusOK,
 			wantType:    "text/html; charset=utf-8",
+			wantCache:   "no-cache",
 			wantBodyHas: "<!doctype html>",
 		},
 		{
@@ -63,6 +64,7 @@ func TestSpaHandler(t *testing.T) {
 			path:        "/diagram.png",
 			wantStatus:  http.StatusNotFound,
 			wantType:    "text/plain; charset=utf-8",
+			wantCache:   "no-cache",
 			wantBodyHas: "not found: /diagram.png is not part of the sbnn UI",
 		},
 		{
@@ -70,6 +72,7 @@ func TestSpaHandler(t *testing.T) {
 			path:        "/other.md",
 			wantStatus:  http.StatusNotFound,
 			wantType:    "text/plain; charset=utf-8",
+			wantCache:   "no-cache",
 			wantBodyHas: "/other.md",
 		},
 		{
@@ -77,6 +80,7 @@ func TestSpaHandler(t *testing.T) {
 			path:       "/assets/index-gone.js",
 			wantStatus: http.StatusNotFound,
 			wantType:   "text/plain; charset=utf-8",
+			wantCache:  "no-cache",
 		},
 		{
 			name:        "a built asset is served with its long cache",
@@ -97,6 +101,7 @@ func TestSpaHandler(t *testing.T) {
 			path:        "/a/b/c",
 			wantStatus:  http.StatusNotFound,
 			wantType:    "text/plain; charset=utf-8",
+			wantCache:   "no-cache",
 			wantBodyHas: "/a/b/c",
 		},
 		{
@@ -104,30 +109,85 @@ func TestSpaHandler(t *testing.T) {
 			path:       longest,
 			wantStatus: http.StatusOK,
 			wantType:   "text/html; charset=utf-8",
+			wantCache:  "no-cache",
 		},
 		{
 			name:       "one character more is not a group name",
 			path:       tooLong,
 			wantStatus: http.StatusNotFound,
 			wantType:   "text/plain; charset=utf-8",
+			wantCache:  "no-cache",
 		},
 		{
 			name:       "a name that does not start with a letter or digit is not a group",
 			path:       "/.env",
 			wantStatus: http.StatusNotFound,
 			wantType:   "text/plain; charset=utf-8",
+			wantCache:  "no-cache",
 		},
 		{
-			name:       "a trailing dot is neither an extension nor a group",
+			// Not an extension, and ValidateGroupName accepts it, so it
+			// is a group. Refusing it here while /_/api/groups/ accepted
+			// it was exactly the drift that lost the dotted names below.
+			name:       "a trailing dot is a group name, because ValidateGroupName says so",
 			path:       "/trailing.",
+			wantStatus: http.StatusOK,
+			wantType:   "text/html; charset=utf-8",
+			wantCache:  "no-cache",
+		},
+		{
+			// Regression: sbnn -t v1.2 prints this URL itself.
+			name:       "a version-shaped group name renders the SPA",
+			path:       "/v1.2",
+			wantStatus: http.StatusOK,
+			wantType:   "text/html; charset=utf-8",
+			wantCache:  "no-cache",
+		},
+		{
+			name:       "a three-part version renders the SPA",
+			path:       "/v1.2.3",
+			wantStatus: http.StatusOK,
+			wantType:   "text/html; charset=utf-8",
+			wantCache:  "no-cache",
+		},
+		{
+			name:       "a dotted release name renders the SPA",
+			path:       "/release-2024.01",
+			wantStatus: http.StatusOK,
+			wantType:   "text/html; charset=utf-8",
+			wantCache:  "no-cache",
+		},
+		{
+			name:       "a dotted feature name renders the SPA",
+			path:       "/feature-1.2_x",
+			wantStatus: http.StatusOK,
+			wantType:   "text/html; charset=utf-8",
+			wantCache:  "no-cache",
+		},
+		{
+			// groupFromLocation strips a trailing slash, so the SPA reads
+			// this as the group "default" and has to be handed the page.
+			name:       "a group with a trailing slash renders the SPA",
+			path:       "/default/",
+			wantStatus: http.StatusOK,
+			wantType:   "text/html; charset=utf-8",
+			wantCache:  "no-cache",
+		},
+		{
+			// ...but the trailing slash must not smuggle a file past the
+			// extension test.
+			name:       "a file with a trailing slash is still a 404",
+			path:       "/diagram.png/",
 			wantStatus: http.StatusNotFound,
 			wantType:   "text/plain; charset=utf-8",
+			wantCache:  "no-cache",
 		},
 		{
 			name:       "a group name with punctuation still renders the SPA",
 			path:       "/feature-1_x",
 			wantStatus: http.StatusOK,
 			wantType:   "text/html; charset=utf-8",
+			wantCache:  "no-cache",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -144,7 +204,12 @@ func TestSpaHandler(t *testing.T) {
 					t.Errorf("GET %s content-type = %q, want %q", tt.path, got, tt.wantType)
 				}
 			}
-			if got := res.Header.Get("Cache-Control"); tt.wantCache != "" && got != tt.wantCache {
+			// Compared unconditionally: an empty wantCache means the
+			// header must be absent. Skipping the empty case is how the
+			// "served without it" row below stopped asserting anything,
+			// which would have let the immutable cache leak out of
+			// assets/ unnoticed.
+			if got := res.Header.Get("Cache-Control"); got != tt.wantCache {
 				t.Errorf("GET %s cache-control = %q, want %q", tt.path, got, tt.wantCache)
 			}
 			if tt.wantBodyHas != "" && !strings.Contains(rec.Body.String(), tt.wantBodyHas) {
@@ -181,6 +246,18 @@ func TestHasFileExtension(t *testing.T) {
 		{"docs/.env", false},
 		{"trailing.", false},
 		{"", false},
+		// Group names ValidateGroupName accepts. The text after the final
+		// dot is a version, not a file type, so none of these is a file.
+		{"v1.2", false},
+		{"v1.2.3", false},
+		{"rel-1.0", false},
+		{"release.2", false},
+		{"release-2024.01", false},
+		{"feature-1.2_x", false},
+		// An extension is short: a sentence ending in a word is not one.
+		{"see.the-next-doc", false},
+		{"archive.tar.gz", true},
+		{"UPPER.PNG", true},
 	} {
 		if got := hasFileExtension(tt.in); got != tt.want {
 			t.Errorf("hasFileExtension(%q) = %v, want %v", tt.in, got, tt.want)
@@ -203,9 +280,20 @@ func TestIsSpaGroupPath(t *testing.T) {
 		{"_internal", false},
 		{"-lead", false},
 		{".env", false},
-		{"trailing.", false},
 		{"with space", false},
 		{"", false},
+		// Whatever ValidateGroupName accepts, this accepts - there is no
+		// second opinion about what a group name is any more.
+		{"trailing.", true},
+		{"v1.2", true},
+		{"v1.2.3", true},
+		{"rel-1.0", true},
+		{"release-2024.01", true},
+		{"feature-1.2_x", true},
+		// A trailing slash names the same group.
+		{"default/", true},
+		{"v1.2/", true},
+		{"a/b/c/", false},
 	} {
 		if got := isSpaGroupPath(tt.in); got != tt.want {
 			t.Errorf("isSpaGroupPath(%q) = %v, want %v", tt.in, got, tt.want)
