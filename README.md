@@ -164,7 +164,11 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   remembered. The preview shows the working tree file when it
   exists; otherwise sbnn rebuilds the new side from the diff, which is
   complete for new files and partial for modified ones (a unified diff only
-  carries the changed hunks).
+  carries the changed hunks). A partial rebuild says **partial** in its
+  header, and each stretch the diff does not carry is marked in the Markdown
+  itself, as a rule and a line saying how many lines are not there. Nothing
+  is written into a notebook that way: it is JSON, and sbnn's own sentence in
+  the middle of it would be the reason it could not be shown at all.
 - **Sync** makes the preview follow the diff as you scroll, by fraction
   rather than by line — the two documents do not agree on lines, and
   pretending they do lands you in the wrong place with more confidence.
