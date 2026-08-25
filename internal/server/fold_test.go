@@ -1,7 +1,9 @@
 package server
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/model"
@@ -126,5 +128,68 @@ func TestFoldFilesAlwaysGivesAReason(t *testing.T) {
 		if f.Folded && f.FoldReason == "" {
 			t.Errorf("%s was folded without saying why", f.Path())
 		}
+	}
+}
+
+// A fold reason is text somebody reads, so it is cut where text can be cut.
+// shorten counts runes: cutting 60 bytes into Japanese lands in the middle
+// of a rune, and the broken bytes reach the browser as U+FFFD.
+func TestShortenKeepsRunesWhole(t *testing.T) {
+	// The marker from the issue: 118 bytes, but only 43 runes. Counted in
+	// bytes it was cut at 60 and came apart mid-rune; counted in runes it
+	// fits under the 60 foldFiles passes, and is left whole.
+	s := "// 自動生成されたファイルです。編集しないでください。これは非常に長いマーカー行です"
+	got := shorten(s, 60)
+	if !utf8.ValidString(got) {
+		t.Errorf("cut mid-rune: %q", got)
+	}
+	if got != s {
+		t.Errorf("shorten(%q, 60) = %q, want it whole: 43 runes fit in 60", s, got)
+	}
+
+	// Cut the same text where it really is too long, and the cut lands on a
+	// rune boundary and costs exactly the runes it says.
+	cut := shorten(s, 20)
+	if !utf8.ValidString(cut) {
+		t.Errorf("cut mid-rune: %q", cut)
+	}
+	if n := utf8.RuneCountInString(cut); n != 20 {
+		t.Errorf("shorten(%q, 20) is %d runes, want 20: %q", s, n, cut)
+	}
+	if !strings.HasSuffix(cut, "…") {
+		t.Errorf("a cut string says it was cut, got %q", cut)
+	}
+
+	// The ASCII case the byte slicing already got right, unchanged.
+	if got, want := shorten(strings.Repeat("a", 100), 10), "aaaaaaaaa…"; got != want {
+		t.Errorf("shorten(100 a's, 10) = %q, want %q", got, want)
+	}
+	if n := utf8.RuneCountInString(shorten(strings.Repeat("a", 100), 10)); n != 10 {
+		t.Errorf("shorten(100 a's, 10) is %d runes, want 10", n)
+	}
+
+	// Nothing that fits is touched - no cut, no ellipsis - and that holds
+	// right up to the last rune that fits.
+	for _, tc := range []struct {
+		s    string
+		n    int
+		want string
+	}{
+		{"short enough", 60, "short enough"},
+		{"あいうえお", 60, "あいうえお"},
+		{"あいうえお", 5, "あいうえお"}, // exactly n runes: still whole
+		{strings.Repeat("a", 10), 10, strings.Repeat("a", 10)},
+		{"  padded  ", 60, "padded"}, // the surrounding space still goes
+		{"  " + strings.Repeat("あ", 8) + "  ", 8, strings.Repeat("あ", 8)},
+	} {
+		if got := shorten(tc.s, tc.n); got != tc.want {
+			t.Errorf("shorten(%q, %d) = %q, want %q", tc.s, tc.n, got, tc.want)
+		}
+	}
+
+	// Never reached from foldFiles, which passes 60, but a function that
+	// panics is not one to leave lying about.
+	if got := shorten("あいうえお", 0); got != "" {
+		t.Errorf(`shorten("あいうえお", 0) = %q, want ""`, got)
 	}
 }
