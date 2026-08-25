@@ -90,3 +90,50 @@ func TestCommentJSONCarriesSuggestions(t *testing.T) {
 		t.Errorf("suggestions = %q", decoded.Suggestions)
 	}
 }
+
+func TestParseVerdict(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		want model.Verdict
+		ok   bool
+	}{
+		{"", model.VerdictCommented, true},
+		{"  ", model.VerdictCommented, true},
+		{"approved", model.VerdictApproved, true},
+		{"approve", model.VerdictApproved, true},
+		{"LGTM", model.VerdictApproved, true},
+		{"accept", model.VerdictApproved, true},
+		{"ship it", model.VerdictApproved, true},
+		{"commented", model.VerdictCommented, true},
+		{"comment", model.VerdictCommented, true},
+		{"changes-requested", model.VerdictChangesRequested, true},
+		{"changes_requested", model.VerdictChangesRequested, true},
+		{"request-changes", model.VerdictChangesRequested, true},
+		{"changes", model.VerdictChangesRequested, true},
+		// The spelling GitHub's own review API uses.
+		{"request_changes", model.VerdictChangesRequested, true},
+		{"REQUEST_CHANGES", model.VerdictChangesRequested, true},
+		{"requestchanges", model.VerdictChangesRequested, true},
+		{"reject", model.VerdictChangesRequested, true},
+		{"nope", "", false},
+		{"changes requested?", "", false},
+	} {
+		t.Run(tt.in, func(t *testing.T) {
+			got, ok := model.ParseVerdict(tt.in)
+			if got != tt.want || ok != tt.ok {
+				t.Errorf("ParseVerdict(%q) = %q, %v; want %q, %v", tt.in, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+// What String writes has to read back, or a verdict cannot survive being
+// printed and typed again.
+func TestParseVerdictRoundTripsString(t *testing.T) {
+	for _, v := range []model.Verdict{model.VerdictApproved, model.VerdictCommented, model.VerdictChangesRequested} {
+		got, ok := model.ParseVerdict(v.String())
+		if !ok || got != v {
+			t.Errorf("ParseVerdict(%q.String() = %q) = %q, %v", string(v), v.String(), got, ok)
+		}
+	}
+}

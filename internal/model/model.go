@@ -307,18 +307,39 @@ const (
 
 // ParseVerdict reads a verdict, accepting the spellings people actually
 // type. An empty string is "commented".
+//
+// The separators are thrown away before matching, so that every permutation
+// of a two-word spelling means the same thing: "changes-requested" is what
+// sbnn stores, "changes_requested" is what a GitHub review payload reports
+// and "REQUEST_CHANGES" is what its API takes when submitting one. Whoever
+// is bridging the two should not have to guess which of them we accept.
 func ParseVerdict(s string) (Verdict, bool) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
+	switch normalizeVerdict(s) {
 	case "":
 		return VerdictCommented, true
-	case "approved", "approve", "lgtm":
+	case "approved", "approve", "accept", "accepted", "lgtm", "ship", "shipit":
 		return VerdictApproved, true
 	case "commented", "comment":
 		return VerdictCommented, true
-	case "changes-requested", "changes_requested", "request-changes", "changes":
+	case "changesrequested", "requestchanges", "changes", "reject", "rejected":
 		return VerdictChangesRequested, true
 	}
 	return "", false
+}
+
+// normalizeVerdict folds a written verdict down to letters, so that case and
+// the separator someone reached for stop mattering.
+func normalizeVerdict(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range strings.ToLower(s) {
+		switch r {
+		case '-', '_', ' ', '\t', '\n', '\r', '.':
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // Blocking reports whether the verdict says the change should not go ahead
