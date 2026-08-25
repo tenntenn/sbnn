@@ -17,6 +17,10 @@ import (
 // errNotPreviewable is returned for files mo cannot show.
 var errNotPreviewable = errors.New("no Markdown preview for this file")
 
+// errNoDeepLink is returned when mo ran without complaining but reported no
+// page for the file it was asked to open.
+var errNoDeepLink = errors.New("mo gave this file no URL")
+
 // PreviewSource tells where the previewed Markdown came from.
 type PreviewSource string
 
@@ -64,7 +68,7 @@ func (p *previewer) content(d *model.Diff, f *model.File) (*FileContentResponse,
 	if err := previewableText(f); err != nil {
 		return nil, err
 	}
-	got := source.NewSide(d.BaseDir, f)
+	got := newSide(d, f)
 	if strings.TrimSpace(got.Content) == "" {
 		return nil, fmt.Errorf("%w: nothing to preview for %s", errNotPreviewable, f.Path())
 	}
@@ -159,6 +163,14 @@ func (p *previewer) preview(ctx context.Context, group string, d *model.Diff, f 
 		return nil, err
 	}
 	moURL := res.URLFor(path)
+	if moURL == "" {
+		// mo ran and answered, but listed no page for this file: it
+		// skipped it, or it is reporting a path sbnn cannot match up
+		// with the one it asked about. Answering 200 with an empty URL
+		// would leave the reviewer with a blank frame and leave no
+		// trace on the server, so say so instead.
+		return nil, fmt.Errorf("%w: %s", errNoDeepLink, path)
+	}
 	out := &PreviewResponse{
 		MoURL:    moURL,
 		Path:     path,
@@ -183,7 +195,7 @@ func moGroupName(group string) string {
 // has a file to open.
 func (p *previewer) resolve(group string, d *model.Diff, f *model.File) (path string, src PreviewSource, complete bool, err error) {
 	rel := f.Path()
-	got := source.NewSide(d.BaseDir, f)
+	got := newSide(d, f)
 	if got.Kind == source.FromWorktree {
 		return got.Path, SourceWorktree, got.Complete, nil
 	}
@@ -205,6 +217,82 @@ func (p *previewer) resolve(group string, d *model.Diff, f *model.File) (path st
 		}
 	}
 	return dst, SourceReconstructed, got.Complete, nil
+}
+
+// newSide returns the new side of f, without believing a working tree file
+// that is not actually the new side.
+//
+// The working tree is the better source only when the diff has been applied
+// to it. It has not been for the patch sbnn is handed on stdin without ever
+// touching the repository - "cat change.patch | sbnn" - and there the file on
+// disk is the old side. Handing that back as the whole new side is the one
+// answer sbnn must not give: it is wrong and it says so with confidence.
+func newSide(d *model.Diff, f *model.File) source.Result {
+	got := source.NewSide(d.BaseDir, f)
+	if got.Kind != source.FromWorktree || worktreeMatchesNewSide(got.Content, f) {
+		return got
+	}
+	// Fall back to the diff. The result may only be partial, which the
+	// caller reports as "rebuilt" and "partial" - an honest half-answer
+	// beats a confident wrong one.
+	content, complete := diff.Reconstruct(f)
+	return source.Result{Content: content, Kind: source.FromDiff, Complete: complete}
+}
+
+// worktreeMatchesNewSide reports whether content, read from the working tree,
+// looks like the new side of f.
+//
+// Every context and addition line of every hunk must sit at the new-side line
+// number the hunk gives it, counting from Hunk.NewStart. One line out of
+// place is enough to conclude that the patch was never applied here.
+//
+// The question can also have no answer. A hunk that carries no new-side
+// numbering says nothing about where its lines belong, and a diff made only
+// of such hunks leaves the working tree neither confirmed nor contradicted.
+// Not knowing is not the same as knowing it is wrong, so an unanswerable
+// check reports a match and the working tree is used, exactly as it was
+// before this check existed.
+//
+// Binary files and files without hunks are accepted as they are: there is
+// nothing in the diff to check them against.
+func worktreeMatchesNewSide(content string, f *model.File) bool {
+	if f == nil || f.IsBinary || len(f.Hunks) == 0 {
+		return true
+	}
+	lines := strings.Split(content, "\n")
+	for _, h := range f.Hunks {
+		if h.NewStart < 1 {
+			// A combined diff - what "git show <merge>" prints for a
+			// merge commit - has "@@@ -1,2 -1,2 +1,2 @@@" headers that
+			// this parser deliberately does not read numbers out of,
+			// because they do not describe a two-way view. NewStart is
+			// then 0 and there is no line to compare against any line.
+			// A deleted file's "+0,0" hunk lands here too, and has no
+			// new side to check either.
+			continue
+		}
+		num := h.NewStart
+		for _, l := range h.Lines {
+			if l.Kind == model.LineDelete {
+				// A deleted line is not on the new side at all.
+				continue
+			}
+			if num < 1 || num > len(lines) {
+				return false
+			}
+			if trimLineEnd(lines[num-1]) != trimLineEnd(l.Content) {
+				return false
+			}
+			num++
+		}
+	}
+	return true
+}
+
+// trimLineEnd drops the carriage return of a CRLF file so that the line
+// endings alone never decide that a patch was not applied.
+func trimLineEnd(line string) string {
+	return strings.TrimRight(line, "\r")
 }
 
 // safeRelPath makes a diff path usable inside the cache directory.
