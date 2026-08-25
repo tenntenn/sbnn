@@ -1,0 +1,49 @@
+From dd25051a45812d05b13a55fdb3c3ef173f88befe Mon Sep 17 00:00:00 2001
+From: Takuya Ueda <uedatakuya@gmail.com>
+Date: Mon, 24 Aug 2026 23:44:52 -1000
+Subject: [PATCH] Stop papering over --ok-bg and --bg-elevated with var()
+ fallbacks (#228)
+
+Fixes #81.
+---
+ web/src/styles.css | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/web/src/styles.css b/web/src/styles.css
+index 3d9fce4..c33d51c 100644
+--- a/web/src/styles.css
++++ b/web/src/styles.css
+@@ -1125,10 +1125,10 @@ body.resizing iframe {
+ /* Stacked below the toolbar, not at the very top, so a file's own sticky
+    header does not slide underneath it as the reader scrolls past. */
+ .diff-stack .diff-header {
+-  top: var(--diff-toolbar-h, 0px);
++  top: var(--diff-toolbar-h);
+ }
+ .preview-stack .preview-header {
+-  top: var(--preview-toolbar-h, 0px);
++  top: var(--preview-toolbar-h);
+ }
+ 
+ /* ---------- misc ---------- */
+@@ -1675,7 +1675,7 @@ a {
+   border-bottom: var(--border-width-hairline) solid var(--border);
+   position: sticky;
+   top: 0;
+-  background: var(--bg-elevated, var(--bg));
++  background: var(--bg-elevated);
+   z-index: 1;
+ }
+ .file-search-input {
+@@ -1714,7 +1714,7 @@ a {
+   z-index: 50;
+ }
+ .help {
+-  background: var(--bg-elevated, var(--bg));
++  background: var(--bg-elevated);
+   color: var(--fg);
+   border: var(--border-width-hairline) solid var(--border-strong);
+   border-radius: var(--radius-lg);
+-- 
+2.43.0
+
