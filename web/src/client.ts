@@ -32,6 +32,11 @@ export interface GroupData {
   reviewedAt?: string
   /** reviewVerdict is what that review decided. */
   reviewVerdict?: Verdict
+  /** reviewed is whether that verdict still covers what the page shows: it
+   * is false again once a diff arrives after the last review. A live page
+   * reads that from the status summary; a static one has nothing else to
+   * read it from. */
+  reviewed?: boolean
 }
 
 /**
@@ -78,6 +83,18 @@ export interface StaticPayload {
   group: string
   diffs: Diff[]
   comments: Comment[]
+  /** reviewedAt, reviewNote and reviewVerdict say how the review ended, and
+   * are absent when it was never submitted. They carry the same names the
+   * live API sends, so a frozen review reads exactly like a live one.
+   * Payload version 2 is where they start meaning that: in a version 1 page
+   * an absent verdict could equally mean "not reviewed" and "exported by a
+   * binary that did not carry the verdict". */
+  reviewedAt?: string
+  reviewNote?: string
+  reviewVerdict?: Verdict
+  /** reviewed is false again once a diff arrived after that review, the way
+   * the live status summary reports it. */
+  reviewed?: boolean
   previews: Record<string, { content: string; source: string; complete: boolean; path?: string }>
   images: Record<string, { dataUrl: string; path?: string }>
 }
@@ -191,7 +208,14 @@ function createStaticClient(data: StaticPayload): SbnnClient {
     isStatic: true,
     exportedAt: data.generatedAt,
     async load() {
-      return { diffs: data.diffs ?? [], comments: read(), status: null }
+      return {
+        diffs: data.diffs ?? [],
+        comments: read(),
+        status: null,
+        reviewedAt: data.reviewedAt,
+        reviewVerdict: data.reviewVerdict,
+        reviewed: data.reviewed,
+      }
     },
     async addComment(group, comment) {
       const now = new Date().toISOString()
@@ -240,7 +264,13 @@ function createStaticClient(data: StaticPayload): SbnnClient {
       throw new Error('an exported page has no review to close')
     },
     async prompt(group) {
-      return buildPrompt(group, data.diffs ?? [], read())
+      // The verdict decides what the comments mean, so an agent handed this
+      // text has to be told it the way `sbnn comments` tells it.
+      return buildPrompt(group, data.diffs ?? [], read(), {
+        reviewedAt: data.reviewedAt,
+        reviewNote: data.reviewNote,
+        reviewVerdict: data.reviewVerdict,
+      })
     },
     async submitReview() {
       throw new Error('an exported page has no server to submit the review to')
