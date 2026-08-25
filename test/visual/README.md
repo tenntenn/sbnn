@@ -85,16 +85,38 @@ signal to delete the annotation.
 | paths are painted in the order they are written | #73 | all four | `.file-path` is `direction: rtl`, so `.github/workflows/ci.yml` paints as `github/workflows/ci.yml.` |
 | no element is wider than the box that holds it | #119 | all four | `.disclosure` is `clientWidth` 10 around a 14px icon |
 | the page does not scroll sideways | #74 | desktop only | the preview pane is `clientWidth` 517, `scrollWidth` 576; the narrow layout shows one pane at a time and holds |
+| hover and selected are different colours | #79 | desktop only | both settle on `rgb(238, 241, 244)`: the bundle paints `.file-item:hover` and `.file-item.active` with the same `--bg-inset` |
 
-Two things the issue list expected to be broken are not, measured rather
-than assumed:
+**#74** holds on the phone layout, so only the desktop projects carry that
+annotation. **#79** is skipped there instead: hover is a pointer affordance
+and the narrow layout has no pointer behind it.
 
-- **#79 hover and selected** hold on the desktop layout: selecting one file
-  and hovering another gives two different backgrounds. The test asserts it
-  normally. It is skipped on the phone projects, where hover is a pointer
-  affordance with no pointer behind it.
-- **#74** holds on the phone layout, so only the desktop projects carry the
-  annotation.
+## Reading a colour: wait for the transition
+
+`getComputedStyle` during a transition returns the value part way along it.
+Two rows moving towards the *same* colour from different starting points
+read as two different colours for as long as the transition runs, so a
+comparison made too early passes no matter what the stylesheet says - which
+is how the #79 assertion above spent its first version green over a bundle
+that painted both states identically:
+
+```
+IMMEDIATE  selected rgba(238, 241, 244, 0.85)   hover rgba(238, 241, 244, 0.255)
+SETTLED    selected rgb(238, 241, 244)          hover rgb(238, 241, 244)
+```
+
+`settled(page, selector)` in `geometry.spec.ts` waits for every animation on
+the matched elements to finish. Anything that compares computed colour has
+to go through it. Emulating `prefers-reduced-motion` is not a substitute:
+the guard that honours the query lives in the stylesheet under test, so a
+bundle without it would go unwaited.
+
+## What is measured is `web/dist`, not `web/src`
+
+The binary serves the committed bundle, so that is what the browser sees. A
+fix that is in `web/src` but not yet rebuilt into `web/dist` does not move
+these tests, and an annotation flips to "Expected to fail, but passed" when
+the rebuilt bundle lands rather than when the source change does.
 
 ## Viewports and colour schemes
 

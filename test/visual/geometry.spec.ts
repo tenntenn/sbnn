@@ -66,6 +66,33 @@ function paintedOrder(el: Element): Painted {
   return { source: text, painted: items.map((i) => i.ch).join('') }
 }
 
+/**
+ * Waits until nothing on the page is still animating.
+ *
+ * getComputedStyle during a transition returns the value part way along it,
+ * not the value the rule asks for: two elements transitioning to the same
+ * colour from different starting points read as two different colours for as
+ * long as the transition lasts. A test that compares colours without waiting
+ * therefore passes whatever the stylesheet says -- which is how the #79
+ * assertion below stayed green while the shipped bundle painted hover and
+ * selected in exactly the same colour.
+ *
+ * Waiting is used rather than emulating prefers-reduced-motion: the guard
+ * that honours that query is in the stylesheet under test, so a bundle
+ * without it would go unwaited and the test would be back where it started.
+ */
+async function settled(page: Page, selector: string): Promise<void> {
+  await page.waitForFunction(async (sel) => {
+    const els = [...document.querySelectorAll(sel)]
+    await Promise.all(
+      // A transition replaced by another one rejects rather than resolving;
+      // either way it is over, which is all this asks.
+      els.flatMap((e) => e.getAnimations().map((a) => a.finished.catch(() => undefined))),
+    )
+    return els.every((e) => e.getAnimations().length === 0)
+  }, selector)
+}
+
 test.describe('rendered geometry', () => {
   // #73, open in every project. .file-path is direction: rtl, so the bidi
   // algorithm moves the leading dot of a dotfile to the end: the source
@@ -135,6 +162,7 @@ test.describe('rendered geometry', () => {
   // is correct rather than a defect.
   test('hover and selected are different colours (#79)', async ({ page }) => {
     test.skip(onPhone(), 'hover is a pointer affordance; the narrow layout has no pointer')
+    test.fail(true, 'hover and selected are the same colour in the shipped bundle (#79)')
     await open(page)
     await showFiles(page)
     const items = page.locator('.file-item')
@@ -145,6 +173,9 @@ test.describe('rendered geometry', () => {
     await items.nth(0).click()
     await expect(page.locator('.file-item.active')).toHaveCount(1)
     await items.nth(1).hover()
+    // Both rows are transitioning towards their new background; read the
+    // colours only once they have arrived.
+    await settled(page, '.file-item')
 
     const colours = await page.evaluate(() => {
       const active = document.querySelector('.file-item.active') as HTMLElement | null
