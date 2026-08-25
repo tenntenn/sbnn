@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -17,6 +20,11 @@ import (
 // hookTimeout bounds a hook, so that a command waiting for something never
 // keeps a review round open.
 const hookTimeout = 10 * time.Minute
+
+// maxHookResponse bounds what is read back from a hook endpoint. The body is
+// read only so that the connection can be reused; a hook that answers with a
+// gigabyte should not be able to hold sbnn while it does.
+const maxHookResponse = 64 << 10
 
 // ReviewEvent is what a hook is told about a submitted review.
 type ReviewEvent struct {
@@ -96,7 +104,35 @@ func (s *Server) runHookCommand(ctx context.Context, h *model.Hook, event Review
 		"output", string(bytes.TrimSpace(out)))
 }
 
+// validateHookURL reports whether a URL is one a hook could actually be
+// delivered to.
+//
+// postHook speaks http and https and nothing else, so a hook URL that is
+// neither is a hook that will never run. Left to delivery it fails once per
+// review, at warn level, in a log file nobody is reading - by which time the
+// person who registered it is long gone.
+//
+// It is a function of its own so that registration can refuse a bad URL up
+// front by the same rule delivery applies.
+func validateHookURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%q is not a url: %w", raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("a hook url has to be http or https, not %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("a hook url needs a host: %q", raw)
+	}
+	return nil
+}
+
 func (s *Server) postHook(ctx context.Context, h *model.Hook, event ReviewEvent) {
+	if err := validateHookURL(h.URL); err != nil {
+		slog.Warn("review hook has an unusable url", "hook", h.ID, "url", h.URL, "error", err)
+		return
+	}
 	body, err := json.Marshal(event)
 	if err != nil {
 		return
@@ -112,7 +148,14 @@ func (s *Server) postHook(ctx context.Context, h *model.Hook, event ReviewEvent)
 		slog.Warn("review hook could not be delivered", "hook", h.ID, "url", h.URL, "error", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		// Read what is left before closing, or the connection is
+		// dropped instead of returned to the pool and every review
+		// pays for a fresh one. Bounded, because how much a hook
+		// endpoint answers with is not sbnn's to decide.
+		io.Copy(io.Discard, io.LimitReader(resp.Body, maxHookResponse))
+		resp.Body.Close()
+	}()
 	if resp.StatusCode >= 300 {
 		slog.Warn("review hook was refused", "hook", h.ID, "url", h.URL, "status", resp.Status)
 		return
