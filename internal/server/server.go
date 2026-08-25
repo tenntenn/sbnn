@@ -234,7 +234,16 @@ func (s *Server) crossOrigin(r *http.Request) (string, bool) {
 	// Sec-Fetch-Site is sent by every current browser and by nothing else.
 	// "none" is the address bar, "same-origin" is sbnn's own page.
 	switch site := r.Header.Get("Sec-Fetch-Site"); site {
-	case "", "none", "same-origin":
+	case "none", "same-origin":
+		// The browser computed this against the page's real origin, and a
+		// page cannot forge it: Sec-Fetch-* are forbidden header names, so a
+		// request from anywhere else arrives as "cross-site" whatever it
+		// wants to claim. Answering here instead of falling through to the
+		// Origin check is what keeps writes working under --bind, where the
+		// address the user typed is one sbnn was never told.
+		return "", false
+	case "":
+		// Too old to send it, or not a browser at all. Origin decides.
 	default:
 		return "Sec-Fetch-Site: " + site, true
 	}
@@ -244,7 +253,7 @@ func (s *Server) crossOrigin(r *http.Request) (string, bool) {
 		// hooks it runs all land here.
 		return "", origin == "null"
 	}
-	if !s.ownOrigin(origin) {
+	if !s.ownOrigin(origin, r.Host) {
 		return "Origin: " + origin, true
 	}
 	return "", false
@@ -253,22 +262,34 @@ func (s *Server) crossOrigin(r *http.Request) (string, bool) {
 // ownOrigin reports whether an Origin header names this server. The page is
 // reached by whichever loopback name the user typed, so all of them count,
 // as long as the port is the one sbnn listens on.
-func (s *Server) ownOrigin(origin string) bool {
+//
+// host is the request's own Host header - the authority the client actually
+// dialled. An Origin that matches it is by definition same-origin, which is
+// the only thing that identifies sbnn's page when it is served on an address
+// opts.Bind does not name: under --bind 0.0.0.0 the user reaches the page at
+// the machine's LAN address, and the browser reports that back. A page on
+// another site cannot borrow this: the browser sets Host from the URL it is
+// dialling and Origin from the page it is dialling out of, so for a genuine
+// cross-origin request the two differ.
+func (s *Server) ownOrigin(origin, host string) bool {
 	u, err := url.Parse(origin)
 	if err != nil || u.Scheme != "http" {
 		return false
 	}
+	if host != "" && u.Host == host {
+		return true
+	}
 	if u.Port() != strconv.Itoa(s.opts.Port) {
 		return false
 	}
-	host := u.Hostname()
-	if host == s.opts.Bind {
+	hostname := u.Hostname()
+	if hostname == s.opts.Bind {
 		return true
 	}
-	if ip, err := netip.ParseAddr(host); err == nil {
+	if ip, err := netip.ParseAddr(hostname); err == nil {
 		return ip.IsLoopback()
 	}
-	return host == "localhost"
+	return hostname == "localhost"
 }
 
 // Status is the payload of GET /_/api/status.
