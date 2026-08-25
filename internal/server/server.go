@@ -379,6 +379,9 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such group", http.StatusNotFound)
 		return
 	}
+	// The stored review notice outlives the group otherwise, and would be
+	// replayed to a reconnecting browser for a group that no longer exists.
+	s.broker.forgetReviews(name)
 	s.notify(name)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -825,19 +828,26 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "retry: 2000\n\n")
 	flusher.Flush()
 
-	// Replay the review notices this client has not seen. A browser resends
-	// the last id it got as Last-Event-ID when it reconnects; a client that
-	// has seen nothing sends nothing and gets each group's latest.
-	var since uint64
+	// Replay the review notices this client has not seen - but only for a
+	// client that says where it left off. A browser resends the last id it
+	// got as Last-Event-ID when it reconnects, and that is the one case
+	// where a stored notice is news.
+	//
+	// A client opening the stream for the first time has missed nothing by
+	// definition, and replaying to it is actively wrong: `sbnn wait` opens a
+	// fresh stream with no Last-Event-ID, so handing it every group's last
+	// review made it return a review submitted before anyone asked it to
+	// wait. The diffs sent since then would have gone unreviewed with the
+	// caller told otherwise. runWait already answers "the review is already
+	// in" from the group's own state before it ever reaches the stream.
 	if v := r.Header.Get("Last-Event-ID"); v != "" {
-		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
-			since = n
+		if since, err := strconv.ParseUint(v, 10, 64); err == nil {
+			for _, ev := range s.broker.missedReviews(since) {
+				writeEvent(w, ev)
+			}
+			flusher.Flush()
 		}
 	}
-	for _, ev := range s.broker.missedReviews(since) {
-		writeEvent(w, ev)
-	}
-	flusher.Flush()
 
 	ping := time.NewTicker(25 * time.Second)
 	defer ping.Stop()
@@ -1006,6 +1016,15 @@ func (b *broker) missedReviews(since uint64) []event {
 	}
 	slices.SortFunc(out, func(a, b event) int { return cmp.Compare(a.id, b.id) })
 	return out
+}
+
+// forgetReviews drops the stored review notice for a group, so that closing a
+// review does not leave a notice behind to be replayed for a group that is
+// gone. Without it b.reviews only ever grows.
+func (b *broker) forgetReviews(group string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.reviews, group)
 }
 
 // publishChange tells subscribers a group changed. Losing one of these costs

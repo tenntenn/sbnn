@@ -1076,38 +1076,113 @@ func TestMissedReviewNoticesAreReplayed(t *testing.T) {
 }
 
 // The stream announces its own reconnect delay and numbers review notices, so
-// a browser that drops the connection resumes from where it left off.
-func TestEventStreamSendsRetryAndIDs(t *testing.T) {
+// a browser that drops the connection resumes from where it left off. The
+// replay is keyed on Last-Event-ID: the browser says what it already has.
+func TestEventStreamReplaysForAReconnectingClient(t *testing.T) {
+	ts, srv := newTestServer(t)
+	srv.broker.publishReview("default", []byte(`{"type":"review","group":"default"}`))
+	srv.broker.publishReview("api", []byte(`{"type":"review","group":"api"}`))
+
+	// The client already has notice 1, so only notice 2 is news.
+	got := readEventStream(t, ts.URL, "1", `"group":"api"`)
+	if !strings.Contains(got, "retry: 2000") {
+		t.Errorf("stream = %q, want a retry: field", got)
+	}
+	if !strings.Contains(got, "id: 2") {
+		t.Errorf("stream = %q, want the missed review notice replayed with its id", got)
+	}
+	if strings.Contains(got, `"group":"default"`) {
+		t.Errorf("stream = %q, want no replay of the notice the client already had", got)
+	}
+}
+
+// A client opening the stream for the first time sends no Last-Event-ID and
+// must be replayed nothing.
+//
+// Regression: replaying every group's last review to a fresh subscriber made
+// `sbnn wait` return a review that was submitted before it was asked to wait.
+// Approve a group, send another diff, and `sbnn wait --timeout 8s` returned
+// exit 0 with the old approval in 8ms instead of blocking for 8s and exiting
+// 2 - so a pipeline of `sbnn wait && git commit` committed a diff nobody had
+// looked at.
+func TestEventStreamReplaysNothingToAFreshClient(t *testing.T) {
 	ts, srv := newTestServer(t)
 	srv.broker.publishReview("default", []byte(`{"type":"review","group":"default"}`))
 
-	req, err := http.NewRequest(http.MethodGet, ts.URL+"/_/events", nil)
+	// No Last-Event-ID. Read until the ping deadline rather than until a
+	// notice arrives, because the point is that none does.
+	got := readEventStream(t, ts.URL, "", "")
+	if !strings.Contains(got, "retry: 2000") {
+		t.Errorf("stream = %q, want the stream to have opened", got)
+	}
+	if strings.Contains(got, `"type":"review"`) {
+		t.Errorf("stream = %q, want no review notice: this client has missed nothing", got)
+	}
+}
+
+// The stored notice goes away with the group, so a reconnecting browser is
+// not told about a review of something that no longer exists.
+func TestClosingAGroupForgetsItsReviewNotice(t *testing.T) {
+	ts, srv := newTestServer(t)
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, nil)
+	srv.broker.publishReview("default", []byte(`{"type":"review","group":"default"}`))
+	if got := len(srv.broker.missedReviews(0)); got != 1 {
+		t.Fatalf("stored notices = %d, want 1", got)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/_/api/groups/default", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE status = %s, want 204", resp.Status)
+	}
+
+	if got := srv.broker.missedReviews(0); len(got) != 0 {
+		t.Errorf("stored notices after closing the group = %+v, want none", got)
+	}
+}
+
+// readEventStream opens /_/events, optionally reporting lastEventID, and
+// returns what the server wrote. It stops as soon as want appears, or after a
+// short deadline when want is empty.
+func readEventStream(t *testing.T, base, lastEventID, want string) string {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/_/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lastEventID != "" {
+		req.Header.Set("Last-Event-ID", lastEventID)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 
-	// The handler flushes the retry: field as soon as the stream opens and the
-	// replayed notices after it, so read on until both have arrived.
+	// The handler flushes retry: as soon as the stream opens and any replay
+	// right after it, so a short read window sees everything there is.
+	if want == "" {
+		time.AfterFunc(300*time.Millisecond, cancel)
+	}
 	var got string
 	buf := make([]byte, 4096)
-	for !strings.Contains(got, `"type":"review"`) {
+	for {
 		n, err := resp.Body.Read(buf)
 		got += string(buf[:n])
 		if err != nil {
-			break
+			return got
 		}
-	}
-	if !strings.Contains(got, "retry: 2000") {
-		t.Errorf("stream = %q, want a retry: field", got)
-	}
-	if !strings.Contains(got, "id: 1") || !strings.Contains(got, `"type":"review"`) {
-		t.Errorf("stream = %q, want the missed review notice replayed with an id", got)
+		if want != "" && strings.Contains(got, want) {
+			return got
+		}
 	}
 }
