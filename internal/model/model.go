@@ -187,46 +187,68 @@ func Suggestions(body string) []string {
 	var out []string
 	lines := strings.Split(body, "\n")
 	for i := 0; i < len(lines); i++ {
-		fence, ok := suggestionFence(lines[i])
-		if !ok {
-			// What is written inside another fenced block is quoted
-			// text, not Markdown, so a suggestion block there was shown
-			// rather than proposed - which is what a comment explaining
-			// the format, or an agent quoting a diff that contains one,
-			// is doing. Skip past what the quoting block holds.
-			if quoted, _, ok := openFence(lines[i]); ok {
-				for i++; i < len(lines) && !closesFence(lines[i], quoted); i++ {
-				}
-			}
+		if _, _, ok := openFence(lines[i]); !ok {
 			continue
 		}
-		block := make([]string, 0, 4)
-		// inner is the fence of the code block nested inside the
-		// suggestion while the scan is inside one. Its lines are the
-		// replacement text, not Markdown to be read, so a suggestion
-		// may propose a file that itself contains a code block.
-		inner := ""
-		i++
-	scan:
-		for ; i < len(lines); i++ {
-			line := lines[i]
-			switch {
-			case endsSuggestion(line, fence, inner):
-				break scan
-			case inner != "":
-				if closesFence(line, inner) {
-					inner = ""
-				}
-			default:
-				if f, _, ok := openFence(line); ok {
-					inner = f
-				}
+		end := blockEnd(lines, i)
+		if _, ok := suggestionFence(lines[i]); ok {
+			block := make([]string, 0, end-i)
+			for j := i + 1; j < end; j++ {
+				block = append(block, strings.TrimSuffix(lines[j], "\r"))
 			}
-			block = append(block, strings.TrimSuffix(line, "\r"))
+			out = append(out, strings.Join(block, "\n"))
 		}
-		out = append(out, strings.Join(block, "\n"))
+		// What is written inside another fenced block is quoted text,
+		// not Markdown, so a suggestion block there was shown rather
+		// than proposed - which is what a comment explaining the
+		// format, or an agent quoting a diff that contains one, is
+		// doing. Either way the scan resumes after the block.
+		i = end
 	}
 	return out
+}
+
+// blockEnd returns the index of the line closing the fenced block opened at
+// lines[start], or len(lines) when the text never closes it.
+//
+// A suggestion block is measured differently from any other. A code block
+// nested inside one is replacement text rather than Markdown, so its closing
+// fence does not end the suggestion; every other block ends at the first
+// fence that can close it. Reading a suggestion and deciding whether a body
+// leaves a block open are the same question, so both ask it here.
+func blockEnd(lines []string, start int) int {
+	fence, _, ok := openFence(lines[start])
+	if !ok {
+		return start
+	}
+	if _, ok := suggestionFence(lines[start]); !ok {
+		for i := start + 1; i < len(lines); i++ {
+			if closesFence(lines[i], fence) {
+				return i
+			}
+		}
+		return len(lines)
+	}
+	// inner is the fence of the code block nested inside the suggestion
+	// while the scan is inside one, so a suggestion may propose a file
+	// that itself contains a code block.
+	inner := ""
+	for i := start + 1; i < len(lines); i++ {
+		line := lines[i]
+		switch {
+		case endsSuggestion(line, fence, inner):
+			return i
+		case inner != "":
+			if closesFence(line, inner) {
+				inner = ""
+			}
+		default:
+			if f, _, ok := openFence(line); ok {
+				inner = f
+			}
+		}
+	}
+	return len(lines)
 }
 
 // endsSuggestion reports whether a line ends a suggestion block opened with
@@ -335,16 +357,11 @@ func danglingFence(text string) string {
 		if !ok {
 			continue
 		}
-		closed := false
-		for i++; i < len(lines); i++ {
-			if closesFence(lines[i], fence) {
-				closed = true
-				break
-			}
-		}
-		if !closed {
+		end := blockEnd(lines, i)
+		if end == len(lines) {
 			return fence
 		}
+		i = end
 	}
 	return ""
 }

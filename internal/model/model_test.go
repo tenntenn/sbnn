@@ -2,6 +2,8 @@ package model_test
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -171,17 +173,46 @@ func TestWithSuggestionRoundTrip(t *testing.T) {
 	bodies := []struct {
 		name string
 		body string
+		// have is what the body already proposes, which the appended
+		// suggestion joins rather than replaces.
+		have []string
 	}{
-		{"plain body", "note"},
-		{"empty body", ""},
-		{"body quoting a suggestion", "like this:\n\n````markdown\n```suggestion\nquoted\n```\n````"},
+		{name: "plain body", body: "note"},
+		{name: "empty body", body: ""},
+		{name: "body quoting a suggestion", body: "like this:\n\n````markdown\n```suggestion\nquoted\n```\n````"},
 		// A body whose own fenced block is never closed would otherwise
 		// hold the appended block, and the suggestion `sbnn comment
 		// --suggest` was handed would be read back as quoted text.
-		{"body ending inside a code block", "```go\nfoo()"},
-		{"body ending inside a tilde block", "~~~\nfoo()"},
-		{"body ending inside a long fence", "````\n```go\nfoo()"},
-		{"body ending on a bare opening fence", "```"},
+		{name: "body ending inside a code block", body: "```go\nfoo()"},
+		{name: "body ending inside a tilde block", body: "~~~\nfoo()"},
+		{name: "body ending inside a long fence", body: "````\n```go\nfoo()"},
+		{name: "body ending on a bare opening fence", body: "```"},
+		// A body that already proposes something is the common case for
+		// a second `sbnn comment --suggest` on the same comment. The
+		// closing fence of a code block nested in the existing
+		// suggestion must not be read as leaving the body open: the
+		// close that would be added to "repair" it opens a block of its
+		// own, and the appended suggestion falls inside it.
+		{
+			name: "body holding a suggestion",
+			body: "```suggestion\nfirst\n```",
+			have: []string{"first"},
+		},
+		{
+			name: "body proposing a code block",
+			body: "```suggestion\n```go\nx\n```\n```",
+			have: []string{"```go\nx\n```"},
+		},
+		{
+			name: "body proposing a code block with tildes",
+			body: "~~~suggestion\n~~~go\nx\n~~~\n~~~",
+			have: []string{"~~~go\nx\n~~~"},
+		},
+		{
+			name: "body proposing a code block after quoting one",
+			body: "````markdown\n```suggestion\nquoted\n```\n````\n\n```suggestion\n```go\nx\n```\n```",
+			have: []string{"```go\nx\n```"},
+		},
 	}
 	suggestions := []string{
 		"func parse() {",
@@ -196,9 +227,10 @@ func TestWithSuggestionRoundTrip(t *testing.T) {
 	for _, b := range bodies {
 		for _, suggestion := range suggestions {
 			t.Run(b.name+"/"+suggestion, func(t *testing.T) {
+				want := append(append([]string{}, b.have...), suggestion)
 				body := model.WithSuggestion(b.body, suggestion)
-				if got := model.Suggestions(body); !reflect.DeepEqual(got, []string{suggestion}) {
-					t.Errorf("round trip through %q gave %q, want %q", body, got, []string{suggestion})
+				if got := model.Suggestions(body); !reflect.DeepEqual(got, want) {
+					t.Errorf("round trip through %q gave %q, want %q", body, got, want)
 				}
 			})
 		}
@@ -271,5 +303,40 @@ func TestParseVerdictRoundTripsString(t *testing.T) {
 		if !ok || got != v {
 			t.Errorf("ParseVerdict(%q.String() = %q) = %q, %v", string(v), v.String(), got, ok)
 		}
+	}
+}
+
+// The browser reads suggestions out of a comment body too, in
+// web/src/suggestion.ts, and has to reach the same answer: a suggestion only
+// one side sees is offered in the page and refused by the server, or the
+// other way round. testdata/suggestions.json is the corpus both sides run.
+func TestSuggestionsCorpus(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "suggestions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Cases []struct {
+			Name string   `json:"name"`
+			Body string   `json:"body"`
+			Want []string `json:"want"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(b, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	if len(corpus.Cases) == 0 {
+		t.Fatal("the corpus is empty")
+	}
+	for _, tt := range corpus.Cases {
+		t.Run(tt.Name, func(t *testing.T) {
+			got := model.Suggestions(tt.Body)
+			if got == nil {
+				got = []string{}
+			}
+			if !reflect.DeepEqual(got, tt.Want) {
+				t.Errorf("Suggestions(%q) = %q, want %q", tt.Body, got, tt.Want)
+			}
+		})
 	}
 }
