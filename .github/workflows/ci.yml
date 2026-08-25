@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Installs the pinned go-task and tagpr from aqua.yaml, so `task` below
+      # is the same version the release workflow uses.
+      - uses: aquaproj/aqua-installer@v4.0.5
+        with:
+          aqua_version: v2.62.3
+      - run: task lint
+      - run: task test
+      - run: go build ./...
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      # `pnpm run build` is `tsc -b && vite build`, so this is the TypeScript
+      # type check as well; a separate `tsc --noEmit` step would be redundant.
+      - run: pnpm run build
+        working-directory: web
+
+# The build output under web/dist is deliberately not compared against the
+# tree here: dist is regenerated in batches rather than committed per change,
+# so a sync check would fail on every pull request.

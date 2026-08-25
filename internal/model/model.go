@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // FileStatus represents how a file was changed in a diff.
@@ -191,44 +192,98 @@ func Suggestions(body string) []string {
 			continue
 		}
 		block := make([]string, 0, 4)
+		// inner is the fence of the code block nested inside the
+		// suggestion while the scan is inside one. Its lines are the
+		// replacement text, not Markdown to be read, so a suggestion
+		// may propose a file that itself contains a code block.
+		inner := ""
 		i++
+	scan:
 		for ; i < len(lines); i++ {
-			if closesFence(lines[i], fence) {
-				break
+			line := lines[i]
+			switch {
+			case endsSuggestion(line, fence, inner):
+				break scan
+			case inner != "":
+				if closesFence(line, inner) {
+					inner = ""
+				}
+			default:
+				if f, _, ok := openFence(line); ok {
+					inner = f
+				}
 			}
-			block = append(block, strings.TrimSuffix(lines[i], "\r"))
+			block = append(block, strings.TrimSuffix(line, "\r"))
 		}
 		out = append(out, strings.Join(block, "\n"))
 	}
 	return out
 }
 
+// endsSuggestion reports whether a line ends a suggestion block opened with
+// fence, given the fence of the code block nested inside it - empty when the
+// scan is not inside one.
+//
+// Inside a nested block only that block's own closing fence is read, which is
+// what keeps a proposed code block whole. The exception is a run longer than
+// the nested fence: a close never has to be longer than the fence it closes,
+// while the suggestion's fence is lengthened precisely to hold shorter ones,
+// so the longer run belongs to the suggestion.
+func endsSuggestion(line, fence, inner string) bool {
+	if !closesFence(line, fence) {
+		return false
+	}
+	if inner == "" {
+		return true
+	}
+	run, _ := fenceRun(line)
+	return !closesFence(line, inner) || len(run) > len(inner)
+}
+
 // suggestionFence reports whether a line opens a suggestion block, and with
 // which fence.
 func suggestionFence(line string) (fence string, ok bool) {
-	trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-	for _, marker := range []byte{'`', '~'} {
-		n := 0
-		for n < len(trimmed) && trimmed[n] == marker {
-			n++
-		}
-		if n < 3 {
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(trimmed[n:]), "suggestion") {
-			return trimmed[:n], true
-		}
+	fence, info, ok := openFence(line)
+	if !ok || !strings.EqualFold(info, "suggestion") {
+		return "", false
 	}
-	return "", false
+	return fence, true
 }
 
-// closesFence reports whether a line closes a block opened with fence.
-func closesFence(line, fence string) bool {
-	trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-	if len(trimmed) < len(fence) {
-		return false
+// openFence reports whether a line opens a fenced block, with which fence and
+// with which info string. A backtick fence may not carry a backtick in its
+// info string, so a line of prose holding two code spans opens nothing.
+func openFence(line string) (fence, info string, ok bool) {
+	fence, info = fenceRun(line)
+	if len(fence) < 3 {
+		return "", "", false
 	}
-	return strings.Trim(trimmed, fence[:1]) == "" && strings.HasPrefix(trimmed, fence)
+	if fence[0] == '`' && strings.Contains(info, "`") {
+		return "", "", false
+	}
+	return fence, info, true
+}
+
+// closesFence reports whether a line closes a block opened with fence: the
+// same character, at least as long, and nothing else on the line.
+func closesFence(line, fence string) bool {
+	run, rest := fenceRun(line)
+	return rest == "" && len(run) >= len(fence) && run[0] == fence[0]
+}
+
+// fenceRun splits a line, once its surrounding space is gone, into the run of
+// fence characters it begins with and what follows. run is empty when the
+// line does not begin with a run of ` or ~.
+func fenceRun(line string) (run, rest string) {
+	trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+	if trimmed == "" || (trimmed[0] != '`' && trimmed[0] != '~') {
+		return "", ""
+	}
+	n := 0
+	for n < len(trimmed) && trimmed[n] == trimmed[0] {
+		n++
+	}
+	return trimmed[:n], strings.TrimSpace(trimmed[n:])
 }
 
 // WithSuggestion appends a suggestion block to a comment body, which is how
@@ -307,24 +362,92 @@ const (
 
 // ParseVerdict reads a verdict, accepting the spellings people actually
 // type. An empty string is "commented".
+//
+// The separators are thrown away before matching, so that every permutation
+// of a two-word spelling means the same thing: "changes-requested" is what
+// sbnn stores, "changes_requested" is what a GitHub review payload reports
+// and "REQUEST_CHANGES" is what its API takes when submitting one. Whoever
+// is bridging the two should not have to guess which of them we accept.
 func ParseVerdict(s string) (Verdict, bool) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "":
+	// A verdict left empty is "commented" - `sbnn review` with no --verdict
+	// takes this path. It has to be decided on the raw text, before the
+	// separators are dropped: "-_-" also folds down to nothing, and reading
+	// that as a verdict would confirm a review, write it to the history and
+	// fire the hook on what is plainly a typo.
+	if strings.TrimSpace(s) == "" {
 		return VerdictCommented, true
-	case "approved", "approve", "lgtm":
+	}
+	switch normalizeVerdict(s) {
+	case "approved", "approve", "accept", "accepted", "lgtm", "ship", "shipit":
 		return VerdictApproved, true
 	case "commented", "comment":
 		return VerdictCommented, true
-	case "changes-requested", "changes_requested", "request-changes", "changes":
+	case "changesrequested", "requestchanges", "changes", "reject", "rejected":
 		return VerdictChangesRequested, true
 	}
 	return "", false
 }
 
-// Blocking reports whether the verdict says the change should not go ahead
-// yet. It is what an exit status and a waiting agent act on.
+// normalizeVerdict folds a written verdict down to letters, so that case and
+// the separator someone reached for stop mattering.
+func normalizeVerdict(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range strings.ToLower(s) {
+		// unicode.IsSpace, not a list of the ASCII ones: a verdict pasted out
+		// of a terminal or an editor arrives padded with whatever that
+		// program uses, and on a Japanese keyboard the leading space is
+		// routinely U+3000.
+		if unicode.IsSpace(r) {
+			continue
+		}
+		switch r {
+		case '-', '_', '.':
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// Blocking reports whether the verdict, on its own, says the change should
+// not go ahead yet.
+//
+// It answers only half the question. A review that merely commented, or
+// that carried no verdict at all, still blocks when it left a comment
+// open - see Blocks, which is the rule sbnn actually ends on.
 func (v Verdict) Blocking() bool {
 	return v == VerdictChangesRequested
+}
+
+// Blocks reports whether a submitted review stops the change going ahead:
+// the question sbnn answers with the exit status of wait --exit-code and
+// submit --exit-code, and the one a review hook is told through
+// SBNN_BLOCKING.
+//
+// The verdict outranks the comments but does not always settle it. An
+// approval with three remarks on it is still an approval, and a review
+// that asked for changes blocks even if it pointed at no line in
+// particular. A review that only commented - or carried no verdict at all,
+// as every review did before verdicts existed - blocks exactly when it
+// left a comment open, which is the rule sbnn had before there was a
+// verdict to consult.
+//
+// Both callers go through here so that the status sbnn exits with and the
+// answer it hands a hook cannot drift apart.
+func Blocks(v Verdict, comments []*Comment) bool {
+	switch v {
+	case VerdictApproved:
+		return false
+	case VerdictChangesRequested:
+		return true
+	}
+	for _, c := range comments {
+		if !c.Resolved {
+			return true
+		}
+	}
+	return false
 }
 
 // String makes a verdict readable in a sentence.
