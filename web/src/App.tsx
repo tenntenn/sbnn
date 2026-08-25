@@ -4,7 +4,7 @@ import { client } from './client'
 import { readSetting, writeSetting } from './storage'
 import { isPreviewable, type Comment, type Diff, type FileDiff, type PreviewKind, type Status, type ViewMode, type Verdict } from './types'
 import { DiffFileSection } from './components/DiffFileSection'
-import { DiffStack, type DiffStackHandle, type ScrollFraction } from './components/DiffStack'
+import { DiffStack, resolveFolded, type DiffStackHandle, type ScrollFraction } from './components/DiffStack'
 import { Divider } from './components/Divider'
 import { Icon } from './components/Icon'
 import { PreviewFileSection } from './components/PreviewFileSection'
@@ -358,7 +358,15 @@ export function App() {
         case 'f': {
           if (!activeKey) break
           const entry = filesByKey.get(activeKey)
-          const current = foldOverrides.get(activeKey) ?? Boolean(entry?.file.folded)
+          // Toggle away from what is on screen, not from the raw override:
+          // the two differ on a commented file the sender had folded, and
+          // pressing `f` there used to store a value that changed nothing.
+          const hasComments = comments.some((c) => sectionKey(c.diffId, c.fileId) === activeKey)
+          const current = resolveFolded(
+            foldOverrides.get(activeKey),
+            Boolean(entry?.file.folded),
+            hasComments,
+          )
           setFolded(activeKey, !current)
           break
         }
@@ -392,6 +400,7 @@ export function App() {
     focusSearch,
     diffs.length,
     activeKey,
+    comments,
     filesByKey,
     foldOverrides,
     viewModeOverrides,
@@ -430,9 +439,11 @@ export function App() {
         comments={activeComments}
         narrow
         onChanged={() => void reload()}
-        folded={
-          (foldOverrides.get(activeKey!) ?? Boolean(activeEntry.file.folded)) && activeComments.length === 0
-        }
+        folded={resolveFolded(
+          foldOverrides.get(activeKey!),
+          Boolean(activeEntry.file.folded),
+          activeComments.length > 0,
+        )}
         onSetFolded={(value) => setFolded(activeKey!, value)}
         viewMode={viewModeOverrides.get(activeKey!) ?? viewModeDefault ?? activeEntry.file.viewMode}
         onSetViewMode={(mode) => setViewModeFor(activeKey!, mode)}
