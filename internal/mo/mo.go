@@ -139,6 +139,12 @@ func (r *Runner) Open(ctx context.Context, group string, paths ...string) (*Resu
 // group URL would render, but it is some other file's page, and framing it
 // tells the reviewer nothing is wrong when the deep link in fact failed.
 func (res *Result) URLFor(path string) string {
+	// An empty path names no file, so it must not match one - not even the
+	// entry of a file mo listed without a path of its own, which the plain
+	// string comparison below would otherwise hand back.
+	if path == "" {
+		return ""
+	}
 	for _, f := range res.Files {
 		if f.Path == path {
 			return f.URL

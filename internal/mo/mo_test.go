@@ -33,6 +33,11 @@ func TestResultURLFor(t *testing.T) {
 		Files: []File{
 			{Path: filepath.Join(dir, "a.md"), Name: "a.md", URL: "http://localhost:6275/sbnn-default?file=a"},
 			{Path: filepath.Join(dir, "b.md"), Name: "b.md", URL: "http://localhost:6275/sbnn-default?file=b"},
+			// mo lists what it opened, and an entry may arrive with
+			// no path at all. It names no file, so nothing may match
+			// it - least of all an empty path handed in by a caller
+			// that has nothing to look up.
+			{Name: "pasted", URL: "http://localhost:6275/sbnn-default?file=pasted"},
 		},
 	}
 
@@ -59,6 +64,10 @@ func TestResultURLFor(t *testing.T) {
 			"",
 		},
 		"empty path": {"", ""},
+		// Present in the answer, but with no path of its own: it can
+		// only be reached by asking for the file it belongs to, which
+		// mo did not say.
+		"a file mo listed without a path": {filepath.Join(dir, "pasted"), ""},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

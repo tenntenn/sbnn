@@ -17,6 +17,10 @@ import (
 // errNotPreviewable is returned for files mo cannot show.
 var errNotPreviewable = errors.New("no Markdown preview for this file")
 
+// errNoDeepLink is returned when mo ran without complaining but reported no
+// page for the file it was asked to open.
+var errNoDeepLink = errors.New("mo gave this file no URL")
+
 // PreviewSource tells where the previewed Markdown came from.
 type PreviewSource string
 
@@ -159,6 +163,14 @@ func (p *previewer) preview(ctx context.Context, group string, d *model.Diff, f 
 		return nil, err
 	}
 	moURL := res.URLFor(path)
+	if moURL == "" {
+		// mo ran and answered, but listed no page for this file: it
+		// skipped it, or it is reporting a path sbnn cannot match up
+		// with the one it asked about. Answering 200 with an empty URL
+		// would leave the reviewer with a blank frame and leave no
+		// trace on the server, so say so instead.
+		return nil, fmt.Errorf("%w: %s", errNoDeepLink, path)
+	}
 	out := &PreviewResponse{
 		MoURL:    moURL,
 		Path:     path,
