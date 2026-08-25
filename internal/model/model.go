@@ -188,6 +188,15 @@ func Suggestions(body string) []string {
 	for i := 0; i < len(lines); i++ {
 		fence, ok := suggestionFence(lines[i])
 		if !ok {
+			// What is written inside another fenced block is quoted
+			// text, not Markdown, so a suggestion block there was
+			// shown rather than proposed - which is what a comment
+			// explaining the format, or an agent quoting a diff that
+			// contains one, is doing. Skip past what it holds.
+			if quoted, ok := openFence(lines[i]); ok {
+				for i++; i < len(lines) && !closesFence(lines[i], quoted); i++ {
+				}
+			}
 			continue
 		}
 		block := make([]string, 0, 4)
@@ -218,6 +227,27 @@ func suggestionFence(line string) (fence string, ok bool) {
 		if strings.EqualFold(strings.TrimSpace(trimmed[n:]), "suggestion") {
 			return trimmed[:n], true
 		}
+	}
+	return "", false
+}
+
+// openFence reports whether a line opens a fenced block of any kind, and with
+// which fence. A backtick fence may not carry a backtick in its info string,
+// so a line of prose holding two code spans opens nothing.
+func openFence(line string) (fence string, ok bool) {
+	trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+	for _, marker := range []byte{'`', '~'} {
+		n := 0
+		for n < len(trimmed) && trimmed[n] == marker {
+			n++
+		}
+		if n < 3 {
+			continue
+		}
+		if marker == '`' && strings.Contains(trimmed[n:], "`") {
+			continue
+		}
+		return trimmed[:n], true
 	}
 	return "", false
 }
