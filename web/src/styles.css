@@ -83,6 +83,12 @@
   --space-xl: 16px;
   --space-2xl: 24px;
 
+  /* Four steps, and which one a rule takes follows from what the box is,
+     not from how it looked on the day: --radius-sm for something drawn
+     inside a line of text, --radius-md for a control or a block of content,
+     --radius-lg for a surface floating over the page, --radius-pill where
+     the radius is the shape rather than a corner treatment. The perfect
+     circle stays a literal 50%; it is a ratio, not a step on this scale. */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 10px;
@@ -1700,7 +1706,7 @@ a {
   color: var(--fg);
   background: var(--bg);
   border: var(--border-width-hairline) solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
 }
 .file-search-input:focus {
   outline: var(--border-width-marker) solid var(--accent-border);
