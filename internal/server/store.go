@@ -152,7 +152,7 @@ func (s *Store) Load() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.groups = p.Groups
+	s.groups = validGroups(s.path, p.Groups)
 	s.seq = p.Seqs
 	if s.seq == nil {
 		// A file written before the counters were split apart carries one
@@ -168,12 +168,44 @@ func (s *Store) Load() error {
 		// A file written before the rounds were counted has to carry on
 		// from the highest number it already used, or the next round
 		// repeats a title.
-		s.rounds = make(map[string]int, len(p.Groups))
-		for _, g := range p.Groups {
+		s.rounds = make(map[string]int, len(s.groups))
+		for _, g := range s.groups {
 			s.rounds[g.Name] = roundsSoFar(g)
 		}
 	}
 	return nil
+}
+
+// validGroups drops the groups of a session file whose name sbnn would never
+// have accepted from the CLI or the URL.
+//
+// The session file is a plain JSON file in a user-writable directory, and a
+// hand edit, a partial write or a format change can put anything in it. A
+// name that fails ValidateGroupName cannot be read, deleted or linked to
+// afterwards - the router normalises the path, the handlers validate, and
+// GroupURL builds a broken link - so it would sit in every listing with no
+// way to get rid of it short of --clear --all.
+func validGroups(path string, groups []*model.Group) []*model.Group {
+	kept := make([]*model.Group, 0, len(groups))
+	for _, g := range groups {
+		// A JSON null in the groups array unmarshals to a nil element, and
+		// the same hand edits and partial writes this function exists for
+		// are what produce one. Reading g.Name would panic in Load, which
+		// runs on server.New's goroutine and would take the process down
+		// before it ever listened.
+		if g == nil {
+			continue
+		}
+		// ValidateGroupName maps the empty name to the default group, but a
+		// stored group with no name is as unreachable as an invalid one.
+		if _, err := ValidateGroupName(g.Name); err != nil || g.Name == "" {
+			slog.Warn("dropping a group the session file should not contain",
+				"file", path, "group", g.Name, "reason", "the name cannot be used")
+			continue
+		}
+		kept = append(kept, g)
+	}
+	return kept
 }
 
 // setAside renames a session file sbnn refuses to load, so that the new
