@@ -1670,9 +1670,13 @@ a {
 }
 
 /* A comment written from the command line says who left it. The badge and
-   the rule down the side of the thread agree on one colour for that. */
+   this rule agree on one colour for that. A colour on its own painted
+   nothing, because .comment has no left border to colour - its only border
+   rule is the hairline between stacked comments - so the mark states its own
+   width and style and pays for the room it takes. */
 .comment:has(.badge.author) {
-  border-left-color: var(--accent-fg);
+  border-left: var(--border-width-marker) solid var(--accent-border);
+  padding-left: var(--space-md);
 }
 
 /* ---------- submitting a review ---------- */
