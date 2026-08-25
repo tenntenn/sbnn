@@ -979,8 +979,14 @@ body.resizing iframe {
   padding-top: var(--space-md);
 }
 
-.comment.resolved {
-  opacity: 0.6;
+/* Resolved is a state, and the row already says so twice: a badge, and the
+   comment dropping out of the open count. Fading the whole card said it a
+   third time in the language button:disabled uses, over controls the reader
+   can still act on - Reopen above all, which is the one thing they come to a
+   resolved comment for. Only the prose steps back, and it does it by taking
+   the muted foreground rather than by going translucent. */
+.comment.resolved .comment-body {
+  color: var(--fg-muted);
 }
 
 .comment-meta {
