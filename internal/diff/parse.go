@@ -395,6 +395,20 @@ func parseHunkHeader(line string) (*hunkHeader, bool) {
 	}, true
 }
 
+// parseRange parses one side of a hunk header: "-1,5", or "+3" for a range of
+// a single line. sign is the character the side must begin with.
+//
+// Both numbers have to be plain digits. strconv.Atoi would otherwise read the
+// minus of "@@ --1,2 +1,2 @@" as part of the number and hand back a start of
+// -1, which numbers the hunk's lines from -1 upwards: Line.OldNumber is
+// documented as 1-based, or 0 when the line is not on that side, so 0 would
+// come to mean two different things inside one hunk, and the rows numbered 0
+// or below render with a blank gutter and cannot be commented on. A negative
+// count is no better - it makes the reading loop's "oldLeft <= 0" true
+// straight away, so the hunk keeps its header and swallows no body at all.
+//
+// A start of 0 is legitimate and still parses: "@@ -0,0 +1,5 @@" is how git
+// writes an added file.
 func parseRange(s string, sign byte) (start, count int, ok bool) {
 	if len(s) == 0 || s[0] != sign {
 		return 0, 0, false
@@ -402,18 +416,37 @@ func parseRange(s string, sign byte) (start, count int, ok bool) {
 	s = s[1:]
 	count = 1
 	if i := strings.IndexByte(s, ','); i >= 0 {
-		n, err := strconv.Atoi(s[i+1:])
-		if err != nil {
+		n, valid := parseCount(s[i+1:])
+		if !valid {
 			return 0, 0, false
 		}
 		count = n
 		s = s[:i]
 	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
+	n, valid := parseCount(s)
+	if !valid {
 		return 0, 0, false
 	}
 	return n, count, true
+}
+
+// parseCount parses a non-negative decimal number written without a sign of
+// its own. It refuses "-1" and "+1" alike: the only sign a hunk header carries
+// is the one that says which side the range belongs to.
+func parseCount(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil { // more digits than an int can hold
+		return 0, false
+	}
+	return n, true
 }
 
 // finalize fills in the derived fields of a parsed file.
