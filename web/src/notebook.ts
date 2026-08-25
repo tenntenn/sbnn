@@ -106,7 +106,15 @@ function renderDataBundle(data: Record<string, string | string[]>): string {
     const raw = data[mime]
     if (!raw) continue
     const content = joinText(raw)
-    const src = mime === 'image/svg+xml' ? `data:${mime};utf8,${encodeURIComponent(content)}` : `data:${mime};base64,${content}`
+    // An SVG output arrives as raw markup and is deliberately NOT passed
+    // through sanitize(), unlike the text/html branch above. It is safe here
+    // only because it is used as the src of an <img>: a browser treats that
+    // as an image document, where scripts do not run, external subresources
+    // are not fetched and event handlers never fire. It must stay an <img>
+    // source. Expanding it into an inline <svg> via innerHTML - which looks
+    // like a tidy-up - would turn untrusted notebook output straight into
+    // XSS, so sanitize() would have to come back with it.
+    const src = mime === 'image/svg+xml' ? svgDataURL(content) : `data:${mime};base64,${content}`
     // The bundle comes from a diff and is not trusted: escaping the src
     // keeps a hostile "base64" payload from breaking out of the attribute.
     return `<div class="nb-output nb-image"><img src="${escapeHTML(src)}" alt="notebook output" /></div>`
@@ -115,6 +123,25 @@ function renderDataBundle(data: Record<string, string | string[]>): string {
     return `<pre class="nb-output">${escapeHTML(joinText(data['text/plain']))}</pre>`
   }
   return ''
+}
+
+// svgDataURL builds an RFC 2397 data URL for an image/svg+xml output.
+//
+// The only parameters RFC 2397 defines are ;charset= and ;base64 - a bare
+// ;utf8 is not one of them, and survives today only because browsers ignore
+// what they cannot parse. base64 is used rather than percent-encoding
+// because Jupyter delivers SVG as raw markup, so there is no encoding to
+// preserve and nothing to get wrong at the edges of encodeURIComponent.
+//
+// btoa reads its argument as latin-1 and throws a character-out-of-range
+// error on any code point above U+00FF, which an SVG holding CJK or emoji
+// label text will have. Encoding to UTF-8 bytes first keeps it from
+// throwing, and matches what the ;charset=utf-8 form would have declared.
+function svgDataURL(svg: string): string {
+  const bytes = new TextEncoder().encode(svg)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+  return `data:image/svg+xml;base64,${btoa(binary)}`
 }
 
 function joinText(text: string | string[] | undefined): string {
