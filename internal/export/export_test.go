@@ -253,3 +253,141 @@ func TestRenderNeedsBuiltUI(t *testing.T) {
 		t.Fatal("want an error when the UI is not built into the binary")
 	}
 }
+
+// TestBuildCarriesTheReview pins the three fields that say how the review
+// ended. Without them an exported page renders a submitted review as if it
+// had never been submitted.
+func TestBuildCarriesTheReview(t *testing.T) {
+	reviewedAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	tests := []struct {
+		name    string
+		set     func(*model.Group)
+		wantAt  time.Time
+		wantNot string
+		wantVer model.Verdict
+	}{
+		{
+			name: "approved with a note",
+			set: func(g *model.Group) {
+				g.ReviewedAt = reviewedAt
+				g.ReviewNote = "Ship it, the naming nits are optional."
+				g.ReviewVerdict = model.VerdictApproved
+			},
+			wantAt:  reviewedAt,
+			wantNot: "Ship it, the naming nits are optional.",
+			wantVer: model.VerdictApproved,
+		},
+		{
+			name: "changes requested without a note",
+			set: func(g *model.Group) {
+				g.ReviewedAt = reviewedAt
+				g.ReviewVerdict = model.VerdictChangesRequested
+			},
+			wantAt:  reviewedAt,
+			wantVer: model.VerdictChangesRequested,
+		},
+		{
+			name: "never submitted",
+			set:  func(*model.Group) {},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := group(t, "")
+			tt.set(g)
+			p := export.Build(g, "test", time.Now())
+			if !p.ReviewedAt.Equal(tt.wantAt) {
+				t.Errorf("ReviewedAt = %v, want %v", p.ReviewedAt, tt.wantAt)
+			}
+			if p.ReviewNote != tt.wantNot {
+				t.Errorf("ReviewNote = %q, want %q", p.ReviewNote, tt.wantNot)
+			}
+			if p.ReviewVerdict != tt.wantVer {
+				t.Errorf("ReviewVerdict = %q, want %q", p.ReviewVerdict, tt.wantVer)
+			}
+		})
+	}
+}
+
+// TestRenderEmbedsTheReviewUnderTheLiveNames checks the JSON the page reads:
+// the static client has to see the same keys the live API sends, or it
+// cannot render a frozen review the way it renders a live one.
+func TestRenderEmbedsTheReviewUnderTheLiveNames(t *testing.T) {
+	g := group(t, "")
+	g.ReviewedAt = time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	g.ReviewNote = "One question about the retry loop."
+	g.ReviewVerdict = model.VerdictApproved
+
+	page, err := export.Render(export.Build(g, "test", time.Now()), assets(), export.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payloadJSON(t, page), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"reviewedAt":    "2026-03-04T05:06:07Z",
+		"reviewNote":    "One question about the retry loop.",
+		"reviewVerdict": "approved",
+	}
+	for key, val := range want {
+		if got := decoded[key]; got != val {
+			t.Errorf("%s = %v, want %v", key, got, val)
+		}
+	}
+
+	// A group sent through the live API marshals the same three keys, so a
+	// page cannot end up reading one name from a server and another from an
+	// exported payload.
+	live, err := json.Marshal(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var liveDecoded map[string]any
+	if err := json.Unmarshal(live, &liveDecoded); err != nil {
+		t.Fatal(err)
+	}
+	for key, val := range want {
+		if got := liveDecoded[key]; got != val {
+			t.Errorf("model.Group marshals %s as %v, want %v", key, got, val)
+		}
+	}
+}
+
+// TestRenderOmitsAnUnsubmittedReview keeps an unreviewed group free of keys
+// that would make the page draw a review banner.
+func TestRenderOmitsAnUnsubmittedReview(t *testing.T) {
+	page, err := export.Render(export.Build(group(t, ""), "test", time.Now()), assets(), export.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payloadJSON(t, page), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"reviewedAt", "reviewNote", "reviewVerdict"} {
+		if _, ok := decoded[key]; ok {
+			t.Errorf("%s is present for a group that was never reviewed", key)
+		}
+	}
+	if decoded["version"] != float64(export.PayloadVersion) {
+		t.Errorf("version = %v, want %d", decoded["version"], export.PayloadVersion)
+	}
+}
+
+// payloadJSON pulls window.__SBNN_DATA__ back out of a rendered page.
+func payloadJSON(t *testing.T, page string) []byte {
+	t.Helper()
+	const prefix = "window.__SBNN_DATA__ = "
+	start := strings.Index(page, prefix)
+	if start < 0 {
+		t.Fatal("no payload in the page")
+	}
+	rest := page[start+len(prefix):]
+	end := strings.Index(rest, ";</script>")
+	if end < 0 {
+		t.Fatal("payload is not terminated")
+	}
+	return []byte(rest[:end])
+}
