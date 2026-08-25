@@ -637,6 +637,16 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 				http.StatusBadRequest)
 			return
 		}
+	} else if g, ok := s.store.Group(name); ok {
+		// A fileId that names no file of this diff anchors the comment to
+		// nothing: the page keys its sections on diffId:fileId, so such a
+		// comment is counted in every total and shown on no line. An
+		// unknown diffId is left alone here, because AddComment below
+		// already reports that one.
+		if d := g.FindDiff(req.DiffID); d != nil && d.FindFile(req.FileID) == nil {
+			http.Error(w, fmt.Sprintf("no file %q in diff %q", req.FileID, req.DiffID), http.StatusBadRequest)
+			return
+		}
 	}
 	c, err := s.store.AddComment(&model.Comment{
 		Group:     name,
