@@ -71,6 +71,9 @@ type Options struct {
 	Revision string
 	// AllowRemote must be set to bind to a non-loopback address.
 	AllowRemote bool
+	// Verbose turns on the per-request log. SBNN_LOG=info does the same for
+	// a server that was already started.
+	Verbose bool
 }
 
 // Server is the resident sbnn server.
@@ -202,8 +205,80 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /_/events", s.handleEvents)
 	mux.Handle("GET /", s.spaHandler())
 
-	return s.withSecurityHeaders(mux)
+	return s.withRequestLog(s.withSecurityHeaders(mux))
 }
+
+// withRequestLog logs one line per request: method, path, status, duration.
+//
+// The server runs detached and writes to a log file that holds, in a normal
+// session, exactly one line - "serving at ..." - and nothing else, forever.
+// Nothing records that a request arrived, so a background process that
+// misbehaves cannot be diagnosed from the only artefact it leaves behind: a
+// port that answers /diagram.png with 200 text/html, a hook that fails at
+// every submit, a session that is never saved. One line per request makes
+// those visible immediately.
+//
+// It is off by default, because nothing rotates that file. Verbose (a flag
+// the command line can set) or SBNN_LOG=debug|info (which works on a server
+// that is already running) turns it on.
+func (s *Server) withRequestLog(next http.Handler) http.Handler {
+	if !s.opts.Verbose && !requestLogEnabled() {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		slog.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rec.status,
+			"duration", time.Since(start).Round(time.Microsecond))
+	})
+}
+
+// requestLogEnabled reads SBNN_LOG. Only the levels below info would be
+// swallowed by a per-request line, so only those turn it on.
+func requestLogEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SBNN_LOG"))) {
+	case "debug", "info":
+		return true
+	}
+	return false
+}
+
+// statusRecorder remembers the status code on its way past.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	wrote  bool
+}
+
+func (rec *statusRecorder) WriteHeader(code int) {
+	if !rec.wrote {
+		rec.status, rec.wrote = code, true
+	}
+	rec.ResponseWriter.WriteHeader(code)
+}
+
+func (rec *statusRecorder) Write(b []byte) (int, error) {
+	if !rec.wrote {
+		rec.status, rec.wrote = http.StatusOK, true
+	}
+	return rec.ResponseWriter.Write(b)
+}
+
+// Flush keeps the event stream alive. handleEvents asserts http.Flusher on the
+// writer it is handed and gives up without one, and a wrapper that swallowed
+// Flush would turn the stream into a buffered response that never arrives.
+func (rec *statusRecorder) Flush() {
+	if f, ok := rec.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap lets http.ResponseController reach the real writer.
+func (rec *statusRecorder) Unwrap() http.ResponseWriter { return rec.ResponseWriter }
 
 // withSecurityHeaders sets a CSP for sbnn's own pages. The preview iframe is
 // the one cross origin the page is allowed to load.
