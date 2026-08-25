@@ -469,7 +469,7 @@ $ sbnn reviews -t api --limit 5
 
 ```
 2026-08-16 03:26  default    2 comment(s), 1 suggestion(s)  3 file(s), +11 -1  waited 42m
-      だいたいOK
+      Mostly fine
 2026-08-16 11:02  api        1 comment(s)  3 file(s), +11 -1  waited 3h10m  branch=main
 ```
 
