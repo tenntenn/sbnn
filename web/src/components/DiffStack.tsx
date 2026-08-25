@@ -49,6 +49,23 @@ interface Props {
 // up into this band.
 const ACTIVE_BAND = 0.7
 
+/** sectionScrollTop is where the scroller has to end up for a section's top
+ * to come to rest just below the sticky toolbar.
+ *
+ * The section's offset within the scroller is the gap between the two
+ * viewport rects plus how far the scroller has already been scrolled;
+ * backing off by the toolbar's height leaves the file's own header visible
+ * instead of hidden underneath it. The first file cannot be backed off past
+ * the top of the scroller, where it already clears the toolbar anyway. */
+export function sectionScrollTop(
+  rootScrollTop: number,
+  rootTop: number,
+  elTop: number,
+  clearance: number,
+): number {
+  return Math.max(0, rootScrollTop + (elTop - rootTop) - clearance)
+}
+
 /** resolveFolded settles whether a file is shown folded.
  *
  * The server may fold a file on its own, and that default steps aside when
@@ -185,9 +202,33 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
   // active one.
   if (activeKeyRef.current === null && order.length > 0) activeKeyRef.current = order[0]
 
+  // How far down the scroller a jump has to stop so the file's own sticky
+  // header comes to rest below the toolbar rather than under it. Measured at
+  // the moment of the jump, from the toolbar itself: it wraps onto a second
+  // row on a narrow pane, and the reader may have jumped in the same frame
+  // that it did.
+  const toolbarClearance = () => toolbarRef.current?.getBoundingClientRect().height ?? 0
+
   useImperativeHandle(ref, () => ({
     scrollToSection(key: string) {
-      sectionEls.current.get(key)?.scrollIntoView({ block: 'start' })
+      const el = sectionEls.current.get(key)
+      if (!el) return
+      const root = containerRef.current
+      if (!root) {
+        el.scrollIntoView({ block: 'start' })
+        return
+      }
+      // scrollIntoView({ block: 'start' }) aligns with the top of the
+      // scroller, which is where the toolbar is painted, so the arithmetic
+      // is done here instead.
+      root.scrollTo({
+        top: sectionScrollTop(
+          root.scrollTop,
+          root.getBoundingClientRect().top,
+          el.getBoundingClientRect().top,
+          toolbarClearance(),
+        ),
+      })
     },
   }))
 
