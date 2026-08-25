@@ -1,6 +1,6 @@
 slug: skill-fix
 
-# 指示文 O-03 / skill-fix — エージェントスキルの記述をコードの実態に合わせる
+# 指示文 DOC-03 / skill-fix — エージェントスキルの記述をコードの実態に合わせる
 
 優先度: **P3** / 期限: **本サイクル内（2026-08-25 中）**
 
@@ -359,7 +359,6 @@ go build ./... && go vet ./... && go test ./...
 grep -n '^## ' skills/sbnn/SKILL.md | grep -i 'command'
 grep -niE 'not (a )?complete|full list|--help' skills/sbnn/SKILL.md | head
 # 本文が必ず渡せと言っているフラグが表にある
-for f in -- author suggest question label timeout approve request-changes exit-code; do :; done
 for f in author suggest question label timeout approve request-changes exit-code; do
   grep -q -- "--$f" skills/sbnn/SKILL.md && echo "ok --$f" || { echo "MISSING --$f"; false; }
 done
