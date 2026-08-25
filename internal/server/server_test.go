@@ -382,13 +382,18 @@ func TestPreviewReportsAMissingDeepLink(t *testing.T) {
 	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
 	file := added.Diff.Files[1] // docs/new.md
 
-	var body map[string]string
+	// Decoded loosely on purpose: the answer this test guards against is a
+	// 200 PreviewResponse, whose fields are not all strings, and a decode
+	// error there would hide what actually came back.
+	var body map[string]any
 	resp := getJSON(t, ts.URL+"/_/api/groups/default/diffs/"+added.Diff.ID+"/files/"+file.ID+"/preview", &body)
 	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("status = %s, want 500 when mo reported no page for the file", resp.Status)
+		t.Fatalf("status = %s with moUrl %q, want 500 when mo reported no page for the file",
+			resp.Status, body["moUrl"])
 	}
-	if !strings.Contains(body["error"], "no URL") {
-		t.Errorf("error = %q, want it to say mo gave the file no URL", body["error"])
+	msg, _ := body["error"].(string)
+	if !strings.Contains(msg, "no URL") {
+		t.Errorf("error = %q, want it to say mo gave the file no URL", msg)
 	}
 }
 
