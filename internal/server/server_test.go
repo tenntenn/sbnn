@@ -975,3 +975,69 @@ func TestSubmitReviewWithoutABrowser(t *testing.T) {
 		t.Errorf("flattened = %+v", got)
 	}
 }
+
+// A fileId that names no file of the diff anchors the comment to nothing:
+// the page keys its sections on diffId:fileId, so the comment counted in
+// every "N open comment(s)" total was shown on no line at all.
+func TestHandleAddCommentRejectsUnknownFileID(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[0]
+	other := added.Diff.Files[1]
+
+	cases := []struct {
+		name   string
+		diffID string
+		fileID string
+		want   int
+	}{
+		{"a file of this diff", added.Diff.ID, file.ID, http.StatusOK},
+		{"another file of this diff", added.Diff.ID, other.ID, http.StatusOK},
+		{"a fileId of no file", added.Diff.ID, "bogus", http.StatusBadRequest},
+		{"an empty-looking but wrong fileId", added.Diff.ID, "f1-00000000", http.StatusBadRequest},
+		{"an unknown diffId is still refused", "nosuchdiff", file.ID, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var comment model.Comment
+			out := any(nil)
+			if tc.want == http.StatusOK {
+				out = &comment
+			}
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+				DiffID: tc.diffID, FileID: tc.fileID, Path: file.Path(), Side: "new",
+				StartLine: 1, EndLine: 1, Body: "hi",
+			}, out)
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+			}
+			if tc.want == http.StatusOK && comment.FileID != tc.fileID {
+				t.Errorf("stored fileId = %q, want %q", comment.FileID, tc.fileID)
+			}
+		})
+	}
+
+	// Every stored comment must name a file that really is in its diff,
+	// or the page and the comment count disagree for good.
+	var comments []*model.Comment
+	getJSON(t, ts.URL+"/_/api/groups/default/comments", &comments)
+	if len(comments) != 2 {
+		t.Errorf("stored %d comments, want 2", len(comments))
+	}
+	for _, c := range comments {
+		if _, _, ok := findFileOfDiff(added.Diff, c.FileID); !ok {
+			t.Errorf("stored comment anchored to no file of the diff: %+v", c)
+		}
+	}
+}
+
+// findFileOfDiff reports whether the diff has a file with this id.
+func findFileOfDiff(d *model.Diff, fileID string) (*model.Diff, *model.File, bool) {
+	for _, f := range d.Files {
+		if f.ID == fileID {
+			return d, f, true
+		}
+	}
+	return nil, nil, false
+}
