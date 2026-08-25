@@ -81,32 +81,58 @@ func runWait(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("no sbnn server found on %s", c.Addr)
 	}
 
-	g, err := c.Group(ctx, group)
+	// --timeout bounds the wait. Printing the review afterwards is not part
+	// of the wait, so it keeps the plain context.
+	waitCtx := ctx
+	if waitTimeout > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, waitTimeout)
+		defer cancel()
+	}
+
+	// Subscribe before asking whether the review has already happened. The
+	// other way round leaves a window - the Group round trip, plus opening
+	// the event stream - in which a review is submitted to a broker this
+	// client is not in yet. The notice is not replayed and publishing to
+	// nobody is a no-op, so the wait would then never end. Subscribing
+	// first cannot lose it: a review submitted from here on arrives on the
+	// stream, and one submitted earlier is in the answer below.
+	stream, err := c.Subscribe(waitCtx, group)
 	if err != nil {
 		return err
 	}
+	defer stream.Close()
+
+	g, err := c.Group(waitCtx, group)
+	if err != nil {
+		return notReviewed(err)
+	}
 	if g.Reviewed() {
-		// The review landed before anyone started waiting for it.
+		// The review landed before anyone started waiting for it. The
+		// stream may be holding the same notice; it goes unread, so this
+		// review is reported once and not twice.
 		return printReview(ctx, c, group)
 	}
 
-	if waitTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, waitTimeout)
-		defer cancel()
-	}
 	fmt.Fprintf(os.Stderr, "sbnn: waiting for the review of %s\n", server.GroupURL(c.BaseURL(), group))
 
-	notice, err := c.WaitForReview(ctx, group)
+	notice, err := stream.Next(waitCtx)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			fmt.Fprintf(os.Stderr, "sbnn: no review after %s\n", waitTimeout)
-			os.Exit(exitNotReviewed)
-		}
-		return err
+		return notReviewed(err)
 	}
 	fmt.Fprintf(os.Stderr, "sbnn: review submitted, %d open comment(s)\n", notice.Comments)
 	return printReview(ctx, c, group)
+}
+
+// notReviewed turns the deadline of --timeout into the status that says
+// "not reviewed yet" rather than "something went wrong", and passes any
+// other failure through.
+func notReviewed(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		fmt.Fprintf(os.Stderr, "sbnn: no review after %s\n", waitTimeout)
+		os.Exit(exitNotReviewed)
+	}
+	return err
 }
 
 // exitReview ends with the status the reviewer's verdict calls for.

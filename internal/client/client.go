@@ -267,9 +267,22 @@ type ReviewNotice struct {
 	Comments   int       `json:"comments"`
 }
 
-// WaitForReview blocks on the server's event stream until the given group is
-// reviewed. Nothing is polled: the server pushes the notice.
-func (c *Client) WaitForReview(ctx context.Context, group string) (*ReviewNotice, error) {
+// ReviewStream is an open subscription to the server's event stream. It
+// exists so that subscribing and waiting can be two steps: whoever waits
+// can subscribe first and only then ask whether the review has already
+// happened, which is the only order in which neither answer can be missed.
+type ReviewStream struct {
+	group   string
+	addr    string
+	body    io.ReadCloser
+	scanner *bufio.Scanner
+}
+
+// Subscribe opens the server's event stream and returns once the server has
+// accepted the request. From that point a review notice is delivered to
+// this client rather than published to nobody: the notices are not replayed
+// and a publish to a broker with no subscriber is simply dropped.
+func (c *Client) Subscribe(ctx context.Context, group string) (*ReviewStream, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url("/_/events"), nil)
 	if err != nil {
 		return nil, err
@@ -282,15 +295,23 @@ func (c *Client) WaitForReview(ctx context.Context, group string) (*ReviewNotice
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return nil, fmt.Errorf("cannot listen to %s: %s", c.Addr, resp.Status)
 	}
-
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
-	for scanner.Scan() {
-		line := scanner.Text()
+	return &ReviewStream{group: group, addr: c.Addr, body: resp.Body, scanner: scanner}, nil
+}
+
+// Close ends the subscription.
+func (s *ReviewStream) Close() error { return s.body.Close() }
+
+// Next blocks until the group is reviewed. Nothing is polled: the server
+// pushes the notice.
+func (s *ReviewStream) Next(ctx context.Context) (*ReviewNotice, error) {
+	for s.scanner.Scan() {
+		line := s.scanner.Text()
 		data, ok := strings.CutPrefix(line, "data: ")
 		if !ok {
 			continue
@@ -299,15 +320,27 @@ func (c *Client) WaitForReview(ctx context.Context, group string) (*ReviewNotice
 		if err := json.Unmarshal([]byte(data), &notice); err != nil {
 			continue
 		}
-		if notice.Type == "review" && (notice.Group == "" || notice.Group == group) {
+		if notice.Type == "review" && (notice.Group == "" || notice.Group == s.group) {
 			return &notice, nil
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := s.scanner.Err(); err != nil {
+		return nil, err
+	}
 	return nil, fmt.Errorf("the sbnn server closed the event stream")
+}
+
+// WaitForReview subscribes and then blocks until the given group is
+// reviewed. It is the one-shot form, for a caller that has no reason to
+// look at the group in between.
+func (c *Client) WaitForReview(ctx context.Context, group string) (*ReviewNotice, error) {
+	stream, err := c.Subscribe(ctx, group)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+	return stream.Next(ctx)
 }
