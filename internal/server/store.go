@@ -69,6 +69,14 @@ func (s *Store) Load() error {
 	if err := json.Unmarshal(b, &p); err != nil {
 		return fmt.Errorf("session file %s is broken: %w", s.path, err)
 	}
+	// A file from a newer sbnn may hold fields this build knows nothing
+	// about. Loading it as far as the JSON tags happen to line up would turn
+	// a format change into silently missing diffs and comments, so refuse it
+	// and say which version wrote it.
+	if p.Version > persistVersion {
+		return fmt.Errorf("session file %s was written by a newer sbnn (format version %d, this one understands %d): "+
+			"upgrade sbnn, or move the file aside to start a new session", s.path, p.Version, persistVersion)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.groups = p.Groups
