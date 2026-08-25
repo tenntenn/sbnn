@@ -538,8 +538,7 @@ input[type='checkbox'] {
   transition:
     color var(--motion-duration) var(--motion-ease),
     background-color var(--motion-duration) var(--motion-ease),
-    border-color var(--motion-duration) var(--motion-ease),
-    transform var(--motion-duration) var(--motion-ease);
+    border-color var(--motion-duration) var(--motion-ease);
 }
 
 .divider-handle:hover {
@@ -622,12 +621,21 @@ body.resizing iframe {
   box-shadow: inset var(--border-width-marker) 0 0 var(--selected-marker);
 }
 
+/* The ellipsis belongs at the start of a truncated path, because the tail is
+   the part that identifies the file. An RTL box gets that for free, but it
+   also flips the bidi paragraph direction, and every neutral character at
+   either end of the string - a leading dot, a bracket run - is then resolved
+   against RTL and painted on the wrong side. unicode-bidi: plaintext puts the
+   direction back under the control of the string's own first strong
+   character, so the path reads LTR inside a box that still clips from the
+   left. */
 .file-path {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   direction: rtl;
+  unicode-bidi: plaintext;
   text-align: left;
 }
 
@@ -1760,6 +1768,18 @@ a {
   border-bottom-width: var(--border-width-marker);
   border-radius: var(--radius-sm);
   background: var(--bg);
+}
+
+/* Everything between the pane and the header has to agree to be narrower
+   than its contents, or the header's own shrink rules never get a chance.
+   A flex item defaults to min-width: auto - a content-based floor - so the
+   preview stack refused to go below the max-content width of the longest
+   path in it, and .content turned that into a sideways scroll instead of
+   clipping. Both levels opt out of the floor so the pane takes the width of
+   the screen and the path below is the thing that gives. */
+.preview-stack,
+.preview-section {
+  min-width: 0;
 }
 
 /* The preview header carries more than it used to - the renderer choice and

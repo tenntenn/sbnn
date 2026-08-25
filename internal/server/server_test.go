@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/history"
 	"github.com/tenntenn/sbnn/internal/mo"
 	"github.com/tenntenn/sbnn/internal/model"
@@ -1150,5 +1151,285 @@ func TestHandleAddCommentRejectsNonPositiveLines(t *testing.T) {
 		if c.StartLine < 1 || c.EndLine < c.StartLine {
 			t.Errorf("stored comment with an impossible range: %+v", c)
 		}
+	}
+}
+
+// The API used to fold every side that was not the literal "old" into
+// "new", so "OLD" attached the comment to the new side -- a different
+// file, on lines that mean something else -- and said 200. The CLI is
+// strict about the same field, so the two layers disagreed silently.
+func TestHandleAddCommentValidatesSide(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[0]
+
+	cases := []struct {
+		name     string
+		side     string
+		want     int
+		wantSide string // the side actually stored, checked when want is 200
+	}{
+		{"lower case new", "new", http.StatusOK, "new"},
+		{"lower case old", "old", http.StatusOK, "old"},
+		{"empty means new", "", http.StatusOK, "new"},
+		{"upper case old is old, not new", "OLD", http.StatusOK, "old"},
+		{"mixed case old", "Old", http.StatusOK, "old"},
+		{"padded old", "  old  ", http.StatusOK, "old"},
+		{"upper case new", "NEW", http.StatusOK, "new"},
+		{"a different word", "left", http.StatusBadRequest, ""},
+		{"a typo", "NEWW", http.StatusBadRequest, ""},
+		{"nonsense", "sideways", http.StatusBadRequest, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := AddCommentRequest{
+				DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(), Side: tc.side,
+				StartLine: 1, EndLine: 1, Body: "hi",
+			}
+			if tc.want != http.StatusOK {
+				resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", req, nil)
+				if resp.StatusCode != tc.want {
+					t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+				}
+				return
+			}
+			var comment model.Comment
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", req, &comment)
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+			}
+			// A 200 is not enough: the point of the bug was that the
+			// wrong side was stored while the status looked fine.
+			if comment.Side != tc.wantSide {
+				t.Errorf("stored side = %q, want %q", comment.Side, tc.wantSide)
+			}
+		})
+	}
+
+	// Nothing refused reached the store, and every stored side is canonical.
+	var comments []*model.Comment
+	getJSON(t, ts.URL+"/_/api/groups/default/comments", &comments)
+	if len(comments) != 7 {
+		t.Errorf("stored %d comments, want 7", len(comments))
+	}
+	for _, c := range comments {
+		if c.Side != "new" && c.Side != "old" {
+			t.Errorf("stored comment with a non-canonical side: %+v", c)
+		}
+	}
+}
+
+// A suggestion replaces lines of the new file, so it cannot sit on the
+// old side however that side was spelled. The check used to run before
+// the side was folded, so "OLD" slipped past it.
+func TestHandleAddCommentRejectsSuggestionOnFoldedOldSide(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, &added)
+	file := added.Diff.Files[0]
+
+	for _, side := range []string{"old", "OLD", " Old "} {
+		t.Run(side, func(t *testing.T) {
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/comments", AddCommentRequest{
+				DiffID: added.Diff.ID, FileID: file.ID, Path: file.Path(), Side: side,
+				StartLine: 1, EndLine: 1, Body: "try this", Suggestion: "replacement",
+			}, nil)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %s, want 400", resp.Status)
+			}
+		})
+	}
+}
+
+// GET /_/api/groups/{group} returns the whole group, and the page refetches it
+// on every change event, so its size is paid again for each edit - measured at
+// 6.61 MB for a 500-file review. Diff.Raw is the original diff text and no
+// client reads it: it is declared in web/src/types.ts and used nowhere, and
+// export.Build already drops it. The store must keep it, since an export or a
+// re-parse still wants it.
+func TestGroupResponseOmitsRawDiffText(t *testing.T) {
+	ts, srv := newTestServer(t)
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs",
+		AddDiffRequest{Title: "first", Content: sampleDiff}, nil)
+
+	resp, err := http.Get(ts.URL + "/_/api/groups/default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "diff --git") {
+		t.Errorf("the group response still carries the raw diff text: %s", body)
+	}
+
+	// The parsed files - what the UI actually renders - are still there.
+	var g model.Group
+	if err := json.Unmarshal(body, &g); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Diffs) != 1 || len(g.Diffs[0].Files) != 2 {
+		t.Fatalf("group = %+v, want the parsed files intact", g)
+	}
+	if g.Diffs[0].Raw != "" {
+		t.Errorf("Raw = %q, want it dropped from the response", g.Diffs[0].Raw)
+	}
+
+	// The store keeps it.
+	stored, ok := srv.Store().Group(DefaultGroup)
+	if !ok {
+		t.Fatal("the group is gone from the store")
+	}
+	if !strings.Contains(stored.Diffs[0].Raw, "diff --git") {
+		t.Errorf("the store lost the raw diff text: %q", stored.Diffs[0].Raw)
+	}
+}
+
+// The saving this buys, on the endpoint the page refetches on every event.
+func BenchmarkGroupResponseSize(b *testing.B) {
+	srv, err := New(Options{SessionFile: filepath.Join(b.TempDir(), "s.json"), Version: "test"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	raw := strings.Repeat(sampleDiff, 100)
+	srv.Store().AddDiff(DefaultGroup, &model.Diff{Raw: raw, Files: diff.Parse(raw)})
+
+	g, _ := srv.Store().Group(DefaultGroup)
+	with, err := json.MarshalIndent(g, "", "  ")
+	if err != nil {
+		b.Fatal(err)
+	}
+	g, _ = srv.Store().Group(DefaultGroup)
+	without, err := json.MarshalIndent(withoutRawDiffs(g), "", "  ")
+	if err != nil {
+		b.Fatal(err)
+	}
+	for b.Loop() {
+		g, _ := srv.Store().Group(DefaultGroup)
+		if _, err := json.MarshalIndent(withoutRawDiffs(g), "", "  "); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ReportMetric(float64(len(with)), "bytes-with-raw")
+	b.ReportMetric(float64(len(without)), "bytes-without-raw")
+	b.ReportMetric(100*float64(len(with)-len(without))/float64(len(with)), "%-saved")
+}
+
+// postChunked sends body with no Content-Length, the way curl does with
+// -H "Transfer-Encoding: chunked" and the way many HTTP/2 clients send.
+// Wrapping the reader hides its length from net/http, so the request goes
+// out chunked and the server sees ContentLength == -1.
+func postChunked(t *testing.T, url, body string, out any) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, url, io.NopCloser(strings.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	if req.ContentLength != 0 {
+		t.Fatalf("the request carried a Content-Length of %d, so it is not the case under test", req.ContentLength)
+	}
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return resp
+}
+
+// A review submitted with an unknown Content-Length used to have its body
+// thrown away without an error, so "approved" and "changes-requested"
+// were both recorded as a plain "commented" with no note. sbnn wait
+// --exit-code and sbnn submit --exit-code act on that value, so the
+// verdict arrived downstream as the opposite of what was decided.
+func TestSubmitReviewReadsAChunkedBody(t *testing.T) {
+	cases := []struct {
+		name        string
+		body        string
+		want        int
+		wantVerdict model.Verdict
+		wantNote    string
+	}{
+		{"approved", `{"verdict":"approved","note":"looks right"}`, http.StatusOK, model.VerdictApproved, "looks right"},
+		{"changes requested", `{"verdict":"changes-requested","note":"not yet"}`, http.StatusOK, model.VerdictChangesRequested, "not yet"},
+		{"commented", `{"verdict":"commented","note":"a thought"}`, http.StatusOK, model.VerdictCommented, "a thought"},
+		{"a note with no verdict", `{"note":"just a note"}`, http.StatusOK, model.VerdictCommented, "just a note"},
+		{"an empty object", `{}`, http.StatusOK, model.VerdictCommented, ""},
+		{"a genuinely empty body is not an error", ``, http.StatusOK, model.VerdictCommented, ""},
+		{"a bad verdict is still refused", `{"verdict":"lgtm-ish"}`, http.StatusBadRequest, "", ""},
+		{"malformed json is still refused", `{"verdict":`, http.StatusBadRequest, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, _ := newTestServer(t)
+			postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, nil)
+
+			var g model.Group
+			out := any(nil)
+			if tc.want == http.StatusOK {
+				out = &g
+			}
+			resp := postChunked(t, ts.URL+"/_/api/groups/default/review", tc.body, out)
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %s, want %d", resp.Status, tc.want)
+			}
+			if tc.want != http.StatusOK {
+				return
+			}
+			// The status was 200 before the fix as well. What was lost
+			// was the verdict and the note.
+			if g.ReviewVerdict != tc.wantVerdict {
+				t.Errorf("verdict = %q, want %q", g.ReviewVerdict, tc.wantVerdict)
+			}
+			if g.ReviewNote != tc.wantNote {
+				t.Errorf("note = %q, want %q", g.ReviewNote, tc.wantNote)
+			}
+			// And it must be what the store kept, not just what came back.
+			var reread model.Group
+			getJSON(t, ts.URL+"/_/api/groups/default", &reread)
+			if reread.ReviewVerdict != tc.wantVerdict || reread.ReviewNote != tc.wantNote {
+				t.Errorf("stored verdict/note = %q/%q, want %q/%q",
+					reread.ReviewVerdict, reread.ReviewNote, tc.wantVerdict, tc.wantNote)
+			}
+		})
+	}
+}
+
+// A request with no body at all still submits a commented review, which
+// is what a reviewer who did not choose is saying.
+func TestSubmitReviewWithNoBodyAtAll(t *testing.T) {
+	ts, _ := newTestServer(t)
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: sampleDiff}, nil)
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/_/api/groups/default/review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %s, want 200", resp.Status)
+	}
+	var g model.Group
+	if err := json.NewDecoder(resp.Body).Decode(&g); err != nil {
+		t.Fatal(err)
+	}
+	if g.ReviewVerdict != model.VerdictCommented {
+		t.Errorf("verdict = %q, want %q", g.ReviewVerdict, model.VerdictCommented)
+	}
+	if !g.Reviewed() {
+		t.Errorf("group = %+v, want a submitted review", g)
 	}
 }
