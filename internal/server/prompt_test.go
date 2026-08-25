@@ -1,6 +1,11 @@
 package server_test
 
 import (
+	"bytes"
+	"encoding/json"
+	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -99,5 +104,105 @@ func TestPromptSaysNothingAboutQuestionsWhenThereAreNone(t *testing.T) {
 	}}
 	if got := server.Prompt(g, server.PromptOptions{}); strings.Contains(got, "question") {
 		t.Errorf("prompt talks about questions when none was asked:\n%s", got)
+	}
+}
+
+// promptFixture is one case of the golden corpus in testdata/prompt. It is
+// deliberately plain JSON: the point of the corpus is that a renderer which
+// is not written in Go can read the very same files.
+type promptFixture struct {
+	// Doc says what the case pins, for whoever meets it from the other side.
+	Doc     string               `json:"doc"`
+	Options server.PromptOptions `json:"options"`
+	Group   *model.Group         `json:"group"`
+}
+
+var update = flag.Bool("update", false, "rewrite the .golden files in testdata/prompt")
+
+// TestPromptGolden pins the exact text Prompt produces.
+//
+// The prompt is rendered twice in this repository: here, and again in the
+// browser by an exported page, which has to rebuild it because the reader
+// can add comments to a page with no server to ask. The two texts are
+// claimed to be identical and drifted apart anyway, so the corpus writes the
+// contract down: input group in, prompt out, both in formats a renderer in
+// another language can read without linking against Go.
+func TestPromptGolden(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("testdata", "prompt", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("the prompt corpus is empty")
+	}
+	for _, path := range paths {
+		name := strings.TrimSuffix(filepath.Base(path), ".json")
+		t.Run(name, func(t *testing.T) {
+			in, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fx promptFixture
+			dec := json.NewDecoder(bytes.NewReader(in))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&fx); err != nil {
+				t.Fatalf("%s: %v", path, err)
+			}
+			if fx.Doc == "" {
+				t.Errorf("%s has no doc saying what it pins", path)
+			}
+			if fx.Group == nil {
+				t.Fatalf("%s has no group", path)
+			}
+
+			got := server.Prompt(fx.Group, fx.Options)
+			golden := filepath.Join("testdata", "prompt", name+".golden")
+			if *update {
+				if err := os.WriteFile(golden, []byte(got), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			want, err := os.ReadFile(golden)
+			if err != nil {
+				t.Fatalf("%v (run: go test ./internal/server -run TestPromptGolden -update)", err)
+			}
+			if got != string(want) {
+				t.Errorf("prompt for %s does not match the golden file.\n--- got ---\n%s\n--- want ---\n%s",
+					name, got, want)
+			}
+		})
+	}
+}
+
+// TestPromptGoldenCoversEveryVerdict keeps the corpus from losing the cases
+// the two renderers actually disagreed about: each verdict, a note, and a
+// round that was never submitted.
+func TestPromptGoldenCoversEveryVerdict(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("testdata", "prompt", "*.golden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus string
+	for _, path := range paths {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		corpus += string(b)
+	}
+	for _, want := range []string{
+		"The reviewer approved the change",
+		"The reviewer asked for changes",
+		"left comments without deciding either way",
+		"The reviewer wrote:",
+		"came with the approval",
+		"to address",
+		"The change is approved, so none of this blocks it",
+		"Address every comment above",
+	} {
+		if !strings.Contains(corpus, want) {
+			t.Errorf("no golden file contains %q, so nothing pins it", want)
+		}
 	}
 }
