@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -120,22 +122,70 @@ func runComment(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no comment to add")
 	}
 
-	stored := make([]*model.Comment, 0, len(requests))
-	for _, req := range requests {
-		added, err := c.AddComment(ctx, group, req)
-		if err != nil {
-			return err
-		}
-		stored = append(stored, added)
-		if !commentJSONOut {
-			fmt.Fprintf(os.Stderr, "sbnn: %s on %s%s\n", added.ID, added.Path, lineRangeOf(added))
-		}
+	if err := addComments(ctx, c, group, requests, os.Stdout, os.Stderr); err != nil {
+		return err
 	}
 	if commentJSONOut {
-		return jsonEncoder(os.Stdout).Encode(stored)
+		return nil
 	}
 	fmt.Println(server.GroupURL(c.BaseURL(), group))
 	return nil
+}
+
+// commentAdder is the one thing addComments needs from the client.
+type commentAdder interface {
+	AddComment(ctx context.Context, group string, req server.AddCommentRequest) (*model.Comment, error)
+}
+
+// addComments stores the requests one at a time and stops at the first
+// failure. The ones before it are already on the server and stay there, so
+// they are reported before the error goes up: with --json-output nothing has
+// been printed yet, and a caller that saw only the error would re-run the
+// same input and store them a second time.
+func addComments(ctx context.Context, adder commentAdder, group string, requests []server.AddCommentRequest, out, errOut io.Writer) error {
+	stored := make([]*model.Comment, 0, len(requests))
+	for i, req := range requests {
+		added, err := adder.AddComment(ctx, group, req)
+		if err != nil {
+			if len(requests) > 1 {
+				err = fmt.Errorf("comment %d of %d (%s%s): %w",
+					i+1, len(requests), req.Path, requestLines(req), err)
+			}
+			return reportStored(out, errOut, stored, len(requests), err)
+		}
+		stored = append(stored, added)
+		if !commentJSONOut {
+			fmt.Fprintf(errOut, "sbnn: %s on %s%s\n", added.ID, added.Path, lineRangeOf(added))
+		}
+	}
+	if commentJSONOut {
+		return jsonEncoder(out).Encode(stored)
+	}
+	return nil
+}
+
+// reportStored says what survived a run that failed part-way through, so that
+// the rest of it can be sent again without duplicating what is there.
+func reportStored(out, errOut io.Writer, stored []*model.Comment, total int, cause error) error {
+	if len(stored) == 0 {
+		return cause
+	}
+	if commentJSONOut {
+		if err := jsonEncoder(out).Encode(stored); err != nil {
+			return errors.Join(cause, err)
+		}
+	}
+	fmt.Fprintf(errOut,
+		"sbnn: %d of %d comments were stored before this and are still there; send the rest without the first %d entries, or they will be added twice\n",
+		len(stored), total, len(stored))
+	return cause
+}
+
+func requestLines(req server.AddCommentRequest) string {
+	if req.EndLine > req.StartLine {
+		return fmt.Sprintf(":%d-%d", req.StartLine, req.EndLine)
+	}
+	return fmt.Sprintf(":%d", req.StartLine)
 }
 
 func lineRangeOf(c *model.Comment) string {
