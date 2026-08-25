@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FileDiff, PreviewKind, Status } from '../types'
 import { filePath } from '../types'
 import { client, type PreviewResult } from '../client'
@@ -34,6 +34,52 @@ function formatOf(file: FileDiff): Format {
 }
 
 /**
+ * previewRevision is a short string that changes when what the preview
+ * would show changes, and only then.
+ *
+ * A reload replaces the whole diffs array with freshly parsed JSON, so
+ * every FileDiff is a new object after any event on the group - a comment
+ * added, one resolved, another diff sent. Keying the loader on the object
+ * therefore re-renders (and, with mo, re-execs the binary) for every
+ * section on screen, every time. The server carries no per-file version or
+ * mtime to key on instead, so this derives one from the file itself: the
+ * path and status the preview header shows, and a hash of the hunks the
+ * preview content is rebuilt from. Two parses of an unchanged file give
+ * the same string; a real edit - even one that keeps the hunk shape, like
+ * a fixed typo on one line - gives a different one.
+ *
+ * A worktree-sourced preview can still go stale without the diff moving,
+ * since the file on disk is not part of the diff at all. That is what the
+ * header's reload button is for.
+ */
+function previewRevision(file: FileDiff): string {
+  // FNV-1a over the hunks: proportional to the file's own diff text, and
+  // only recomputed when a reload hands this section a new object - the
+  // same order of work as parsing that JSON in the first place.
+  let hash = 0x811c9dc5
+  const mix = (text: string) => {
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i)
+      hash = Math.imul(hash, 0x01000193)
+    }
+  }
+  for (const hunk of file.hunks) {
+    mix(hunk.header)
+    for (const line of hunk.lines) {
+      mix(line.kind)
+      mix(line.content)
+    }
+  }
+  return [
+    filePath(file),
+    file.status,
+    file.isBinary ? 'bin' : 'text',
+    file.hunks.length,
+    (hash >>> 0).toString(36),
+  ].join('|')
+}
+
+/**
  * PreviewFileSection shows one file's preview: Markdown, an image, or a
  * Jupyter notebook's rendered cells - whichever applies.
  *
@@ -53,6 +99,9 @@ export function PreviewFileSection({ group, diffId, file, status, kind, active, 
 
   const format = formatOf(file)
   const previewable = format !== null
+  // The loader below is keyed on this string rather than on file itself,
+  // so an event that only rebuilds the object leaves the preview alone.
+  const revision = useMemo(() => previewRevision(file), [file])
   const renderHere = format !== 'markdown' || kind === 'preview'
 
   const rawImageSrc = format === 'image' ? client.imageSrc(group, diffId, file.id) : undefined
@@ -100,7 +149,7 @@ export function PreviewFileSection({ group, diffId, file, status, kind, active, 
     return () => {
       cancelled = true
     }
-  }, [group, diffId, file, format, renderHere, reloadKey, active])
+  }, [group, diffId, file.id, revision, format, renderHere, reloadKey, active])
 
   const openInMo = async () => {
     if (format !== 'markdown') return
