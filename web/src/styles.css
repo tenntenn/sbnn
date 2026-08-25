@@ -538,8 +538,7 @@ input[type='checkbox'] {
   transition:
     color var(--motion-duration) var(--motion-ease),
     background-color var(--motion-duration) var(--motion-ease),
-    border-color var(--motion-duration) var(--motion-ease),
-    transform var(--motion-duration) var(--motion-ease);
+    border-color var(--motion-duration) var(--motion-ease);
 }
 
 .divider-handle:hover {
