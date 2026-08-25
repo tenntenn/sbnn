@@ -1,0 +1,53 @@
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+  schedule:
+    # Weekly, deliberately off the hour: scheduled runs queued at :00 are the
+    # ones GitHub delays most when the shared runner pool is busy.
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  pnpm-audit:
+    name: pnpm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      - run: pnpm audit --audit-level moderate
+        working-directory: web
+
+# No "is web/dist in sync" check here on purpose: dist is no longer committed
+# per change, it is regenerated in batches, so such a step would fail every PR.
