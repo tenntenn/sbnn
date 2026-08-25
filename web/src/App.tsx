@@ -4,7 +4,7 @@ import { client } from './client'
 import { readBoolSetting, readEnumSetting, readNumberSetting, readSetting, readStringSet, writeBoolSetting, writeSetting, writeStringSet } from './storage'
 import { isPreviewable, type Comment, type Diff, type FileDiff, type PreviewKind, type Status, type ViewMode, type Verdict } from './types'
 import { DiffFileSection } from './components/DiffFileSection'
-import { DiffStack, resolveFolded, type DiffStackHandle, type ScrollFraction } from './components/DiffStack'
+import { DiffStack, FileStepper, resolveFolded, type DiffStackHandle, type ScrollFraction } from './components/DiffStack'
 import { Divider } from './components/Divider'
 import { Icon } from './components/Icon'
 import { PreviewFileSection } from './components/PreviewFileSection'
@@ -526,24 +526,32 @@ export function App() {
 
   const diffPane = narrow ? (
     activeEntry ? (
-      <DiffFileSection
-        key={activeKey}
-        group={group}
-        diff={activeEntry.diff}
-        file={activeEntry.file}
-        comments={activeComments}
-        narrow
-        onChanged={() => void reload()}
-        folded={resolveFolded(
-          foldOverrides.get(activeKey!),
-          Boolean(activeEntry.file.folded),
-          activeComments.length > 0,
-        )}
-        foldedByReader={foldOverrides.get(activeKey!) === true}
-        onSetFolded={(value) => setFolded(activeKey!, value)}
-        viewMode={viewModeOverrides.get(activeKey!) ?? viewModeDefault ?? activeEntry.file.viewMode}
-        onSetViewMode={(mode) => setViewModeFor(activeKey!, mode)}
-      />
+      // `.content` lays its children out in a row, so the stepper beside the
+      // diff would take a column of the phone's width away from it. One
+      // column of its own keeps the diff full width and the stepper below it.
+      <div className="diff-pane">
+        <DiffFileSection
+          key={activeKey}
+          group={group}
+          diff={activeEntry.diff}
+          file={activeEntry.file}
+          comments={activeComments}
+          narrow
+          onChanged={() => void reload()}
+          folded={resolveFolded(
+            foldOverrides.get(activeKey!),
+            Boolean(activeEntry.file.folded),
+            activeComments.length > 0,
+          )}
+          foldedByReader={foldOverrides.get(activeKey!) === true}
+          onSetFolded={(value) => setFolded(activeKey!, value)}
+          viewMode={viewModeOverrides.get(activeKey!) ?? viewModeDefault ?? activeEntry.file.viewMode}
+          onSetViewMode={(mode) => setViewModeFor(activeKey!, mode)}
+        />
+        {/* One file at a time hides the rest of the review; this is the
+            way on to them. */}
+        <FileStepper at={flatKeys.indexOf(activeKey!)} total={flatKeys.length} onStep={stepFile} />
+      </div>
     ) : (
       <p className="empty">Select a file.</p>
     )
