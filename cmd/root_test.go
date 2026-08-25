@@ -409,3 +409,65 @@ func TestParseLabelsDuplicateMentionsTheKey(t *testing.T) {
 		t.Errorf("parseLabels error = %v; want it to name pr and say it was given more than once", err)
 	}
 }
+
+// --history-file is read by whichever invocation starts the server, so the
+// flag used to be looked at only on that path: pointed at a server that was
+// already up, "sbnn --history-file -" printed nothing and exited 0, as if
+// the log had gone to a standard stream. The value is refused before
+// anything else happens, and before any server is contacted, so this test
+// needs no server at all.
+func TestRootRefusesAHistoryFileItCannotWrite(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "sending a diff", args: []string{"--history-file", "-"}},
+		{name: "asking for status", args: []string{"--history-file", "-", "--status"}},
+		{name: "padded", args: []string{"--history-file", " - "}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			restoreRootFlags(t)
+			rootCmd.SetArgs(tt.args)
+			rootCmd.SetOut(io.Discard)
+			rootCmd.SetErr(io.Discard)
+			err := rootCmd.Execute()
+			if err == nil {
+				t.Fatalf("sbnn %s exited 0, want the standard stream complaint", strings.Join(tt.args, " "))
+			}
+			if !strings.Contains(err.Error(), "standard stream") {
+				t.Errorf("sbnn %s failed with %v, want the standard stream complaint",
+					strings.Join(tt.args, " "), err)
+			}
+		})
+	}
+}
+
+// The words the flag does accept still get through this early check: it is
+// there to catch what historyFile refuses, not to make --history-file mean
+// something new when a server is already running.
+func TestRootAcceptsTheOffWordsBeforeReachingTheServer(t *testing.T) {
+	for _, word := range HistoryOffWords {
+		t.Run(word, func(t *testing.T) {
+			restoreRootFlags(t)
+			t.Setenv(HistoryEnv, "")
+			historyPath = word
+			if _, err := historyFile(historyPath); err != nil {
+				t.Fatalf("historyFile(%q): %v, want the early check to let it past", word, err)
+			}
+		})
+	}
+}
+
+// The root command's flags are package-level variables, so a test that sets
+// them puts them back.
+func restoreRootFlags(t *testing.T) {
+	t.Helper()
+	oldHistory, oldStatus, oldTarget := historyPath, showStatus, target
+	t.Cleanup(func() {
+		historyPath, showStatus, target = oldHistory, oldStatus, oldTarget
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+	})
+}

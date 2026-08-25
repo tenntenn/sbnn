@@ -232,6 +232,13 @@ func run(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	// --history-file is only acted on by the invocation that starts the
+	// server, but a value the flag refuses is refused wherever it is given.
+	// Pointed at a server that was already up, "sbnn --history-file -" said
+	// nothing and exited 0, which reads as "the log went somewhere".
+	if _, err := historyFile(historyPath); err != nil {
+		return err
+	}
 
 	switch {
 	case foreground:
