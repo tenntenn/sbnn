@@ -1,8 +1,12 @@
 package history_test
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,6 +101,109 @@ func TestAppendAndLoad(t *testing.T) {
 	}
 	if records, err := history.Read(strings.NewReader("{not json}\n"), history.Filter{}); err != nil || len(records) != 0 {
 		t.Errorf("Read on a broken line = %v, %v", records, err)
+	}
+}
+
+// TestAppendKeepsRecordsWholeUnderConcurrency holds Append to what the log
+// format needs: one line per record, whole, however many writers there
+// are. HistoryFile is one file for the machine while a session file is one
+// per port, so several servers writing at once is the ordinary case.
+//
+// The records are far larger than any size a write is promised to be
+// atomic at, so nothing but the lock keeps two of them out of each other.
+func TestAppendKeepsRecordsWholeUnderConcurrency(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reviews.jsonl")
+	const writers, each = 8, 25
+	note := strings.Repeat("x", 256<<10)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for w := range writers {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := range each {
+				rec := history.Record{
+					Group:      fmt.Sprintf("g%d", w),
+					ReviewedAt: at(i),
+					Note:       note,
+				}
+				if err := history.Append(path, rec); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("Append = %v", err)
+	}
+
+	// Every line has to be a record: a line that does not parse is a
+	// review Read drops on the floor, silently.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	if len(lines) != writers*each {
+		t.Errorf("log has %d line(s), want %d", len(lines), writers*each)
+	}
+	for i, line := range lines {
+		var rec history.Record
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("line %d of %d does not parse (%d bytes): %v",
+				i+1, len(lines), len(line), err)
+		}
+	}
+
+	records, err := history.Load(path, history.Filter{})
+	if err != nil {
+		t.Fatalf("Load = %v", err)
+	}
+	if len(records) != writers*each {
+		t.Fatalf("Load read %d record(s), want %d", len(records), writers*each)
+	}
+	perGroup := map[string]int{}
+	for _, rec := range records {
+		perGroup[rec.Group]++
+		if len(rec.Note) != len(note) {
+			t.Fatalf("a record of %s came back with a note of %d bytes, want %d",
+				rec.Group, len(rec.Note), len(note))
+		}
+	}
+	for w := range writers {
+		if got := perGroup[fmt.Sprintf("g%d", w)]; got != each {
+			t.Errorf("g%d wrote %d record(s), want %d", w, got, each)
+		}
+	}
+}
+
+// TestAppendStillAppends is the plain case, so that taking a lock has not
+// turned an append into something else.
+func TestAppendStillAppends(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reviews.jsonl")
+	for _, name := range []string{"api", "web", "cli"} {
+		if err := history.Append(path, history.Record{Group: name, ReviewedAt: at(0)}); err != nil {
+			t.Fatalf("Append(%s) = %v", name, err)
+		}
+	}
+	records, err := history.Load(path, history.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, rec := range records {
+		got = append(got, rec.Group)
+	}
+	if strings.Join(got, ",") != "api,web,cli" {
+		t.Errorf("log reads %v, want the three in the order they were written", got)
+	}
+	// An empty path is still the way to say "keep no log".
+	if err := history.Append("", history.Record{Group: "api"}); err != nil {
+		t.Errorf("Append with no path = %v", err)
 	}
 }
 
