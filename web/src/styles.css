@@ -621,12 +621,21 @@ body.resizing iframe {
   box-shadow: inset var(--border-width-marker) 0 0 var(--selected-marker);
 }
 
+/* The ellipsis belongs at the start of a truncated path, because the tail is
+   the part that identifies the file. An RTL box gets that for free, but it
+   also flips the bidi paragraph direction, and every neutral character at
+   either end of the string - a leading dot, a bracket run - is then resolved
+   against RTL and painted on the wrong side. unicode-bidi: plaintext puts the
+   direction back under the control of the string's own first strong
+   character, so the path reads LTR inside a box that still clips from the
+   left. */
 .file-path {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   direction: rtl;
+  unicode-bidi: plaintext;
   text-align: left;
 }
 
