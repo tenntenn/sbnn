@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -620,8 +621,7 @@ func (s *Store) FindFileByPath(group, diffID, path string) (*model.Diff, *model.
 	if g == nil {
 		return nil, nil, false
 	}
-	for i := len(g.Diffs) - 1; i >= 0; i-- {
-		d := g.Diffs[i]
+	for _, d := range slices.Backward(g.Diffs) {
 		if diffID != "" && d.ID != diffID {
 			continue
 		}
