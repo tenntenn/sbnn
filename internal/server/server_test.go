@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -973,5 +974,140 @@ func TestSubmitReviewWithoutABrowser(t *testing.T) {
 	// reviewer apart.
 	if got := history.Comments(records); len(got) != 1 || got[0].Who() != "code-review" {
 		t.Errorf("flattened = %+v", got)
+	}
+}
+
+// The event stream had no cap and no delivery guarantee. Both bite the same
+// way: /_/events is a GET, so the cross-origin guard deliberately lets it
+// through - CORS stops another page reading the events, not holding the
+// connection open - and every accepted connection costs a goroutine, a
+// channel and a ticker until something gives.
+func TestEventSubscribersAreCapped(t *testing.T) {
+	ts, srv := newTestServer(t)
+
+	for i := range maxSubscribers {
+		if _, ok := srv.broker.subscribe(); !ok {
+			t.Fatalf("subscriber %d refused below the cap of %d", i, maxSubscribers)
+		}
+	}
+	if _, ok := srv.broker.subscribe(); ok {
+		t.Errorf("subscriber %d accepted, want a refusal at the cap", maxSubscribers+1)
+	}
+
+	// Over HTTP the refusal is a 503, not a 200 that ends immediately.
+	resp, err := http.Get(ts.URL + "/_/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %s, want 503", resp.Status)
+	}
+}
+
+// A review notice is what wakes `sbnn wait`, and it is typically the last
+// event of a burst. Dropping it because the subscriber is behind meant the
+// waiter blocked forever on a review that had already been submitted - the
+// old "a slow browser refetches on the next event anyway" reasoning only
+// holds while more events are still coming.
+func TestReviewNoticeSurvivesABehindSubscriber(t *testing.T) {
+	b := newBroker()
+	ch, ok := b.subscribe()
+	if !ok {
+		t.Fatal("subscribe refused on an empty broker")
+	}
+
+	// Fall far enough behind that the queue is full of change notices.
+	for range cap(ch) * 2 {
+		b.publishChange([]byte(`{"type":"change","group":"default"}`))
+	}
+	if len(ch) != cap(ch) {
+		t.Fatalf("queued %d change notices, want the queue full at %d", len(ch), cap(ch))
+	}
+
+	b.publishReview("default", []byte(`{"type":"review","group":"default"}`))
+
+	var got *event
+	for range cap(ch) {
+		select {
+		case ev := <-ch:
+			if ev.id != 0 {
+				got = &ev
+			}
+		default:
+		}
+	}
+	if got == nil {
+		t.Fatal("the review notice was dropped; `sbnn wait` would block on a review that already happened")
+	}
+	if !strings.Contains(string(got.data), `"type":"review"`) {
+		t.Errorf("event data = %q", got.data)
+	}
+}
+
+// The other half of the guarantee: a client that missed the notice while
+// catching up gets it when it reconnects, which is what SSE id:/Last-Event-ID
+// is for.
+func TestMissedReviewNoticesAreReplayed(t *testing.T) {
+	b := newBroker()
+	b.publishReview("default", []byte(`{"type":"review","group":"default"}`))
+	b.publishReview("api", []byte(`{"type":"review","group":"api"}`))
+
+	fresh := b.missedReviews(0)
+	if len(fresh) != 2 {
+		t.Fatalf("got %d notices for a client that has seen nothing, want both groups", len(fresh))
+	}
+	if fresh[0].id >= fresh[1].id {
+		t.Errorf("ids = %d, %d, want oldest first", fresh[0].id, fresh[1].id)
+	}
+
+	if caught := b.missedReviews(fresh[1].id); len(caught) != 0 {
+		t.Errorf("got %d notices for a caught-up client, want none", len(caught))
+	}
+	if partial := b.missedReviews(fresh[0].id); len(partial) != 1 || partial[0].id != fresh[1].id {
+		t.Errorf("partial replay = %+v, want only the newer notice", partial)
+	}
+
+	// A later review in a group replaces the stored one rather than piling up.
+	b.publishReview("default", []byte(`{"type":"review","group":"default","again":true}`))
+	if all := b.missedReviews(0); len(all) != 2 {
+		t.Errorf("got %d stored notices, want one per group", len(all))
+	}
+}
+
+// The stream announces its own reconnect delay and numbers review notices, so
+// a browser that drops the connection resumes from where it left off.
+func TestEventStreamSendsRetryAndIDs(t *testing.T) {
+	ts, srv := newTestServer(t)
+	srv.broker.publishReview("default", []byte(`{"type":"review","group":"default"}`))
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/_/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	// The handler flushes the retry: field as soon as the stream opens and the
+	// replayed notices after it, so read on until both have arrived.
+	var got string
+	buf := make([]byte, 4096)
+	for !strings.Contains(got, `"type":"review"`) {
+		n, err := resp.Body.Read(buf)
+		got += string(buf[:n])
+		if err != nil {
+			break
+		}
+	}
+	if !strings.Contains(got, "retry: 2000") {
+		t.Errorf("stream = %q, want a retry: field", got)
+	}
+	if !strings.Contains(got, "id: 1") || !strings.Contains(got, `"type":"review"`) {
+		t.Errorf("stream = %q, want the missed review notice replayed with an id", got)
 	}
 }
