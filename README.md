@@ -32,17 +32,16 @@ deliberate differences:
 $ go install github.com/tenntenn/sbnn@latest
 ```
 
-sbnn renders the Markdown preview itself, so nothing else is needed.
-[mo](https://github.com/k1LoW/mo) renders a richer preview for those who
-install it — pick it in the preview header once it is on PATH:
+That is the whole installation. sbnn is one binary with the review page built
+into it, and it renders the Markdown preview itself, so nothing else has to be
+on PATH before you pipe a diff into it.
 
-```console
-$ brew install k1LoW/tap/mo
-```
+`go install` needs Go 1.24 or newer, the version `go.mod` requires. An older
+toolchain refuses the module rather than saying which version it wanted, so
+check with `go version` first if the command fails on a line about the go
+directive.
 
-or download it from the [mo releases page](https://github.com/k1LoW/mo/releases).
-`go install` does not work for mo: its published module does not carry the
-embedded frontend.
+Building from source this way is the only way to install sbnn today.
 
 ## Usage
 
@@ -542,6 +541,16 @@ the full thing.
 Note that mo cannot be used as a Go library today: everything but its cobra
 entry point lives under `internal/`, and the published module does not build
 because the embedded frontend is not part of it.
+
+Installing mo is a package-manager step rather than a `go install`:
+
+```console
+$ brew install k1LoW/tap/mo
+```
+
+or download it from the [mo releases page](https://github.com/k1LoW/mo/releases).
+`go install` does not work for mo: its published module does not carry the
+embedded frontend. Once mo is on PATH, pick it in the preview header.
 
 ## Files and ports
 
