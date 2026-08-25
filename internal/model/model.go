@@ -188,6 +188,15 @@ func Suggestions(body string) []string {
 	for i := 0; i < len(lines); i++ {
 		fence, ok := suggestionFence(lines[i])
 		if !ok {
+			// What is written inside another fenced block is quoted
+			// text, not Markdown, so a suggestion block there was shown
+			// rather than proposed - which is what a comment explaining
+			// the format, or an agent quoting a diff that contains one,
+			// is doing. Skip past what the quoting block holds.
+			if quoted, _, ok := openFence(lines[i]); ok {
+				for i++; i < len(lines) && !closesFence(lines[i], quoted); i++ {
+				}
+			}
 			continue
 		}
 		block := make([]string, 0, 4)
@@ -301,7 +310,42 @@ func WithSuggestion(body, suggestion string) string {
 	if strings.TrimSpace(body) == "" {
 		return block
 	}
-	return strings.TrimRight(body, "\n") + "\n\n" + block
+	body = strings.TrimRight(body, "\n")
+	// A body that opens a fenced block and never closes it would hold the
+	// appended suggestion inside that block, where Suggestions reads it as
+	// quoted rather than proposed - `sbnn comment --suggest` would drop the
+	// replacement it was handed without saying so. Closing the block first
+	// puts the suggestion back at the top level. Nothing is lost: an
+	// unclosed block already ends at the end of the text, so the close only
+	// writes down where it was going to end anyway.
+	if dangling := danglingFence(body); dangling != "" {
+		body += "\n" + dangling
+	}
+	return body + "\n\n" + block
+}
+
+// danglingFence returns the fence of a block the text opens and never closes,
+// or "" when every block it opens is closed. At most one can be left open,
+// since every line after it belongs to it.
+func danglingFence(text string) string {
+	lines := strings.Split(text, "\n")
+	for i := 0; i < len(lines); i++ {
+		fence, _, ok := openFence(lines[i])
+		if !ok {
+			continue
+		}
+		closed := false
+		for i++; i < len(lines); i++ {
+			if closesFence(lines[i], fence) {
+				closed = true
+				break
+			}
+		}
+		if !closed {
+			return fence
+		}
+	}
+	return ""
 }
 
 // MarshalJSON adds the suggestions parsed out of the body, so that a client

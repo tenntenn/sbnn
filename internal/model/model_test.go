@@ -75,6 +75,44 @@ func TestSuggestions(t *testing.T) {
 			nil,
 		},
 		{
+			// The comment shows the format, it does not use it.
+			"quoted suggestion is not a suggestion",
+			"Here is how you write one:\n\n`````markdown\n```suggestion\nnot a real one\n```\n`````\n",
+			nil,
+		},
+		{
+			"quoted inside a tilde block",
+			"~~~markdown\n```suggestion\nnot a real one\n```\n~~~",
+			nil,
+		},
+		{
+			"a quoting fence no longer than the one it holds",
+			"```markdown\n```suggestion\nx\n```\n```",
+			nil,
+		},
+		{
+			"a real suggestion after a quoted one still counts",
+			"like this:\n\n````markdown\n```suggestion\nquoted\n```\n````\n\nso:\n\n```suggestion\nreal\n```",
+			[]string{"real"},
+		},
+		{
+			"a suggestion before a quoted one still counts",
+			"```suggestion\nreal\n```\n\n````markdown\n```suggestion\nquoted\n```\n````",
+			[]string{"real"},
+		},
+		{
+			// Both halves of this body are ones a single fix gets
+			// wrong. Skipping the quoted block without tracking the
+			// fence nested in the real suggestion cuts the real one
+			// in half at its own ```go line; tracking the nested
+			// fence without skipping the quoted block returns the
+			// quoted "nope" as a proposed change. Only doing both
+			// leaves one whole suggestion.
+			"a quoted suggestion beside a real one holding a code block",
+			"````markdown\n```suggestion\nnope\n```\n````\n\n```suggestion\n```go\nx\n```\n```",
+			[]string{"```go\nx\n```"},
+		},
+		{
 			"empty suggestion deletes the lines",
 			"drop it\n\n```suggestion\n```",
 			[]string{""},
@@ -126,9 +164,26 @@ func TestCommentJSONCarriesSuggestions(t *testing.T) {
 }
 
 // Whatever WithSuggestion writes, Suggestions has to read back unchanged:
-// the two are the only ends of the wire a suggestion travels over.
+// the two are the only ends of the wire a suggestion travels over, and the
+// block written at one end must neither be cut short nor look quoted at the
+// other.
 func TestWithSuggestionRoundTrip(t *testing.T) {
-	for _, suggestion := range []string{
+	bodies := []struct {
+		name string
+		body string
+	}{
+		{"plain body", "note"},
+		{"empty body", ""},
+		{"body quoting a suggestion", "like this:\n\n````markdown\n```suggestion\nquoted\n```\n````"},
+		// A body whose own fenced block is never closed would otherwise
+		// hold the appended block, and the suggestion `sbnn comment
+		// --suggest` was handed would be read back as quoted text.
+		{"body ending inside a code block", "```go\nfoo()"},
+		{"body ending inside a tilde block", "~~~\nfoo()"},
+		{"body ending inside a long fence", "````\n```go\nfoo()"},
+		{"body ending on a bare opening fence", "```"},
+	}
+	suggestions := []string{
 		"func parse() {",
 		"a\n\nb",
 		"```go\nx\n```",
@@ -137,12 +192,15 @@ func TestWithSuggestionRoundTrip(t *testing.T) {
 		"text with ``` in it",
 		"# Heading\n\n```suggestion\nnested\n```",
 		"````\ndeep\n````",
-	} {
-		t.Run(suggestion, func(t *testing.T) {
-			body := model.WithSuggestion("note", suggestion)
-			if got := model.Suggestions(body); !reflect.DeepEqual(got, []string{suggestion}) {
-				t.Errorf("round trip through %q gave %q, want %q", body, got, []string{suggestion})
-			}
-		})
+	}
+	for _, b := range bodies {
+		for _, suggestion := range suggestions {
+			t.Run(b.name+"/"+suggestion, func(t *testing.T) {
+				body := model.WithSuggestion(b.body, suggestion)
+				if got := model.Suggestions(body); !reflect.DeepEqual(got, []string{suggestion}) {
+					t.Errorf("round trip through %q gave %q, want %q", body, got, []string{suggestion})
+				}
+			})
+		}
 	}
 }
