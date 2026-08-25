@@ -550,10 +550,23 @@ because the embedded frontend is not part of it.
 | sbnn server | `localhost:6280` (`--port`) |
 | mo server | `localhost:6275` (`--mo-port`) |
 | Preview proxy | a loopback port picked at startup |
-| Session state (diffs, comments, hooks) | `$XDG_STATE_HOME/sbnn/session-<port>.json` |
-| Server log | `$XDG_STATE_HOME/sbnn/server-<port>.log` |
-| Rebuilt previews | `$XDG_CACHE_HOME/sbnn/preview/…` |
+| Session state (diffs, comments, hooks) | `<state>/session-<port>.json` |
+| Server log | `<state>/server-<port>.log` |
+| Review log | `<state>/reviews.jsonl` (`--history-file`, `$SBNN_HISTORY`) |
+| Rebuilt previews | `<cache>/preview/…` |
 | Exported pages | wherever you point `sbnn export` |
+
+`<state>` and `<cache>` are not the same directory on every platform:
+
+| Platform | `<state>` | `<cache>` |
+| --- | --- | --- |
+| Linux, BSD | `$XDG_STATE_HOME/sbnn`, or `~/.local/state/sbnn` | `$XDG_CACHE_HOME/sbnn`, or `~/.cache/sbnn` |
+| macOS | `~/Library/Application Support/sbnn` | `~/Library/Caches/sbnn` |
+| Windows | `%AppData%\sbnn` | `%LocalAppData%\sbnn` |
+
+`$XDG_STATE_HOME` takes precedence on every platform when it is set, so
+exporting it on macOS or Windows moves the state directory there. `$XDG_CACHE_HOME`
+is the exception: it is only consulted on Linux and BSD.
 
 sbnn binds to loopback and has no authentication; `--dangerously-allow-remote-access`
 is required to bind anywhere else.
