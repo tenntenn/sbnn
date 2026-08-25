@@ -64,12 +64,41 @@ func (s *Server) spaHandler() http.Handler {
 
 // hasFileExtension reports whether the last segment of a request path names a
 // file: it carries a dot that is neither the first nor the last character of
-// the segment. A dotfile ("/.env") and a segment that merely ends in a dot
-// are not extensions.
+// the segment, and what follows that dot looks like an extension - at most
+// eight ASCII letters and digits, at least one of them a letter. A dotfile
+// ("/.env") and a segment that merely ends in a dot are not extensions.
+//
+// The "at least one letter" rule is what keeps a group name off this path.
+// ValidateGroupName accepts a dot, so "v1.2", "rel-1.0", "release.2" and
+// "release-2024.01" are names sbnn itself prints review URLs for, and a plain
+// dot test would answer every one of those pages with a 404. What separates
+// them from "diagram.png" is that their final dot is followed by a version
+// number rather than by a file type.
+//
+// The ambiguity is real and cannot be resolved from the path alone: a group
+// literally named "notes.md" is unreachable this way. Version-shaped names
+// are the ones that occur, so they are the ones this resolves in favour of.
 func hasFileExtension(name string) bool {
 	last := name[strings.LastIndex(name, "/")+1:]
 	dot := strings.LastIndex(last, ".")
-	return dot > 0 && dot < len(last)-1
+	if dot <= 0 || dot == len(last)-1 {
+		return false
+	}
+	ext := last[dot+1:]
+	if len(ext) > 8 {
+		return false
+	}
+	letter := false
+	for i := 0; i < len(ext); i++ {
+		switch c := ext[i]; {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+			letter = true
+		case c >= '0' && c <= '9':
+		default:
+			return false
+		}
+	}
+	return letter
 }
 
 // spaNotFound says, in a line a person reading devtools can act on, that the
