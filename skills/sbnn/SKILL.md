@@ -185,7 +185,10 @@ it is, and the reader is told plainly rather than guessing.
 `--suggest` appends the replacement to the comment as a ` ```suggestion `
 block, so the human sees it as a proposed change and can copy it:
 
-```
+```suggestion
+if err != nil {
+    return fmt.Errorf("read config: %w", err)
+}
 ```
 
 Use it for what is genuinely worth a human's attention — a decision you had
