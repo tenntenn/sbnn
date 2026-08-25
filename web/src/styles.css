@@ -374,7 +374,6 @@ a.icon-only.button {
   background: none;
   color: var(--fg);
   border: none;
-  box-shadow: none;
   justify-content: flex-start;
   padding: var(--space-sm);
   border-radius: var(--radius-md);
@@ -529,7 +528,6 @@ input[type='checkbox'] {
   border: var(--border-width-hairline) solid var(--border);
   background: var(--bg);
   color: var(--fg-muted);
-  box-shadow: var(--shadow-overlay);
   cursor: pointer;
   transition:
     color var(--motion-duration) var(--motion-ease),
@@ -716,7 +714,6 @@ body.resizing iframe {
   padding: 0;
   border: 0;
   background: none;
-  box-shadow: none;
   font: inherit;
   color: inherit;
   cursor: pointer;
@@ -810,11 +807,9 @@ body.resizing iframe {
   font: inherit;
   font-size: var(--text-xs);
   cursor: pointer;
-  box-shadow: none;
   transition:
     background-color var(--motion-duration) var(--motion-ease),
-    color var(--motion-duration) var(--motion-ease),
-    box-shadow var(--motion-duration) var(--motion-ease);
+    color var(--motion-duration) var(--motion-ease);
 }
 
 .toggle button:hover:not(.active):not(:disabled) {
@@ -824,7 +819,6 @@ body.resizing iframe {
 .toggle button.active {
   background: var(--bg);
   color: var(--accent-fg);
-  box-shadow: var(--shadow-overlay);
 }
 
 .diff-table {
@@ -1144,11 +1138,9 @@ button,
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
-  box-shadow: var(--shadow-overlay);
   transition:
     filter var(--motion-duration) var(--motion-ease),
     background-color var(--motion-duration) var(--motion-ease),
-    box-shadow var(--motion-duration) var(--motion-ease),
     transform var(--motion-duration) var(--motion-ease);
 }
 
@@ -1159,7 +1151,6 @@ button:hover:not(:disabled) {
 button:active:not(:disabled) {
   filter: brightness(0.93);
   transform: translateY(1px);
-  box-shadow: none;
 }
 
 button:focus-visible,
@@ -1178,7 +1169,6 @@ a.ghost.button {
   background: var(--bg);
   color: var(--fg);
   border-color: var(--border);
-  box-shadow: none;
 }
 
 button.ghost:hover:not(:disabled),
