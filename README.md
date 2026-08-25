@@ -58,17 +58,33 @@ deliberate differences:
 $ go install github.com/tenntenn/sbnn@latest
 ```
 
-sbnn renders the Markdown preview itself, so nothing else is needed.
-[mo](https://github.com/k1LoW/mo) renders a richer preview for those who
-install it — pick it in the preview header once it is on PATH:
+That is the whole installation. sbnn is one binary with the review page built
+into it, and it renders the Markdown preview itself, so nothing else has to be
+on PATH before you pipe a diff into it.
+
+sbnn is built with the Go version `go.mod` names, `go 1.27.0`. Your own Go does
+not have to be that new: since Go 1.21 the default `GOTOOLCHAIN=auto` fetches
+whatever toolchain a module asks for, so the command above works on an older Go
+and says so as it goes:
 
 ```console
-$ brew install k1LoW/tap/mo
+$ go install github.com/tenntenn/sbnn@latest
+go: github.com/tenntenn/sbnn@v0.0.0-... requires go >= 1.27.0; switching to go1.27.0
 ```
 
-or download it from the [mo releases page](https://github.com/k1LoW/mo/releases).
-`go install` does not work for mo: its published module does not carry the
-embedded frontend.
+It stops only if you have set `GOTOOLCHAIN=local`, or you are on Go 1.20 or
+earlier, in which case the message names both the version wanted and the one you
+are running:
+
+```console
+$ GOTOOLCHAIN=local go install github.com/tenntenn/sbnn@latest
+go: github.com/tenntenn/sbnn@latest: ... requires go >= 1.27.0 (running go 1.24.7; GOTOOLCHAIN=local)
+```
+
+Upgrade Go to the version that line asks for, or leave `GOTOOLCHAIN` at its
+default and let it fetch that toolchain for you.
+
+Building from source this way is the only way to install sbnn today.
 
 ## Usage
 
@@ -627,6 +643,16 @@ the full thing.
 Note that mo cannot be used as a Go library today: everything but its cobra
 entry point lives under `internal/`, and the published module does not build
 because the embedded frontend is not part of it.
+
+Installing mo is a package-manager step rather than a `go install`:
+
+```console
+$ brew install k1LoW/tap/mo
+```
+
+or download it from the [mo releases page](https://github.com/k1LoW/mo/releases).
+`go install` does not work for mo: its published module does not carry the
+embedded frontend. Once mo is on PATH, pick it in the preview header.
 
 ## Files and ports
 
