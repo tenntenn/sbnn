@@ -1,0 +1,15 @@
+{
+  "doc": "NoInstruction drops the closing block, including the paragraph about questions, and leaves the review header and the comments.",
+  "options": {"noInstruction": true},
+  "group": {
+    "name": "api",
+    "reviewedAt": "2026-03-04T05:06:07Z",
+    "reviewVerdict": "approved",
+    "diffs": [{"id": "d1", "title": "first"}],
+    "comments": [
+      {"id": "c1", "diffId": "d1", "path": "main.go", "side": "new",
+       "startLine": 4, "endLine": 4, "body": "Why three retries?", "question": true,
+       "snippet": "var x = 1"}
+    ]
+  }
+}

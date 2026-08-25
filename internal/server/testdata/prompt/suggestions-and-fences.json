@@ -1,0 +1,16 @@
+{
+  "doc": "The per-comment rendering: an old-side range, an author, a snippet that itself contains a fence, and two suggestion blocks that have to be applied in order.",
+  "options": {},
+  "group": {
+    "name": "docs",
+    "reviewedAt": "2026-03-04T05:06:07Z",
+    "reviewVerdict": "changes-requested",
+    "diffs": [{"id": "d1", "title": "docs: rewrite the intro"}],
+    "comments": [
+      {"id": "c1", "diffId": "d1", "path": "README.md", "side": "old",
+       "startLine": 3, "endLine": 5, "author": "claude",
+       "body": "Two edits here.\n\n```suggestion\nfirst replacement\n```\n\nand\n\n```suggestion\nsecond replacement\n```",
+       "snippet": "Run it like this:\n\n```\nsbnn export\n```"}
+    ]
+  }
+}

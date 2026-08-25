@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -66,6 +68,12 @@ Many at once, for a whole self review:
   ]
   EOF
 
+Each entry carries its own text, so --message, --suggest and --suggest-file
+are refused next to --json: the array is already on stdin, and --suggest -
+would be reading the same stdin the array comes from. Of the rest, --author,
+--diff and --question act as defaults for entries that leave "author",
+"diffId" or "question" out; the side is taken from the entry alone.
+
 Comments made this way are read back exactly like the ones written in the
 browser, with ` + "`sbnn comments`" + `.`,
 	Args:         cobra.MaximumNArgs(1),
@@ -89,6 +97,14 @@ func init() {
 	f.StringVar(&commentDiffID, "diff", "", "Diff ID (default: the newest diff carrying the path)")
 	f.BoolVar(&commentBulk, "json", false, "Read a JSON array of comments from stdin")
 	f.BoolVar(&commentJSONOut, "json-output", false, "Print the stored comments as JSON")
+
+	// --json takes every comment from stdin, so nothing else may read stdin or
+	// claim to hold the one comment's text. Marked in pairs rather than as one
+	// group of four, because --message and --suggest belong together: a
+	// suggestion usually comes with a sentence saying why.
+	commentCmd.MarkFlagsMutuallyExclusive("json", "message")
+	commentCmd.MarkFlagsMutuallyExclusive("json", "suggest")
+	commentCmd.MarkFlagsMutuallyExclusive("json", "suggest-file")
 }
 
 func runComment(cmd *cobra.Command, args []string) error {
@@ -121,22 +137,70 @@ func runComment(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no comment to add")
 	}
 
-	stored := make([]*model.Comment, 0, len(requests))
-	for _, req := range requests {
-		added, err := c.AddComment(ctx, group, req)
-		if err != nil {
-			return err
-		}
-		stored = append(stored, added)
-		if !commentJSONOut {
-			fmt.Fprintf(os.Stderr, "sbnn: %s on %s%s\n", added.ID, added.Path, lineRangeOf(added))
-		}
+	if err := addComments(ctx, c, group, requests, os.Stdout, os.Stderr); err != nil {
+		return err
 	}
 	if commentJSONOut {
-		return jsonEncoder(os.Stdout).Encode(stored)
+		return nil
 	}
 	fmt.Println(server.GroupURL(c.BaseURL(), group))
 	return nil
+}
+
+// commentAdder is the one thing addComments needs from the client.
+type commentAdder interface {
+	AddComment(ctx context.Context, group string, req server.AddCommentRequest) (*model.Comment, error)
+}
+
+// addComments stores the requests one at a time and stops at the first
+// failure. The ones before it are already on the server and stay there, so
+// they are reported before the error goes up: with --json-output nothing has
+// been printed yet, and a caller that saw only the error would re-run the
+// same input and store them a second time.
+func addComments(ctx context.Context, adder commentAdder, group string, requests []server.AddCommentRequest, out, errOut io.Writer) error {
+	stored := make([]*model.Comment, 0, len(requests))
+	for i, req := range requests {
+		added, err := adder.AddComment(ctx, group, req)
+		if err != nil {
+			if len(requests) > 1 {
+				err = fmt.Errorf("comment %d of %d (%s%s): %w",
+					i+1, len(requests), req.Path, requestLines(req), err)
+			}
+			return reportStored(out, errOut, stored, len(requests), err)
+		}
+		stored = append(stored, added)
+		if !commentJSONOut {
+			fmt.Fprintf(errOut, "sbnn: %s on %s%s\n", added.ID, added.Path, lineRangeOf(added))
+		}
+	}
+	if commentJSONOut {
+		return jsonEncoder(out).Encode(stored)
+	}
+	return nil
+}
+
+// reportStored says what survived a run that failed part-way through, so that
+// the rest of it can be sent again without duplicating what is there.
+func reportStored(out, errOut io.Writer, stored []*model.Comment, total int, cause error) error {
+	if len(stored) == 0 {
+		return cause
+	}
+	if commentJSONOut {
+		if err := jsonEncoder(out).Encode(stored); err != nil {
+			return errors.Join(cause, err)
+		}
+	}
+	fmt.Fprintf(errOut,
+		"sbnn: %d of %d comments were stored before this and are still there; send the rest without the first %d entries, or they will be added twice\n",
+		len(stored), total, len(stored))
+	return cause
+}
+
+func requestLines(req server.AddCommentRequest) string {
+	if req.EndLine > req.StartLine {
+		return fmt.Sprintf(":%d-%d", req.StartLine, req.EndLine)
+	}
+	return fmt.Sprintf(":%d", req.StartLine)
 }
 
 func lineRangeOf(c *model.Comment) string {
@@ -207,9 +271,12 @@ type bulkComment struct {
 	Side       string    `json:"side"`
 	Body       string    `json:"body"`
 	Suggestion string    `json:"suggestion"`
-	Question   bool      `json:"question"`
-	Author     string    `json:"author"`
-	DiffID     string    `json:"diffId"`
+	// Question is a pointer so an entry that says "question": false keeps its
+	// false even when --question sets the default for the entries that leave
+	// the field out, the same way an empty "author" falls back to --author.
+	Question *bool  `json:"question"`
+	Author   string `json:"author"`
+	DiffID   string `json:"diffId"`
 }
 
 // flexLines accepts "12", "12-18" and 12 alike.
@@ -304,6 +371,10 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 		if diffID == "" {
 			diffID = commentDiffID
 		}
+		question := commentQuestion
+		if e.Question != nil {
+			question = *e.Question
+		}
 		requests = append(requests, server.AddCommentRequest{
 			DiffID:     diffID,
 			Path:       e.Path,
@@ -312,7 +383,7 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 			StartLine:  start,
 			EndLine:    end,
 			Body:       e.Body,
-			Question:   e.Question || commentQuestion,
+			Question:   question,
 			Suggestion: e.Suggestion,
 		})
 	}

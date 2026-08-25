@@ -8,16 +8,30 @@ import (
 )
 
 // PromptOptions tunes the prompt rendered from review comments.
+//
+// The fields are tagged so that the golden corpus in testdata/prompt can
+// state them in the same JSON any other renderer of this text reads.
 type PromptOptions struct {
 	// IncludeResolved keeps comments that were marked as resolved.
-	IncludeResolved bool
+	IncludeResolved bool `json:"includeResolved,omitempty"`
 	// NoInstruction drops the closing instruction, leaving only the
 	// comments themselves.
-	NoInstruction bool
+	NoInstruction bool `json:"noInstruction,omitempty"`
 }
 
 // Prompt renders the review comments of a group as Markdown meant to be
 // handed to a coding agent.
+//
+// This text has a second renderer: an exported page rebuilds it in the
+// browser, because the reader can add comments to a page that has no server
+// to ask. The two have to agree character for character - an agent handed
+// the copied prompt must not be told to address comments that came with an
+// approval - and prose is easy to let drift. So the exact output is pinned
+// by the golden corpus in testdata/prompt: each case is an input group and
+// the text it must produce, in plain JSON and plain text, so that a renderer
+// written in another language checks itself against the same files.
+// Changing the wording here means regenerating the corpus (go test -update)
+// and bringing the other renderer along.
 func Prompt(g *model.Group, opts PromptOptions) string {
 	var b strings.Builder
 	comments := make([]*model.Comment, 0, len(g.Comments))

@@ -1,10 +1,145 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/tenntenn/sbnn/internal/model"
+	"github.com/tenntenn/sbnn/internal/server"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+// failingAdder stores comments until failAt (1-based), then refuses, the way
+// the server does for an entry naming a path no diff carries.
+type failingAdder struct {
+	failAt int
+	seen   int
+}
+
+func (a *failingAdder) AddComment(_ context.Context, _ string, req server.AddCommentRequest) (*model.Comment, error) {
+	a.seen++
+	if a.failAt > 0 && a.seen == a.failAt {
+		return nil, fmt.Errorf("no diff carries %q", req.Path)
+	}
+	return &model.Comment{
+		ID:        "c" + strconv.Itoa(a.seen),
+		Path:      req.Path,
+		StartLine: req.StartLine,
+		EndLine:   req.EndLine,
+	}, nil
+}
+
+func bulkRequests(paths ...string) []server.AddCommentRequest {
+	requests := make([]server.AddCommentRequest, 0, len(paths))
+	for i, p := range paths {
+		requests = append(requests, server.AddCommentRequest{
+			Path: p, StartLine: i + 1, EndLine: i + 1, Body: "x",
+		})
+	}
+	return requests
+}
+
+// withJSONOut sets the package-level --json-output flag for one test.
+func withJSONOut(t *testing.T, on bool) {
+	t.Helper()
+	was := commentJSONOut
+	commentJSONOut = on
+	t.Cleanup(func() { commentJSONOut = was })
+}
+
+func TestAddCommentsPartialFailureIsReported(t *testing.T) {
+	withJSONOut(t, false)
+	var out, errOut bytes.Buffer
+
+	adder := &failingAdder{failAt: 3}
+	err := addComments(context.Background(), adder, "default",
+		bulkRequests("a.go", "b.go", "gone.go", "d.go"), &out, &errOut)
+	if err == nil {
+		t.Fatal("addComments succeeded, want the third comment to fail")
+	}
+	if !strings.Contains(err.Error(), "comment 3 of 4 (gone.go:3)") {
+		t.Errorf("error is %q, want it to name which entry failed", err)
+	}
+	if !strings.Contains(err.Error(), "no diff carries") {
+		t.Errorf("error is %q, want the server's reason kept", err)
+	}
+	if adder.seen != 3 {
+		t.Errorf("the fourth comment was sent after the failure (%d sent)", adder.seen)
+	}
+	report := errOut.String()
+	if !strings.Contains(report, "2 of 4 comments were stored") {
+		t.Errorf("stderr is %q, want it to say how many are already on the server", report)
+	}
+	if !strings.Contains(report, "added twice") {
+		t.Errorf("stderr is %q, want it to warn that re-running duplicates them", report)
+	}
+}
+
+// The --json-output run is the one that lost everything: nothing is printed
+// until the end, so a failure used to leave the caller with only the error.
+func TestAddCommentsPartialFailurePrintsStoredJSON(t *testing.T) {
+	withJSONOut(t, true)
+	var out, errOut bytes.Buffer
+
+	err := addComments(context.Background(), &failingAdder{failAt: 3}, "default",
+		bulkRequests("a.go", "b.go", "gone.go"), &out, &errOut)
+	if err == nil {
+		t.Fatal("addComments succeeded, want the third comment to fail")
+	}
+	var stored []*model.Comment
+	if err := json.Unmarshal(out.Bytes(), &stored); err != nil {
+		t.Fatalf("stdout is not the JSON of what was stored (%q): %v", out.String(), err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("stdout lists %d stored comments, want the 2 that were written", len(stored))
+	}
+	if stored[0].ID != "c1" || stored[1].ID != "c2" {
+		t.Errorf("stdout lists %q and %q, want the IDs the server gave back", stored[0].ID, stored[1].ID)
+	}
+}
+
+func TestAddCommentsFirstFailureKeepsTheErrorPlain(t *testing.T) {
+	withJSONOut(t, false)
+	var out, errOut bytes.Buffer
+
+	err := addComments(context.Background(), &failingAdder{failAt: 1}, "default",
+		bulkRequests("gone.go"), &out, &errOut)
+	if err == nil {
+		t.Fatal("addComments succeeded, want the only comment to fail")
+	}
+	if got := err.Error(); got != `no diff carries "gone.go"` {
+		t.Errorf("error is %q, want the server's own message for a single comment", got)
+	}
+	if errOut.Len() != 0 {
+		t.Errorf("stderr is %q, want nothing said when nothing was stored", errOut.String())
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout is %q, want nothing printed when nothing was stored", out.String())
+	}
+}
+
+func TestAddCommentsAllStored(t *testing.T) {
+	withJSONOut(t, true)
+	var out, errOut bytes.Buffer
+
+	if err := addComments(context.Background(), &failingAdder{}, "default",
+		bulkRequests("a.go", "b.go"), &out, &errOut); err != nil {
+		t.Fatalf("addComments failed: %v", err)
+	}
+	var stored []*model.Comment
+	if err := json.Unmarshal(out.Bytes(), &stored); err != nil {
+		t.Fatalf("stdout is not JSON (%q): %v", out.String(), err)
+	}
+	if len(stored) != 2 {
+		t.Errorf("stdout lists %d comments, want 2", len(stored))
+	}
+	if errOut.Len() != 0 {
+		t.Errorf("stderr is %q, want nothing next to the JSON", errOut.String())
+	}
+}
 
 func TestFlexLinesUnmarshalJSON(t *testing.T) {
 	t.Parallel()
@@ -192,5 +327,136 @@ func TestReadBulkCommentsOverflowingLine(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "out of range") {
 		t.Errorf("readBulkComments failed with %q, want it to say the line is out of range", err)
+	}
+}
+
+// resetCommentFlags puts the flags that carry state between runs back to their
+// defaults; commentCmd is a package-level singleton, so tests share it.
+func resetCommentFlags(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"json", "message", "suggest", "suggest-file", "author", "diff", "question"} {
+		f := commentCmd.Flags().Lookup(name)
+		if f == nil {
+			t.Fatalf("comment has no --%s flag any more", name)
+		}
+		if err := f.Value.Set(f.DefValue); err != nil {
+			t.Fatalf("cannot reset --%s: %v", name, err)
+		}
+		f.Changed = false
+	}
+}
+
+// TestCommentStdinReaders pins down that nothing else may read stdin while
+// --json is reading the array of comments from it.
+func TestCommentStdinReaders(t *testing.T) {
+	tests := map[string]struct {
+		args    []string
+		wantErr bool
+	}{
+		"json alone":            {args: []string{"--json"}},
+		"suggest from stdin":    {args: []string{"--suggest", "-"}},
+		"message and suggest":   {args: []string{"-m", "reworded", "--suggest", "new text"}},
+		"message alone":         {args: []string{"-m", "hello"}},
+		"json and suggest":      {args: []string{"--json", "--suggest", "-"}, wantErr: true},
+		"json and suggest text": {args: []string{"--json", "--suggest", "x"}, wantErr: true},
+		"json and suggest-file": {args: []string{"--json", "--suggest-file", "new.md"}, wantErr: true},
+		"json and message":      {args: []string{"--json", "-m", "hello"}, wantErr: true},
+
+		// These stay allowed: they are the defaults bulk entries fall back to.
+		"json and author":   {args: []string{"--json", "--author", "claude"}},
+		"json and diff":     {args: []string{"--json", "--diff", "d1"}},
+		"json and question": {args: []string{"--json", "--question"}},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			resetCommentFlags(t)
+			if err := commentCmd.ParseFlags(test.args); err != nil {
+				t.Fatalf("parsing %v failed: %v", test.args, err)
+			}
+			err := commentCmd.ValidateFlagGroups()
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("comment %s was accepted, want it refused as two readers of stdin",
+						strings.Join(test.args, " "))
+				}
+				if !strings.Contains(err.Error(), "none of the others can be") {
+					t.Fatalf("comment %s failed with %q, want the mutually exclusive complaint",
+						strings.Join(test.args, " "), err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("comment %s was refused: %v", strings.Join(test.args, " "), err)
+			}
+		})
+	}
+	resetCommentFlags(t)
+}
+
+// TestCommentHelpNamesBulkDefaults keeps the help honest about which
+// single-comment flags reach a --json entry, which is otherwise guesswork.
+//
+// The strings looked for are ones only the bulk paragraph can supply: --author,
+// --diff and --question appear in the flag list on their own, so matching those
+// alone would still pass with the paragraph deleted.
+func TestCommentHelpNamesBulkDefaults(t *testing.T) {
+	help := commentCmd.Long
+	for _, want := range []string{
+		// The JSON field names, which nothing else in the help mentions.
+		`"author"`,
+		`"diffId"`,
+		`"question"`,
+		// That the three act as defaults, and that the side does not.
+		"act as defaults",
+		"the side is taken from the entry alone",
+		// And that the text-carrying flags are refused rather than ignored.
+		"--message, --suggest and --suggest-file",
+		"refused next to --json",
+	} {
+		if !strings.Contains(help, want) {
+			t.Errorf("the help of --json does not mention %q", want)
+		}
+	}
+}
+
+// TestBulkCommentQuestionDefault pins down that --question fills in the entries
+// that leave "question" out and nothing else: an entry saying false stays a
+// plain comment. It used to be OR-ed in, so --question turned every entry into
+// a question whatever the entry said.
+func TestBulkCommentQuestionDefault(t *testing.T) {
+	tests := map[string]struct {
+		entry string
+		flag  bool
+		want  bool
+	}{
+		"omitted, no flag": {entry: `{"path":"main.go","line":4,"body":"x"}`, want: false},
+		"omitted, flag":    {entry: `{"path":"main.go","line":4,"body":"x"}`, flag: true, want: true},
+		"false, no flag":   {entry: `{"path":"main.go","line":4,"question":false,"body":"x"}`, want: false},
+		"false beats flag": {entry: `{"path":"main.go","line":4,"question":false,"body":"x"}`, flag: true, want: false},
+		"true, no flag":    {entry: `{"path":"main.go","line":4,"question":true,"body":"x"}`, want: true},
+		"true, flag":       {entry: `{"path":"main.go","line":4,"question":true,"body":"x"}`, flag: true, want: true},
+		"null falls back":  {entry: `{"path":"main.go","line":4,"question":null,"body":"x"}`, flag: true, want: true},
+		"null, no flag":    {entry: `{"path":"main.go","line":4,"question":null,"body":"x"}`, want: false},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			resetCommentFlags(t)
+			t.Cleanup(func() { resetCommentFlags(t) })
+			commentQuestion = test.flag
+
+			requests, err := readBulkComments(strings.NewReader("[" + test.entry + "]"))
+			if err != nil {
+				t.Fatalf("reading %s failed: %v", test.entry, err)
+			}
+			if len(requests) != 1 {
+				t.Fatalf("read %d comments from %s, want 1", len(requests), test.entry)
+			}
+			if requests[0].Question != test.want {
+				t.Errorf("%s with --question=%t stored question=%t, want %t",
+					test.entry, test.flag, requests[0].Question, test.want)
+			}
+		})
 	}
 }
