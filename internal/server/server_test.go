@@ -338,7 +338,10 @@ func TestPreviewPrefersWorktreeFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	real := filepath.Join(work, "docs", "new.md")
-	if err := os.WriteFile(real, []byte("# From the working tree\n"), 0o600); err != nil {
+	// The patch is applied here, so the working tree carries the new side
+	// and more of it than the diff does.
+	worktree := "# New\nbody\nonly in the working tree\n"
+	if err := os.WriteFile(real, []byte(worktree), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
