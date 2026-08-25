@@ -109,8 +109,11 @@ func TestAppendAndLoad(t *testing.T) {
 // are. HistoryFile is one file for the machine while a session file is one
 // per port, so several servers writing at once is the ordinary case.
 //
-// The records are far larger than any size a write is promised to be
-// atomic at, so nothing but the lock keeps two of them out of each other.
+// This is the end the log is judged by, not the test that catches the lock
+// going away: on Linux a write(2) to a regular file is serialised by the
+// inode lock, so these records come back whole even with no lock of ours,
+// and the test passes either way. TestAppendWaitsForTheAppendLock is the
+// one that fails when Append stops locking.
 func TestAppendKeepsRecordsWholeUnderConcurrency(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "reviews.jsonl")
 	const writers, each = 8, 25
