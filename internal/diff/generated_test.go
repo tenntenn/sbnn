@@ -29,9 +29,29 @@ func TestGeneratedMarkerReadsJapaneseDeclarations(t *testing.T) {
 			want:    "# このファイルはツールにより自動的に生成されました",
 		},
 		{
-			name:    "do not edit by hand",
+			// "Do not edit" on its own says nothing about where the file
+			// came from, and the English side has never matched it either
+			// - "<!-- do not edit by hand -->" is not a declaration there
+			// and is not one here. A file that only says this is left to
+			// the reader, the same in both languages.
+			name:    "do not edit, with no word about being generated, is not a declaration",
 			content: "<!-- 手動で編集しないこと -->\n<html>",
-			want:    "<!-- 手動で編集しないこと -->",
+			want:    "",
+		},
+		{
+			name:    "the english equivalent is not one either",
+			content: "<!-- do not edit by hand -->\n<html>",
+			want:    "",
+		},
+		{
+			name:    "both halves, in the other order",
+			content: "<!-- 編集しないでください。自動生成されます。 -->\n<html>",
+			want:    "<!-- 編集しないでください。自動生成されます。 -->",
+		},
+		{
+			name:    "a generated file that says so as its predicate",
+			content: "-- 自動生成されたファイルです\nSELECT 1;",
+			want:    "-- 自動生成されたファイルです",
 		},
 		{
 			name:    "editing forbidden",
@@ -140,5 +160,48 @@ func TestVisibleTopIsTheNewSideOfTheFirstHunk(t *testing.T) {
 	}
 	if n := len(strings.Split(diff.VisibleTop(&model.File{Hunks: []*model.Hunk{long}}), "\n")); n != 10 {
 		t.Errorf("VisibleTop returned %d lines, want 10", n)
+	}
+}
+
+// Every one of these is hand-written Japanese that mentions generating or
+// editing, and folding any of them would hide code from a review. They are
+// the reason the two halves of a declaration are required together: the
+// English patterns have always wanted "generated" *and* "do not edit", and
+// a Japanese file gets the same reading rather than a looser one.
+func TestGeneratedMarkerDoesNotFoldJapanesePros(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		line string
+	}{
+		{"a package saying what it generates", "// Package gen はテンプレートから Go のコードを自動生成する。"},
+		{"a comment about generated code", "// 自動生成されたコードが正しいかを検証する。"},
+		{"a UI label", "\tLabelReadOnly = \"編集不可\""},
+		{"a changelog entry", "- 自動生成のロジックを見直した"},
+		{"documentation saying the opposite", "設定ファイルは自動生成されません。手で書いてください。"},
+		{"a translation string", "\t\"locked\": \"編集しないでください\","},
+		{"a step in a how-to", "1. 自動生成を有効にする"},
+		{"a generator talking about its own output", "// このファイルの生成ロジックを見直す"},
+		{"this file as an object, not the subject", "// 生成器はこのファイルを読む。"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := diff.GeneratedMarker(tt.line); got != "" {
+				t.Errorf("GeneratedMarker(%q) = %q, want \"\" - it is hand-written", tt.line, got)
+			}
+		})
+	}
+}
+
+// The English half of the same asymmetry: none of these is a declaration
+// either, so the Japanese ones above are not being held to a stricter rule.
+func TestGeneratedMarkerDoesNotFoldEnglishProse(t *testing.T) {
+	for _, line := range []string{
+		"// Package gen generates Go code from templates.",
+		"// Verifies that generated code is correct.",
+		"- reworked the code generation logic",
+		"\tLabelReadOnly = \"read only\"",
+	} {
+		if got := diff.GeneratedMarker(line); got != "" {
+			t.Errorf("GeneratedMarker(%q) = %q, want \"\"", line, got)
+		}
 	}
 }
