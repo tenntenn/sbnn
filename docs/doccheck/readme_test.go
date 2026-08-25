@@ -118,7 +118,7 @@ var flagDecl = regexp.MustCompile(`^\s+(?:-([a-zA-Z]), )?--([a-zA-Z][a-zA-Z0-9-]
 func parseFlags(help string) map[string]bool {
 	flags := map[string]bool{}
 	inBlock := false
-	for _, line := range strings.Split(help, "\n") {
+	for line := range strings.SplitSeq(help, "\n") {
 		switch {
 		case line == "Flags:" || line == "Global Flags:":
 			inBlock = true
@@ -147,7 +147,7 @@ func parseFlags(help string) map[string]bool {
 func parseCommands(help string) []string {
 	var names []string
 	inBlock := false
-	for _, line := range strings.Split(help, "\n") {
+	for line := range strings.SplitSeq(help, "\n") {
 		if line == "Available Commands:" {
 			inBlock = true
 			continue
