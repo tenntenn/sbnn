@@ -11,25 +11,35 @@ import (
 
 const appName = "sbnn"
 
+// stateBase returns the parent directory of the sbnn state directory for the
+// given GOOS.
+//
+// $XDG_STATE_HOME wins everywhere when it is set, so it is an escape hatch on
+// macOS and Windows too. Otherwise macOS and Windows get the directory the OS
+// keeps per-user application data in (~/Library/Application Support, %AppData%)
+// rather than an XDG path, and everything else gets the XDG default.
+func stateBase(goos string) (string, error) {
+	if v := os.Getenv("XDG_STATE_HOME"); v != "" {
+		return v, nil
+	}
+	if goos == "windows" || goos == "darwin" {
+		return os.UserConfigDir()
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "state"), nil
+}
+
 // StateDir returns the directory holding the session state, creating it if
-// needed. It follows the XDG base directory specification on Unix.
+// needed. It is $XDG_STATE_HOME/sbnn when that variable is set, and otherwise
+// follows the platform convention: ~/.local/state/sbnn on Unix,
+// ~/Library/Application Support/sbnn on macOS, %AppData%\sbnn on Windows.
 func StateDir() (string, error) {
-	var base string
-	switch {
-	case os.Getenv("XDG_STATE_HOME") != "":
-		base = os.Getenv("XDG_STATE_HOME")
-	case runtime.GOOS == "windows" || runtime.GOOS == "darwin":
-		dir, err := os.UserConfigDir()
-		if err != nil {
-			return "", err
-		}
-		base = dir
-	default:
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		base = filepath.Join(home, ".local", "state")
+	base, err := stateBase(runtime.GOOS)
+	if err != nil {
+		return "", err
 	}
 	dir := filepath.Join(base, appName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -60,7 +70,9 @@ func HistoryFile() (string, error) {
 }
 
 // CacheDir returns the directory for files sbnn generates, such as the
-// Markdown reconstructed from a diff and handed to mo.
+// Markdown reconstructed from a diff and handed to mo. It is the platform
+// cache directory: $XDG_CACHE_HOME/sbnn or ~/.cache/sbnn on Unix,
+// ~/Library/Caches/sbnn on macOS, %LocalAppData%\sbnn on Windows.
 func CacheDir() (string, error) {
 	base, err := os.UserCacheDir()
 	if err != nil {

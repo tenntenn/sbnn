@@ -7,6 +7,32 @@ diff viewer and reviewer. The name reads "sabun" — 差分, Japanese for "diff"
 on the left, a Markdown preview on the right, and review comments you can read
 back from the command line.
 
+## Contents
+
+- [Install](#install)
+- [Usage](#usage)
+  - [Groups](#groups)
+  - [Stacked pull requests](#stacked-pull-requests)
+  - [Reviewing](#reviewing)
+  - [Folding away what nobody reads](#folding-away-what-nobody-reads)
+  - [Comments from an agent](#comments-from-an-agent)
+  - [Finishing a review](#finishing-a-review)
+  - [Waiting, and being woken up](#waiting-and-being-woken-up)
+  - [Reading the comments back](#reading-the-comments-back)
+  - [Approve, comment, or request changes](#approve-comment-or-request-changes)
+  - [Reviewing without a browser](#reviewing-without-a-browser)
+  - [Putting it in a pipeline](#putting-it-in-a-pipeline)
+- [Looking back at reviews](#looking-back-at-reviews)
+- [Exporting a review](#exporting-a-review)
+- [Agent skill](#agent-skill)
+  - [Installing the skill](#installing-the-skill)
+  - [Checking that it took](#checking-that-it-took)
+- [Command and flag reference](#command-and-flag-reference)
+- [How the Markdown preview works](#how-the-markdown-preview-works)
+- [Files and ports](#files-and-ports)
+- [Development](#development)
+- [License](#license)
+
 ![sbnn showing a diff on the left and its Markdown preview on the right](docs/screenshot.png)
 
 It is inspired by [difit](https://github.com/yoshiko-pg/difit), with a few
@@ -32,17 +58,33 @@ deliberate differences:
 $ go install github.com/tenntenn/sbnn@latest
 ```
 
-sbnn renders the Markdown preview itself, so nothing else is needed.
-[mo](https://github.com/k1LoW/mo) renders a richer preview for those who
-install it — pick it in the preview header once it is on PATH:
+That is the whole installation. sbnn is one binary with the review page built
+into it, and it renders the Markdown preview itself, so nothing else has to be
+on PATH before you pipe a diff into it.
+
+sbnn is built with the Go version `go.mod` names, `go 1.27.0`. Your own Go does
+not have to be that new: since Go 1.21 the default `GOTOOLCHAIN=auto` fetches
+whatever toolchain a module asks for, so the command above works on an older Go
+and says so as it goes:
 
 ```console
-$ brew install k1LoW/tap/mo
+$ go install github.com/tenntenn/sbnn@latest
+go: github.com/tenntenn/sbnn@v0.0.0-... requires go >= 1.27.0; switching to go1.27.0
 ```
 
-or download it from the [mo releases page](https://github.com/k1LoW/mo/releases).
-`go install` does not work for mo: its published module does not carry the
-embedded frontend.
+It stops only if you have set `GOTOOLCHAIN=local`, or you are on Go 1.20 or
+earlier, in which case the message names both the version wanted and the one you
+are running:
+
+```console
+$ GOTOOLCHAIN=local go install github.com/tenntenn/sbnn@latest
+go: github.com/tenntenn/sbnn@latest: ... requires go >= 1.27.0 (running go 1.24.7; GOTOOLCHAIN=local)
+```
+
+Upgrade Go to the version that line asks for, or leave `GOTOOLCHAIN` at its
+default and let it fetch that toolchain for you.
+
+Building from source this way is the only way to install sbnn today.
 
 ## Usage
 
@@ -164,7 +206,11 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   remembered. The preview shows the working tree file when it
   exists; otherwise sbnn rebuilds the new side from the diff, which is
   complete for new files and partial for modified ones (a unified diff only
-  carries the changed hunks).
+  carries the changed hunks). A partial rebuild says **partial** in its
+  header, and each stretch the diff does not carry is marked in the Markdown
+  itself, as a rule and a line saying how many lines are not there. Nothing
+  is written into a notebook that way: it is JSON, and sbnn's own sentence in
+  the middle of it would be the reason it could not be shown at all.
 - **Sync** makes the preview follow the diff as you scroll, by fraction
   rather than by line — the two documents do not agree on lines, and
   pretending they do lands you in the wrong place with more confidence.
@@ -200,18 +246,49 @@ $ git diff | sbnn --collapse "$(git ls-files ':(attr:linguist-generated)' | past
 ```
 
 Patterns work like `.gitignore`: no slash matches the name at any depth,
-`**` is any run of directories, and one `--collapse` can carry a
-comma-separated list. sbnn matches them and reads nothing into them — it does
-not know what a generated file is, and does not read `.gitattributes`
-itself, because that would be sbnn knowing about git.
+`**` is any run of directories, and a trailing `dir/**` names what is inside
+`dir` rather than `dir` itself — `--collapse 'web/dist'` folds nothing, where
+`--collapse 'web/dist/**'` folds everything under it. sbnn matches them and
+reads nothing into them — it does not know what a generated file is, and does
+not read `.gitattributes` itself, because that would be sbnn knowing about
+git.
+
+One `--collapse` can carry a list, and it is split on two separators: a comma
+and a newline. `--collapse 'go.sum,web/dist/**'` is two patterns; so is
+`--collapse "$(cat .sbnnignore)"` for a file holding one pattern per line,
+which is the separator worth reaching for — it hands a whole file to sbnn
+without a loop. The flag also repeats, so a list can be kept apart instead of
+joined.
+
+The comma costs a filename. A path containing one cannot be written as a
+pattern at all: `--collapse 'docs/a,b.md'` becomes `docs/a` and `b.md`, and
+neither matches anything. Repeating the flag does not rescue it, because
+every value is split the same way — write the comma as the single-character
+wildcard instead, `--collapse 'docs/a?b.md'`, or fold the file by hand.
 
 **The file says so.** A file carrying `// Code generated by … DO NOT EDIT.`
 or `@generated` near its top is declaring itself, in a line its generator
-wrote precisely so tools would leave it alone. sbnn shows which line it found:
+wrote precisely so tools would leave it alone. The same declaration written
+in Japanese counts too, because a generated file does not become less
+generated for saying so in Japanese: a line that says both that the file was
+generated (`自動生成`, `自動的に生成`, `generated`) and that it should not be
+edited (`編集しないでください`, `編集不可`, `変更禁止`) is read the same way the
+English one is. Either half on its own is ordinary prose — `テンプレートから
+コードを自動生成する` is a package saying what it does, `編集不可` is a UI
+label — and folding on one of them alone would hide hand-written code from
+the review. The English patterns have always wanted both halves too.
+
+`このファイルは…生成されました` and `自動生成されたファイルです` need no second
+half: naming this very file as the thing that was generated is the
+declaration. sbnn shows which line it found:
 
 ```
 Folded — the file says so: // Code generated by protoc-gen-go. DO NOT EDIT.
+Folded — the file says so: // このファイルは自動生成されています。編集しないでください。
 ```
+
+`@generated` is still the portable answer, understood by GitHub and others
+as well as by sbnn, and worth emitting from generators you control.
 
 Nothing is folded on size, path or extension. Those would be sbnn guessing
 about a project it knows nothing about, and a file folded for a bad reason
@@ -474,7 +551,7 @@ agent that can read an instruction file can use it.
 The source is [`skills/sbnn/SKILL.md`](skills/sbnn/SKILL.md) and it is embedded in
 the binary, so the copy you install always matches the sbnn you are running.
 
-### Installing it
+### Installing the skill
 
 ```console
 $ sbnn skill                          # print SKILL.md to stdout
@@ -520,6 +597,30 @@ comments with `sbnn comments`. If it does not, most agents need the skill
 directory to be picked up at session start, so start a new session after
 installing.
 
+## Command and flag reference
+
+The rest of this README introduces flags where they earn their place in a
+story. This table is the other way round, for when you know what you want and
+only need the name. It is not the full list: that is in `sbnn --help` and in
+`sbnn <command> --help` for each command below.
+
+Every command that talks to the server also takes `--port` (`-p`), `--bind`
+(`-b`) and `--target` (`-t`). `--target` falls back to `$SBNN_TARGET` and then
+to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
+
+| Command | What it does | Flags worth knowing |
+| --- | --- | --- |
+| `sbnn` | Read a diff on stdin and serve it | `--title`, `--label key=value`, `--open` / `--no-open`, `--foreground`, `--on-review`, `--on-review-url`, `--history-file`, `--json` |
+| `sbnn` on the running server | Act on the server instead of adding a diff | `--status`, `--restart`, `--shutdown`, `--clear`, `--clear --all` |
+| `sbnn comments` | Print the comments left in the browser | `--format` (`prompt`, `markdown`, `json`), `--json`, `--clear`, `--include-resolved`, `--exit-code`, `--quiet` (`-q`) |
+| `sbnn comment path:line[-line]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--json` |
+| `sbnn submit` | End the round, as the Submit button does | `--note` (`-m`), `--verdict` (`approved`, `commented`, `changes-requested`), `--approve`, `--request-changes`, `--exit-code`, `--quiet` |
+| `sbnn wait` | Block until the review is submitted, then print it | `--timeout`, `--format`, `--json`, `--exit-code`, `--quiet` |
+| `sbnn hook` | Run something when a review is submitted | `--on-review`, `--on-review-url`, `--clear`, `--json` |
+| `sbnn reviews` | Read the log of submitted reviews | `--since`, `--stats`, `--top`, `--limit`, `--comments`, `--all`, `--file`, `--history-file`, `--format` (`text`, `json`, `jsonl`) |
+| `sbnn export [file]` | Write the review as one self-contained HTML page | `--fragment`, `--page-title`, `--title` |
+| `sbnn skill` | Print or install the agent skill | `--list`, `--install`, `--force` |
+
 ## How the Markdown preview works
 
 By default sbnn asks itself for the file's Markdown and renders it in the page
@@ -543,6 +644,16 @@ Note that mo cannot be used as a Go library today: everything but its cobra
 entry point lives under `internal/`, and the published module does not build
 because the embedded frontend is not part of it.
 
+Installing mo is a package-manager step rather than a `go install`:
+
+```console
+$ brew install k1LoW/tap/mo
+```
+
+or download it from the [mo releases page](https://github.com/k1LoW/mo/releases).
+`go install` does not work for mo: its published module does not carry the
+embedded frontend. Once mo is on PATH, pick it in the preview header.
+
 ## Files and ports
 
 | What | Where |
@@ -550,10 +661,23 @@ because the embedded frontend is not part of it.
 | sbnn server | `localhost:6280` (`--port`) |
 | mo server | `localhost:6275` (`--mo-port`) |
 | Preview proxy | a loopback port picked at startup |
-| Session state (diffs, comments, hooks) | `$XDG_STATE_HOME/sbnn/session-<port>.json` |
-| Server log | `$XDG_STATE_HOME/sbnn/server-<port>.log` |
-| Rebuilt previews | `$XDG_CACHE_HOME/sbnn/preview/…` |
+| Session state (diffs, comments, hooks) | `<state>/session-<port>.json` |
+| Server log | `<state>/server-<port>.log` |
+| Review log | `<state>/reviews.jsonl` (`--history-file`, `$SBNN_HISTORY`) |
+| Rebuilt previews | `<cache>/preview/…` |
 | Exported pages | wherever you point `sbnn export` |
+
+`<state>` and `<cache>` are not the same directory on every platform:
+
+| Platform | `<state>` | `<cache>` |
+| --- | --- | --- |
+| Linux, BSD | `$XDG_STATE_HOME/sbnn`, or `~/.local/state/sbnn` | `$XDG_CACHE_HOME/sbnn`, or `~/.cache/sbnn` |
+| macOS | `~/Library/Application Support/sbnn` | `~/Library/Caches/sbnn` |
+| Windows | `%AppData%\sbnn` | `%LocalAppData%\sbnn` |
+
+`$XDG_STATE_HOME` takes precedence on every platform when it is set, so
+exporting it on macOS or Windows moves the state directory there. `$XDG_CACHE_HOME`
+is the exception: it is only consulted on Linux and BSD.
 
 sbnn binds to loopback and has no authentication; `--dangerously-allow-remote-access`
 is required to bind anywhere else.
@@ -561,7 +685,9 @@ is required to bind anywhere else.
 ## Development
 
 The UI is React + Vite, embedded into the binary with `go:embed`. The built
-assets are committed so that `go install` needs no Node.
+assets in `web/dist` are committed so that `go install` needs no Node — which
+means you must run `task web` and commit them yourself whenever you change
+anything under `web/src`.
 
 Tools are managed with [aqua](https://aquaproj.github.io/); run `aqua install`
 to get `task`.
@@ -569,8 +695,12 @@ to get `task`.
 ```console
 $ task build     # pnpm build in web/, then go build
 $ task test      # go test ./...
+$ task lint      # go vet, a gofmt check, go fix -diff, and go mod tidy with no diff
 $ task dev       # sbnn in the foreground plus the Vite dev server
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, the `web/dist` rule
+in full, and what a good pull request looks like here.
 
 ## License
 

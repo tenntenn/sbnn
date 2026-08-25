@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -108,5 +109,66 @@ func TestMoProxyRewritesURLs(t *testing.T) {
 	other := "http://example.com/page"
 	if got := proxy.rewrite(other); got != other {
 		t.Errorf("rewrite(%q) = %q", other, got)
+	}
+}
+
+func TestSameEndpoint(t *testing.T) {
+	tests := map[string]struct {
+		a, b string
+		want bool
+	}{
+		"identical":                 {"http://localhost:6275/x", "http://localhost:6275", true},
+		"loopback spellings":        {"http://127.0.0.1:6275/x", "http://localhost:6275", true},
+		"ipv6 loopback":             {"http://[::1]:6275/x", "http://localhost:6275", true},
+		"no port against http 80":   {"http://localhost/x", "http://localhost:80", true},
+		"http 80 against no port":   {"http://127.0.0.1:80/x", "http://localhost", true},
+		"both without a port":       {"http://localhost/x", "http://127.0.0.1", true},
+		"no port against https 443": {"https://example.com/x", "https://example.com:443", true},
+		"different port":            {"http://localhost/x", "http://localhost:6275", false},
+		"different scheme default":  {"http://example.com/x", "https://example.com", false},
+		"different host":            {"http://example.com/x", "http://localhost:80", false},
+		"unknown scheme alike":      {"ftp://localhost/x", "ftp://localhost", true},
+		"unknown scheme port":       {"ftp://localhost:21/x", "ftp://localhost", false},
+		"relative url":              {"/sbnn-default?file=abc", "http://localhost:6275", false},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			a, err := url.Parse(tt.a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := url.Parse(tt.b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := sameEndpoint(a, b); got != tt.want {
+				t.Errorf("sameEndpoint(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMoProxyRewritesURLsWithoutAnExplicitPort(t *testing.T) {
+	tests := map[string]struct {
+		target string
+		raw    string
+	}{
+		"mo reports no port":       {"http://localhost:80", "http://localhost/sbnn-default?file=abc"},
+		"mo is configured no port": {"http://localhost", "http://127.0.0.1:80/sbnn-default?file=abc"},
+		"both sides omit the port": {"http://localhost", "http://localhost/sbnn-default?file=abc"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			proxy, err := newMoProxy(tt.target, "http://localhost:6280")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer proxy.close()
+
+			got := proxy.rewrite(tt.raw)
+			if !strings.HasPrefix(got, proxy.baseURL) || !strings.HasSuffix(got, "/sbnn-default?file=abc") {
+				t.Errorf("rewrite(%q) = %q, want it moved onto %s", tt.raw, got, proxy.baseURL)
+			}
+		})
 	}
 }
