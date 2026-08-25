@@ -168,7 +168,7 @@ func init() {
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
 	f.StringVar(&title, "title", "", "Title of the diff (defaults to a generated name)")
 	f.StringArrayVar(&labelFlags, "label", nil,
-		"key=value kept with the diff, repeatable; sbnn stores it and reads nothing into it")
+		"key=value kept with the diff, repeatable once per key; spaces around the key and the value are dropped, and a repeated key is an error")
 	f.StringArrayVar(&collapseFlags, "collapse", nil,
 		"Fold files matching this pattern, repeatable (gitignore-style: go.sum, web/dist/**)")
 	f.BoolVar(&openBrowser, "open", false, "Always open the browser")
@@ -521,15 +521,25 @@ func readStdin() (string, error) {
 // parseLabels reads repeated key=value flags. The values are whatever the
 // sender wanted to remember - a revision, a branch, a ticket - and sbnn keeps
 // them without reading anything into them.
+//
+// A key may be given once. Labels are how a review is tied back to a PR or a
+// revision, so silently keeping one of two values is worse than refusing the
+// pair. An empty value stays legal; only an empty key is not.
 func parseLabels(flags []string) (map[string]string, error) {
 	if len(flags) == 0 {
 		return nil, nil
 	}
 	labels := make(map[string]string, len(flags))
 	for _, flag := range flags {
+		// Cut first, then trim: cutting on the first = is what lets a value
+		// hold one of its own ("a=b=c" is a -> b=c).
 		key, value, ok := strings.Cut(flag, "=")
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
 		if !ok || key == "" {
 			return nil, fmt.Errorf("--label wants key=value, got %q", flag)
+		}
+		if _, dup := labels[key]; dup {
+			return nil, fmt.Errorf("--label %q was given more than once", key)
 		}
 		labels[key] = value
 	}

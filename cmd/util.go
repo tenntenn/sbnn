@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/pkg/browser"
@@ -49,6 +51,28 @@ func groupName(flag string) (string, error) {
 		flag = os.Getenv(TargetEnv)
 	}
 	return server.ValidateGroupName(flag)
+}
+
+// outputFormats are the shapes a review can be printed in, in the order the
+// flag help lists them.
+var outputFormats = []string{"prompt", "markdown", "json"}
+
+// resolveFormat folds --format and the --json shorthand into one name, and
+// says so straight away when the name is not one sbnn knows. It is meant to
+// be called before a command does any work: "sbnn wait" blocks for as long
+// as the review takes, and a format it cannot print is worth knowing about
+// before the wait rather than after it.
+//
+// --format is checked even when --json overrides it, because a --format
+// nobody reads is a typo either way.
+func resolveFormat(format string, asJSON bool) (string, error) {
+	if !slices.Contains(outputFormats, format) {
+		return "", fmt.Errorf("unknown format %q: use prompt, markdown or json", format)
+	}
+	if asJSON {
+		return "json", nil
+	}
+	return format, nil
 }
 
 func jsonEncoder(w io.Writer) *json.Encoder {
