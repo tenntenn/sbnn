@@ -9,12 +9,16 @@ package history
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path"
+	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,19 +114,35 @@ func FromGroup(g *model.Group) Record {
 
 // Append writes a record to the log, one JSON object per line so that the
 // file stays readable by anything, sbnn included.
+//
+// The log is one file for the whole machine while a session file is one
+// per port, so several servers appending at once is the ordinary case, not
+// a corner. O_APPEND alone only settles where a write starts, not that it
+// arrives in one piece: a record carrying comment bodies and their
+// snippets is far past any size a write is promised to be atomic at, and
+// two of them landing inside one another make a line that no longer
+// parses - a review that quietly vanishes from sbnn reviews, since Read
+// skips what it cannot read. So the write is made under an exclusive
+// advisory lock on the file.
 func Append(path string, rec Record) error {
 	if path == "" {
 		return nil
+	}
+	// Marshalled before the lock is taken: the lock is for the write.
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	b, err := json.Marshal(rec)
+	unlock, err := lockForAppend(f)
 	if err != nil {
-		return err
+		return fmt.Errorf("locking %s: %w", path, err)
 	}
+	defer unlock()
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		return err
 	}
@@ -139,49 +159,145 @@ type Filter struct {
 	Limit int
 }
 
-// Load reads the log, oldest first, applying a filter.
+// MaxRecordBytes is how long a line may be and still be read as a record.
+// A review of a generated file, where every comment carries its snippet,
+// can run to megabytes; past this the line is skipped, the way an
+// unparseable one is.
+const MaxRecordBytes = 8 << 20
+
+// Skipped is what a read had to leave out. A log is worth reading even
+// when part of it cannot be, so these are counted and handed back rather
+// than raised: the reader gets the records that are there, plus something
+// honest to say about the ones that are not.
+type Skipped struct {
+	// Broken is lines that were not a record.
+	Broken int
+	// Long is lines that ran past MaxRecordBytes.
+	Long int
+}
+
+// Any reports whether anything was left out.
+func (s Skipped) Any() bool { return s.Broken > 0 || s.Long > 0 }
+
+// String says what was left out, ready to put in a notice.
+func (s Skipped) String() string {
+	var parts []string
+	if s.Broken > 0 {
+		parts = append(parts, fmt.Sprintf("%d unreadable line(s)", s.Broken))
+	}
+	if s.Long > 0 {
+		parts = append(parts, fmt.Sprintf("%d line(s) over %d MiB", s.Long, MaxRecordBytes>>20))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// Load reads the log, oldest first, applying a filter. Lines it cannot use
+// are skipped; LoadSkipped says how many there were.
 func Load(path string, f Filter) ([]Record, error) {
+	records, _, err := LoadSkipped(path, f)
+	return records, err
+}
+
+// LoadSkipped is Load, also reporting what it had to skip.
+func LoadSkipped(path string, f Filter) ([]Record, Skipped, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, Skipped{}, nil
 		}
-		return nil, err
+		return nil, Skipped{}, err
 	}
 	defer file.Close()
-	return Read(file, f)
+	return ReadSkipped(file, f)
 }
 
-// Read parses a log.
+// Read parses a log, skipping the lines it cannot use.
 func Read(r io.Reader, f Filter) ([]Record, error) {
+	records, _, err := ReadSkipped(r, f)
+	return records, err
+}
+
+// ReadSkipped is Read, also reporting what it had to skip. Only a failure
+// of the underlying reader is an error: a line that is not a record, or is
+// too long to be one, costs that line and nothing else.
+func ReadSkipped(r io.Reader, f Filter) ([]Record, Skipped, error) {
 	var records []Record
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64<<10), 8<<20)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+	var skipped Skipped
+	br := bufio.NewReaderSize(r, 64<<10)
+	for {
+		line, long, err := readLine(br)
+		switch {
+		case long:
+			skipped.Long++
+		case len(bytes.TrimSpace(line)) == 0:
+			// A blank line is not a record and not a complaint.
+		default:
+			var rec Record
+			if jerr := json.Unmarshal(bytes.TrimSpace(line), &rec); jerr != nil {
+				skipped.Broken++
+			} else if keep(rec, f) {
+				records = append(records, rec)
+			}
 		}
-		var rec Record
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			// A broken line is skipped rather than losing the whole log.
-			continue
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, skipped, err
 		}
-		if f.Group != "" && rec.Group != f.Group {
-			continue
-		}
-		if !f.Since.IsZero() && rec.ReviewedAt.Before(f.Since) {
-			continue
-		}
-		records = append(records, rec)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
 	}
 	if f.Limit > 0 && len(records) > f.Limit {
 		records = records[len(records)-f.Limit:]
 	}
-	return records, nil
+	return records, skipped, nil
+}
+
+// keep says whether a record survives the filter.
+func keep(rec Record, f Filter) bool {
+	if f.Group != "" && rec.Group != f.Group {
+		return false
+	}
+	if !f.Since.IsZero() && rec.ReviewedAt.Before(f.Since) {
+		return false
+	}
+	return true
+}
+
+var newline = []byte("\n")
+
+// readLine reads one newline-terminated line. A line past MaxRecordBytes is
+// drained to its end and reported with long set, so that the lines after it
+// are still read - which bufio.Scanner cannot do, since it stops the whole
+// scan at the first line that outgrows its buffer.
+func readLine(br *bufio.Reader) (line []byte, long bool, err error) {
+	for {
+		chunk, rerr := br.ReadSlice('\n')
+		if rerr == bufio.ErrBufferFull {
+			// ReadSlice hands back the buffer itself, so keeping any of it
+			// means copying it out.
+			if !long && len(line)+len(chunk) <= MaxRecordBytes {
+				line = append(line, chunk...)
+				continue
+			}
+			long, line = true, nil
+			continue
+		}
+		if !long {
+			line = append(line, chunk...)
+			// The terminator is not part of the record.
+			if len(bytes.TrimSuffix(line, newline)) > MaxRecordBytes {
+				long, line = true, nil
+			}
+		}
+		if rerr != nil {
+			// io.EOF, with whatever came before it, or a read failure.
+			if rerr == io.EOF && !long && len(line) == 0 {
+				return nil, false, io.EOF
+			}
+			return line, long, rerr
+		}
+		return line, long, nil
+	}
 }
 
 // CommentRecord is one comment standing on its own: what was said, plus as
@@ -240,6 +356,15 @@ type Stats struct {
 	Deletions   int `json:"deletions"`
 	// Silent is how many reviews were submitted with nothing to say.
 	Silent int `json:"silent"`
+	// Approved, Commented and ChangesRequested are how many reviews
+	// decided each way. Counting comments does not answer what a review
+	// decided - an approval can carry three comments and a request for
+	// changes can carry none - which is the whole reason a verdict is
+	// written down, so a summary that leaves it out cannot be read for the
+	// one thing each review was for.
+	Approved         int `json:"approved"`
+	Commented        int `json:"commented"`
+	ChangesRequested int `json:"changesRequested"`
 	// CommentsPerReview is the mean, kept as a float on purpose: 2.8 says
 	// more than 3.
 	CommentsPerReview float64 `json:"commentsPerReview"`
@@ -267,6 +392,17 @@ func Summarize(records []Record) Stats {
 		s.Deletions += rec.Deletions
 		if len(rec.Comments) == 0 {
 			s.Silent++
+		}
+		// A record written before the verdict was recorded has an empty
+		// one, which reads as "commented" - the default ParseVerdict and
+		// the API already apply - so an old log is counted, not dropped.
+		switch rec.Verdict {
+		case model.VerdictApproved:
+			s.Approved++
+		case model.VerdictChangesRequested:
+			s.ChangesRequested++
+		default:
+			s.Commented++
 		}
 		if s.First.IsZero() || rec.ReviewedAt.Before(s.First) {
 			s.First = rec.ReviewedAt
@@ -318,7 +454,7 @@ func median(values []time.Duration) time.Duration {
 	if len(values) == 0 {
 		return 0
 	}
-	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	slices.Sort(values)
 	mid := len(values) / 2
 	if len(values)%2 == 1 {
 		return values[mid]
@@ -342,15 +478,20 @@ func tally(counts map[string]int) []Count {
 	return out
 }
 
-// ParseSince reads "7d", "36h", "90m" or an RFC3339 date as a starting point.
+// daysRE matches the "7d" form whole, so that "7days" or "7d3h" - which
+// plainly mean something other than seven days - are refused rather than
+// silently read as the part before the first "d".
+var daysRE = regexp.MustCompile(`^([0-9]+)d$`)
+
+// ParseSince reads "7d", "36h", "90m" or an RFC3339 date as a starting
+// point. A date without a zone is read in the local zone.
 func ParseSince(s string, now time.Time) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return time.Time{}, nil
 	}
-	if strings.HasSuffix(s, "d") {
-		var days int
-		if _, err := fmt.Sscanf(s, "%dd", &days); err == nil && days > 0 {
+	if m := daysRE.FindStringSubmatch(s); m != nil {
+		if days, err := strconv.Atoi(m[1]); err == nil && days > 0 {
 			return now.AddDate(0, 0, -days), nil
 		}
 	}
@@ -358,7 +499,11 @@ func ParseSince(s string, now time.Time) (time.Time, error) {
 		return now.Add(-d), nil
 	}
 	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
-		if t, err := time.Parse(layout, s); err == nil {
+		// In the reviewer's own zone: everything the reviews output shows
+		// is formatted with .Local(), so a bare date has to start where
+		// that date starts on their clock, not nine hours into it. An
+		// RFC3339 string carries its own offset and is unaffected.
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
 			return t, nil
 		}
 	}

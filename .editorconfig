@@ -1,0 +1,32 @@
+# Matches what this repository actually contains: Go is tabs (gofmt), and
+# everything under web/ - TypeScript, CSS, HTML, JSON - is two spaces, as is
+# the YAML.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.go]
+indent_style = tab
+
+[Makefile]
+indent_style = tab
+
+[*.md]
+# Two trailing spaces are a line break in Markdown.
+trim_trailing_whitespace = false
+
+# Generated. web/dist is committed but built by `task web`; node_modules is
+# not ours at all.
+[web/dist/**]
+insert_final_newline = false
+trim_trailing_whitespace = false
+
+[web/node_modules/**]
+insert_final_newline = false
+trim_trailing_whitespace = false

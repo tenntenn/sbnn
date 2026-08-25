@@ -3,8 +3,16 @@ import type { Comment, Diff, FileDiff, Hunk, Line, ViewMode } from '../types'
 import { filePath } from '../types'
 import { client } from '../client'
 import { wordDiff } from '../wordDiff'
+import {
+  ensureHighlightStyles,
+  highlightLine,
+  languageOf,
+  tokenClass,
+  type LanguageId,
+} from '../highlight'
 import { CommentForm, CommentThread } from './CommentThread'
 import { Icon } from './Icon'
+import { foldLabel } from '../foldLabel'
 
 interface Props {
   group: string
@@ -18,6 +26,11 @@ interface Props {
    * already forced open when the file carries comments) - this component
    * only renders it, it does not decide it. */
   folded: boolean
+  /** foldedByReader says the fold standing on this file is one the reader
+   * performed here, keyed by sectionKey, rather than one the sender asked
+   * for with --collapse. The two read the same on screen but have very
+   * different explanations, and only the sender's comes with a reason. */
+  foldedByReader?: boolean
   onSetFolded: (value: boolean) => void
   /** viewMode is likewise resolved by the caller (an override, or the
    * server's default); a file locked to unified ignores it. */
@@ -26,6 +39,13 @@ interface Props {
 }
 
 type Side = 'new' | 'old'
+
+/** GUTTER_FOCUS is the ring a focused line number wears: the one the
+ * buttons wear, drawn inside the cell so the narrow gutter keeps it. */
+const GUTTER_FOCUS = {
+  outline: 'var(--border-width-marker) solid var(--accent-border)',
+  outlineOffset: 'calc(var(--border-width-marker) * -1)',
+}
 
 interface Selection {
   side: Side
@@ -57,6 +77,44 @@ function marker(kind: Line['kind']): string {
   }
 }
 
+/** nextSelection is what picking `line` on `side` does to the range that
+ * stands. Only an explicit extend - the shift key, or a drag across the
+ * gutter - grows it; a plain pick always starts a new one-line range, so a
+ * reader who wants a different line can simply click it instead of having to
+ * dismiss the draft first. */
+export function nextSelection(
+  current: Selection | null,
+  side: Side,
+  line: number,
+  extend: boolean,
+): Selection {
+  if (extend && current && current.side === side) {
+    if (line < current.start) return { ...current, start: line }
+    return { ...current, end: line }
+  }
+  return { side, start: line, end: line }
+}
+
+/** DRAG_SLOP is how far, in CSS pixels, the pointer may travel between press
+ * and release and still count as a click rather than a drag. */
+const DRAG_SLOP = 4
+
+interface Point {
+  x: number
+  y: number
+}
+
+/** isTextSelectionGesture reports whether a click that landed on a code cell
+ * was the reader selecting text rather than asking to comment on the line.
+ * `down` is where the pointer went down, or null when that was not seen (a
+ * click synthesised by the keyboard, say); `collapsed` is whether the
+ * document selection is empty at the time of the click. */
+export function isTextSelectionGesture(down: Point | null, up: Point, collapsed: boolean): boolean {
+  if (!collapsed) return true
+  if (!down) return false
+  return Math.abs(up.x - down.x) > DRAG_SLOP || Math.abs(up.y - down.y) > DRAG_SLOP
+}
+
 export function DiffFileSection({
   group,
   diff,
@@ -65,6 +123,7 @@ export function DiffFileSection({
   narrow = false,
   onChanged,
   folded,
+  foldedByReader,
   onSetFolded,
   viewMode,
   onSetViewMode,
@@ -73,6 +132,10 @@ export function DiffFileSection({
   // for it and the toggle stays locked on unified. A narrow screen has no
   // room for two columns either.
   const locked = narrow || file.status === 'added' || file.status === 'deleted' || file.isBinary
+  // Which language to colour as follows from the extension and nothing else;
+  // a file whose extension is not one of the twelve is left plain.
+  const language = useMemo(() => languageOf(filePath(file)), [file])
+  useEffect(ensureHighlightStyles, [])
   const [selection, setSelection] = useState<Selection | null>(null)
   const mode: ViewMode = locked ? 'unified' : viewMode
 
@@ -118,14 +181,7 @@ export function DiffFileSection({
   }
 
   const pick = (side: Side, line: number, extend: boolean) => {
-    setSelection((current) => {
-      const grow = extend || (current !== null && current.side === side)
-      if (grow && current && current.side === side) {
-        if (line < current.start) return { ...current, start: line }
-        return { ...current, end: line }
-      }
-      return { side, start: line, end: line }
-    })
+    setSelection((current) => nextSelection(current, side, line, extend))
   }
 
   // Pressing on the gutter may be the start of a drag, so the form waits for
@@ -137,12 +193,37 @@ export function DiffFileSection({
     pick(side, line, extend)
   }
 
-  // Clicking the code itself is never a drag - the pointer is already back
-  // up by the time a click arrives, so waiting for pointerup would wait
-  // forever - and the text stays selectable, which is why it is not a
-  // pointerdown.
-  const selectLine = (side: Side, line: number, extend: boolean) => {
+  // Clicking the code itself is never a drag of the gutter kind - the pointer
+  // is already back up by the time a click arrives, so waiting for pointerup
+  // would wait forever - which is why it is not a pointerdown. It can still be
+  // the tail of a text selection, though, so remember where the press landed.
+  const codeDown = useRef<Point | null>(null)
+
+  const codePointerDown = (ev: React.PointerEvent) => {
+    codeDown.current = { x: ev.clientX, y: ev.clientY }
+  }
+
+  // Selecting text in the code is a read, not a request to comment: a click
+  // that ends a drag, or that lands while a selection stands, leaves the
+  // draft closed. The gutter is still the unambiguous way in.
+  const selectLine = (side: Side, line: number, ev: React.MouseEvent) => {
+    const down = codeDown.current
+    codeDown.current = null
     if (line <= 0) return
+    const collapsed = window.getSelection()?.isCollapsed ?? true
+    if (isTextSelectionGesture(down, { x: ev.clientX, y: ev.clientY }, collapsed)) return
+    dragging.current = false
+    setDrafting(true)
+    pick(side, line, ev.shiftKey)
+  }
+
+  // pickLine is the same thing reached from the keyboard. It skips the
+  // gesture check selectLine has to make, because a key press is never a
+  // drag and never the tail of a text selection - there is no pointer path
+  // to read, and no coordinates to read it from.
+  const pickLine = (side: Side, line: number, extend: boolean) => {
+    if (line <= 0) return
+    codeDown.current = null
     dragging.current = false
     setDrafting(true)
     pick(side, line, extend)
@@ -190,7 +271,7 @@ export function DiffFileSection({
             label={selectionLabel}
             seed={currentText(file, selection)}
             canSuggest={selection.side === 'new'}
-            hint="Drag or tap another line number to cover more lines"
+            hint="Drag across the line numbers, or shift-click one, to cover more lines"
             onSubmit={submitComment}
             onCancel={() => setSelection(null)}
           />
@@ -257,7 +338,7 @@ export function DiffFileSection({
 
       {folded ? (
         <p className="empty">
-          Folded — {file.foldReason || 'the sender asked for it'} · {file.additions + file.deletions}{' '}
+          {foldLabel(foldedByReader === true, file.foldReason)} · {file.additions + file.deletions}{' '}
           changed lines
         </p>
       ) : file.isBinary ? (
@@ -269,18 +350,24 @@ export function DiffFileSection({
       ) : mode === 'unified' ? (
         <UnifiedTable
           hunks={file.hunks}
+          language={language}
           selection={selection}
           onSelect={select}
           onSelectLine={selectLine}
+          onPickLine={pickLine}
+          onCodePointerDown={codePointerDown}
           onDragOver={dragOver}
           renderExtras={renderExtras}
         />
       ) : (
         <SplitTable
           hunks={file.hunks}
+          language={language}
           selection={selection}
           onSelect={select}
           onSelectLine={selectLine}
+          onPickLine={pickLine}
+          onCodePointerDown={codePointerDown}
           onDragOver={dragOver}
           renderExtras={renderExtras}
         />
@@ -291,11 +378,17 @@ export function DiffFileSection({
 
 interface TableProps {
   hunks: Hunk[]
+  /** language is null for a file this cannot read, which is most of them. */
+  language: LanguageId | null
   selection: Selection | null
-  // onSelect starts a possible drag on the gutter; onSelectLine is a plain
-  // click on the code, which cannot become one.
+  // onSelect starts a possible drag on the gutter; onSelectLine is a click on
+  // the code, which may instead be the end of a text selection - it gets the
+  // event so it can tell the two apart.
   onSelect: (side: Side, line: number, extend: boolean) => void
-  onSelectLine: (side: Side, line: number, extend: boolean) => void
+  onSelectLine: (side: Side, line: number, ev: React.MouseEvent) => void
+  /** onPickLine is the keyboard way in, from a line number in the gutter. */
+  onPickLine: (side: Side, line: number, extend: boolean) => void
+  onCodePointerDown: (ev: React.PointerEvent) => void
   onDragOver: (side: Side, line: number) => void
   renderExtras: (side: Side, line: number) => React.ReactNode
 }
@@ -309,7 +402,77 @@ function isSelected(selection: Selection | null, side: Side, line: number): bool
   )
 }
 
-function UnifiedTable({ hunks, selection, onSelect, onSelectLine, onDragOver, renderExtras }: TableProps) {
+interface GutterProps {
+  side: Side
+  /** line is the number shown in the gutter. Zero or less means this side
+   * has no line on this row - a cell like that is inert, and stays out of
+   * the tab order. */
+  line: number
+  className: string
+  onSelect: (side: Side, line: number, extend: boolean) => void
+  onPickLine: (side: Side, line: number, extend: boolean) => void
+  onDragOver: (side: Side, line: number) => void
+}
+
+/**
+ * GutterCell is one line number, and the way into a comment on that line.
+ *
+ * The gutter is where a comment starts, so it has to answer to the keyboard
+ * as well as to the pointer: it takes a stop in the tab order, says what it
+ * is and which line it is on, and Enter or Space picks the line the way a
+ * click on it does. Shift held down extends the range instead of starting a
+ * new one, which is what shift-clicking already did.
+ *
+ * It stays a <td>. A <button> in its place would take the cell out of the
+ * row and the diff would lose its columns; the role and the key handling
+ * are what a button would have given it anyway.
+ *
+ * The focus ring is drawn from state rather than from a stylesheet rule so
+ * that it can live in this file - :focus-visible would need styles.css,
+ * which other work is sitting on. It follows focus, so it shows for a
+ * pointer press too; the ring is the same one the buttons use.
+ */
+function GutterCell({ side, line, className, onSelect, onPickLine, onDragOver }: GutterProps) {
+  const [focused, setFocused] = useState(false)
+  // This side has no line on this row, so there is nothing to comment on
+  // and nothing to stop at.
+  if (line <= 0) return <td className={className} />
+  return (
+    <td
+      className={className}
+      role="button"
+      tabIndex={0}
+      aria-label={`Comment on ${side} line ${line}`}
+      style={focused ? GUTTER_FOCUS : undefined}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      onPointerDown={(ev) => onSelect(side, line, ev.shiftKey)}
+      onPointerEnter={() => onDragOver(side, line)}
+      onKeyDown={(ev) => {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return
+        // Space scrolls the page unless something stops it, and a keyboard
+        // pick is never a drag, so this goes the way a click on the line
+        // goes: pick the line and open the draft straight away.
+        ev.preventDefault()
+        onPickLine(side, line, ev.shiftKey)
+      }}
+    >
+      {line}
+    </td>
+  )
+}
+
+function UnifiedTable({
+  hunks,
+  language,
+  selection,
+  onSelect,
+  onSelectLine,
+  onPickLine,
+  onCodePointerDown,
+  onDragOver,
+  renderExtras,
+}: TableProps) {
   return (
     <table className="diff-table unified">
       <colgroup>
@@ -348,23 +511,29 @@ function UnifiedTable({ hunks, selection, onSelect, onSelectLine, onDragOver, re
               return (
                 <Fragment key={li}>
                   <tr className={`line ${line.kind}${selected ? ' selected' : ''}`}>
-                    <td
+                    <GutterCell
+                      side="old"
+                      line={line.oldNumber}
                       className="num clickable"
-                      onPointerDown={(ev) => onSelect('old', line.oldNumber, ev.shiftKey)}
-                      onPointerEnter={() => onDragOver('old', line.oldNumber)}
-                    >
-                      {line.oldNumber > 0 ? line.oldNumber : ''}
-                    </td>
-                    <td
+                      onSelect={onSelect}
+                      onPickLine={onPickLine}
+                      onDragOver={onDragOver}
+                    />
+                    <GutterCell
+                      side="new"
+                      line={line.newNumber}
                       className="num clickable"
-                      onPointerDown={(ev) => onSelect('new', line.newNumber, ev.shiftKey)}
-                      onPointerEnter={() => onDragOver('new', line.newNumber)}
-                    >
-                      {line.newNumber > 0 ? line.newNumber : ''}
-                    </td>
+                      onSelect={onSelect}
+                      onPickLine={onPickLine}
+                      onDragOver={onDragOver}
+                    />
                     <td className="marker">{marker(line.kind)}</td>
-                    <td className="code" onClick={(ev) => onSelectLine(side, num, ev.shiftKey)}>
-                      {line.content || ' '}
+                    <td
+                      className="code"
+                      onPointerDown={onCodePointerDown}
+                      onClick={(ev) => onSelectLine(side, num, ev)}
+                    >
+                      <Code content={line.content} language={language} />
                       {line.noNewline && <span className="hint"> (no newline at end of file)</span>}
                     </td>
                   </tr>
@@ -417,7 +586,34 @@ function buildSplitRows(lines: Line[]): SplitRow[] {
   return rows
 }
 
-function SplitTable({ hunks, selection, onSelect, onSelectLine, onDragOver, renderExtras }: TableProps) {
+function SplitTable({
+  hunks,
+  language,
+  selection,
+  onSelect,
+  onSelectLine,
+  onPickLine,
+  onCodePointerDown,
+  onDragOver,
+  renderExtras,
+}: TableProps) {
+  // Pairing the rows and diffing them word by word depends on the hunks and
+  // on nothing else, but it used to run inside the render, so every hover,
+  // every drag over the gutter and every keystroke in a comment form redid
+  // the whole file. wordDiff walks grapheme clusters on a line that is not
+  // ASCII, which is not free, and a large review has thousands of rows.
+  const rows = useMemo(
+    () =>
+      hunks.map((hunk) =>
+        buildSplitRows(hunk.lines).map((row) => ({
+          row,
+          segments: row.paired
+            ? wordDiff(row.left?.content ?? '', row.right?.content ?? '')
+            : ([null, null] as const),
+        })),
+      ),
+    [hunks],
+  )
   return (
     <table className="diff-table side-by-side">
       <colgroup>
@@ -435,45 +631,47 @@ function SplitTable({ hunks, selection, onSelect, onSelectLine, onDragOver, rend
                 {hunk.header}
               </td>
             </tr>
-            {buildSplitRows(hunk.lines).map((row, ri) => {
-              const [oldSegments, newSegments] = row.paired
-                ? wordDiff(row.left?.content ?? '', row.right?.content ?? '')
-                : [null, null]
+            {rows[hi].map(({ row, segments }, ri) => {
+              const [oldSegments, newSegments] = segments
               const leftExtras = row.left ? renderExtras('old', row.left.oldNumber) : null
               const rightExtras = row.right ? renderExtras('new', row.right.newNumber) : null
               const hasExtras = Boolean(leftExtras || rightExtras)
               return (
                 <Fragment key={ri}>
                   <tr className="line">
-                    <td
+                    <GutterCell
+                      side="old"
+                      line={row.left?.oldNumber ?? -1}
                       className={`num clickable${isSelected(selection, 'old', row.left?.oldNumber ?? -1) ? ' selected' : ''}`}
-                      onPointerDown={(ev) => row.left && onSelect('old', row.left.oldNumber, ev.shiftKey)}
-                      onPointerEnter={() => row.left && onDragOver('old', row.left.oldNumber)}
-                    >
-                      {row.left && row.left.oldNumber > 0 ? row.left.oldNumber : ''}
-                    </td>
+                      onSelect={onSelect}
+                      onPickLine={onPickLine}
+                      onDragOver={onDragOver}
+                    />
                     <td
                       className={`code side ${row.left ? row.left.kind : 'empty'}${
                         isSelected(selection, 'old', row.left?.oldNumber ?? -1) ? ' selected' : ''
                       }`}
-                      onClick={(ev) => row.left && onSelectLine('old', row.left.oldNumber, ev.shiftKey)}
+                      onPointerDown={onCodePointerDown}
+                      onClick={(ev) => row.left && onSelectLine('old', row.left.oldNumber, ev)}
                     >
-                      {row.left ? renderSegments(row.left.content, oldSegments) : ''}
+                      {row.left ? renderSegments(row.left.content, oldSegments, language) : ''}
                     </td>
-                    <td
+                    <GutterCell
+                      side="new"
+                      line={row.right?.newNumber ?? -1}
                       className={`num clickable${isSelected(selection, 'new', row.right?.newNumber ?? -1) ? ' selected' : ''}`}
-                      onPointerDown={(ev) => row.right && onSelect('new', row.right.newNumber, ev.shiftKey)}
-                      onPointerEnter={() => row.right && onDragOver('new', row.right.newNumber)}
-                    >
-                      {row.right && row.right.newNumber > 0 ? row.right.newNumber : ''}
-                    </td>
+                      onSelect={onSelect}
+                      onPickLine={onPickLine}
+                      onDragOver={onDragOver}
+                    />
                     <td
                       className={`code side ${row.right ? row.right.kind : 'empty'}${
                         isSelected(selection, 'new', row.right?.newNumber ?? -1) ? ' selected' : ''
                       }`}
-                      onClick={(ev) => row.right && onSelectLine('new', row.right.newNumber, ev.shiftKey)}
+                      onPointerDown={onCodePointerDown}
+                      onClick={(ev) => row.right && onSelectLine('new', row.right.newNumber, ev)}
                     >
-                      {row.right ? renderSegments(row.right.content, newSegments) : ''}
+                      {row.right ? renderSegments(row.right.content, newSegments, language) : ''}
                     </td>
                   </tr>
                   {hasExtras && (
@@ -494,8 +692,44 @@ function SplitTable({ hunks, selection, onSelect, onSelectLine, onDragOver, rend
   )
 }
 
-function renderSegments(content: string, segments: { text: string; changed: boolean }[] | null) {
-  if (!segments) return content || ' '
+/**
+ * Code is one line of source, coloured if the file's extension is one this
+ * knows. Tokens are spans - never a string of HTML - so nothing here can put
+ * markup from a diff into the page.
+ */
+function Code({ content, language }: { content: string; language: LanguageId | null }) {
+  const tokens = highlightLine(content, language)
+  if (tokens.length === 1 && tokens[0].kind === 'plain') return <>{content || ' '}</>
+  return (
+    <>
+      {tokens.map((token, i) =>
+        token.kind === 'plain' ? (
+          <Fragment key={i}>{token.text}</Fragment>
+        ) : (
+          <span key={i} className={tokenClass(token.kind)}>
+            {token.text}
+          </span>
+        ),
+      )}
+    </>
+  )
+}
+
+/**
+ * renderSegments draws one side of a split row.
+ *
+ * Word level highlighting wins outright where there is any: it says what
+ * this diff changed, which is the reason the reader is here, and laying
+ * syntax colour over it would leave two different meanings competing inside
+ * one line. Syntax colour is for the lines word diff has nothing to say
+ * about.
+ */
+function renderSegments(
+  content: string,
+  segments: { text: string; changed: boolean }[] | null,
+  language: LanguageId | null,
+) {
+  if (!segments) return <Code content={content} language={language} />
   return (
     <>
       {segments.map((seg, i) =>
