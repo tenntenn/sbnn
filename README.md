@@ -32,6 +32,7 @@ back from the command line.
 - [Command and flag reference](#command-and-flag-reference)
 - [How the Markdown preview works](#how-the-markdown-preview-works)
 - [Files and ports](#files-and-ports)
+- [The HTTP API](#the-http-api)
 - [Development](#development)
 - [License](#license)
 
@@ -748,6 +749,20 @@ embedded frontend. Once mo is on PATH, pick it in the preview header.
 | Review log | `<state>/reviews.jsonl` (`--history-file`, `$SBNN_HISTORY`) |
 | Rebuilt previews | `<cache>/preview/…` |
 | Exported pages | wherever you point `sbnn export` |
+
+## The HTTP API
+
+Everything above goes through one HTTP API on the sbnn server. The `sbnn`
+command is a client of it, the review page in the browser is another, and it is
+how anything else would drive a review.
+
+**[docs/api.md](docs/api.md)** is the reference: every endpoint, the request
+and response shapes, the status codes, the event stream, and the rule that
+decides which requests a page on another site is refused.
+
+It is not a stable interface — sbnn is pre-1.0 and nothing under `/_/api/` is
+promised to survive a release. docs/api.md says so at the top and says what to
+do about it.
 
 `<state>` and `<cache>` are not the same directory on every platform:
 
