@@ -1,6 +1,7 @@
 package diff_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1130,5 +1131,65 @@ func TestParseCombinedAdditionsOnlyStaysUnified(t *testing.T) {
 	}
 	if f.ViewMode != model.ViewUnified {
 		t.Errorf("ViewMode = %q, want %q", f.ViewMode, model.ViewUnified)
+	}
+}
+
+// A file the diff carries without any hunks -- a pure rename, a mode change,
+// a binary blob -- used to keep a nil Hunks slice, which marshals as
+// "hunks": null while every other file answers an array. The browser
+// iterated the field and threw, taking the whole page down; the shape of a
+// field is not the place to record how the state came about.
+func TestParseAlwaysGivesFilesAHunksArray(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want model.FileStatus
+	}{
+		{
+			name: "a pure rename",
+			src:  "diff --git a/old.txt b/new.txt\nsimilarity index 100%\nrename from old.txt\nrename to new.txt\n",
+			want: model.StatusRenamed,
+		},
+		{
+			name: "a mode change",
+			src:  "diff --git a/exec.sh b/exec.sh\nold mode 100644\nnew mode 100755\n",
+			want: model.StatusMode,
+		},
+		{
+			name: "a binary file",
+			src: "diff --git a/logo.png b/logo.png\nindex ccccccc..ddddddd 100644\n" +
+				"Binary files a/logo.png and b/logo.png differ\n",
+			want: model.StatusModified,
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			files := diff.Parse(tt.src)
+			if len(files) != 1 {
+				t.Fatalf("got %d file(s), want 1:\n%s", len(files), describe(files))
+			}
+			f := files[0]
+			if f.Status != tt.want {
+				t.Errorf("Status = %q, want %q", f.Status, tt.want)
+			}
+			if len(f.Hunks) != 0 {
+				t.Fatalf("got %d hunk(s), want none", len(f.Hunks))
+			}
+			// nil and empty are the same to len, and different on the wire.
+			if f.Hunks == nil {
+				t.Error("Hunks is nil, want an empty slice")
+			}
+			b, err := json.Marshal(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(b, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(fields["hunks"]); got != "[]" {
+				t.Errorf(`marshalled "hunks" = %s, want []`, got)
+			}
+		})
 	}
 }

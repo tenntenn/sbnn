@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { Comment, Diff, FileDiff, Hunk, Line, ViewMode } from '../types'
-import { filePath } from '../types'
+import { filePath, hunksOf } from '../types'
 import { client } from '../client'
 import { wordDiff } from '../wordDiff'
 import { ensureHighlightStyles, languageOf, type LanguageId } from '../highlight'
@@ -130,6 +130,10 @@ export function DiffFileSection({
   // Which language to colour as follows from the extension and nothing else;
   // a file whose extension is not one of the twelve is left plain.
   const language = useMemo(() => languageOf(filePath(file)), [file])
+  // The server sends "hunks": null for a file that has none - a pure
+  // rename, a mode change, a binary blob - so this is read through hunksOf
+  // rather than off the file.
+  const hunks = hunksOf(file)
   useEffect(ensureHighlightStyles, [])
   const [selection, setSelection] = useState<Selection | null>(null)
   const mode: ViewMode = locked ? 'unified' : viewMode
@@ -396,13 +400,13 @@ export function DiffFileSection({
         </p>
       ) : file.isBinary ? (
         <p className="empty">Binary file — no diff to show.</p>
-      ) : file.hunks.length === 0 ? (
+      ) : hunks.length === 0 ? (
         <p className="empty">
           No content change{file.oldMode && file.newMode ? ` (mode ${file.oldMode} → ${file.newMode})` : ''}.
         </p>
       ) : mode === 'unified' ? (
         <UnifiedTable
-          hunks={file.hunks}
+          hunks={hunks}
           language={language}
           selection={selection}
           onSelect={select}
@@ -414,7 +418,7 @@ export function DiffFileSection({
         />
       ) : (
         <SplitTable
-          hunks={file.hunks}
+          hunks={hunks}
           language={language}
           selection={selection}
           onSelect={select}
@@ -430,7 +434,7 @@ export function DiffFileSection({
 }
 
 interface TableProps {
-  hunks: Hunk[]
+  hunks: readonly Hunk[]
   /** language is null for a file this cannot read, which is most of them. */
   language: LanguageId | null
   selection: Selection | null
@@ -777,7 +781,7 @@ function renderSegments(
 /** selectedLines returns the lines of the selected range on its side. */
 function selectedLines(file: FileDiff, selection: Selection): Line[] {
   const out: Line[] = []
-  for (const hunk of file.hunks) {
+  for (const hunk of hunksOf(file)) {
     for (const line of hunk.lines) {
       const num = selection.side === 'old' ? line.oldNumber : line.newNumber
       if (num < selection.start || num > selection.end) continue

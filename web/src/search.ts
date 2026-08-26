@@ -1,5 +1,5 @@
 import type { Diff, FileDiff } from './types'
-import { filePath } from './types'
+import { filePath, hunksOf } from './types'
 import { sectionKey } from './sectionKey'
 
 /**
@@ -88,8 +88,9 @@ export function searchFile(file: FileDiff, terms: string[], lineBudget = Infinit
   let truncated = false
 
   if (terms.length > 0) {
-    outer: for (let h = 0; h < file.hunks.length; h++) {
-      const hunk = file.hunks[h]
+    const hunks = hunksOf(file)
+    outer: for (let h = 0; h < hunks.length; h++) {
+      const hunk = hunks[h]
       for (let l = 0; l < hunk.lines.length; l++) {
         if (scanned >= lineBudget) {
           truncated = true

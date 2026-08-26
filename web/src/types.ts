@@ -47,7 +47,16 @@ export interface FileDiff {
   folded?: boolean
   /** foldReason says why it is shut, so the reader can disagree. */
   foldReason?: string
-  hunks: Hunk[]
+  /**
+   * hunks are the file's changed regions.
+   *
+   * The server sends null, not [], for a file that has none - a pure
+   * rename, a mode change, a binary blob (internal/model.File.Hunks is a
+   * nil slice there). Saying so in the type is what stops a reader from
+   * iterating it: one such file used to throw during render and take the
+   * whole page down with it. Read it through hunksOf.
+   */
+  hunks: Hunk[] | null
 }
 
 export interface Diff {
@@ -130,6 +139,23 @@ export interface Preview {
   path: string
   source: 'worktree' | 'reconstructed'
   complete: boolean
+}
+
+/** NO_HUNKS is the answer hunksOf gives for a file that has none. It is a
+ * single shared value so that passing it as a prop or a hook dependency is
+ * stable across renders, which a fresh [] would not be. */
+const NO_HUNKS: readonly Hunk[] = Object.freeze([])
+
+/**
+ * hunksOf returns a file's hunks, and an empty list for a file that has
+ * none.
+ *
+ * Every reader goes through this rather than touching file.hunks, because
+ * the field is null for a rename, a mode change or a binary file and the
+ * page has no reason to distinguish "no hunks" from "no hunks recorded".
+ */
+export function hunksOf(file: FileDiff): readonly Hunk[] {
+  return file.hunks ?? NO_HUNKS
 }
 
 /** filePath returns the path a file is identified by. */

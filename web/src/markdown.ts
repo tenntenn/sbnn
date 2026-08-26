@@ -57,11 +57,153 @@ export function renderComment(source: string): string {
  * came from, so a selection in the preview can be turned back into the line
  * numbers a comment anchors to.
  */
-export function renderMarkdown(source: string): string {
+export function renderMarkdown(source: string, assets?: PreviewAssets): string {
   const { frontmatter, body, bodyStartLine } = splitFrontmatter(source)
-  const rendered = renderBody(body, bodyStartLine)
+  const rendered = resolvePreviewImages(renderBody(body, bodyStartLine), assets)
   if (frontmatter === '') return rendered
   return `<pre class="frontmatter">${escapeHTML(frontmatter)}</pre>` + rendered
+}
+
+/**
+ * PreviewAsset is one image of a previewed file, as sbnn resolved it. The
+ * live page gets a URL of the server; an exported page gets a data URL. When
+ * there is no url there is a status saying why, and both pages say the same
+ * thing because internal/asset decided it for both.
+ */
+export interface PreviewAsset {
+  url?: string
+  path?: string
+  status?: string
+  size?: number
+}
+
+/** PreviewAssets is those, keyed by the src the Markdown wrote. */
+export type PreviewAssets = Record<string, PreviewAsset>
+
+/**
+ * resolvePreviewImages points the <img> tags of a rendered preview at
+ * something that exists.
+ *
+ * A relative src is written against the file's own directory in the tree, and
+ * the review page is served from neither that directory nor, in an exported
+ * page, from anywhere at all: left alone it resolves to the page's own origin
+ * and comes back as the review page again. So every relative src is looked up
+ * in what sbnn resolved for this file, and an image that is not there - too
+ * large to carry, outside the directory the diff came from, not in the tree -
+ * is drawn as a plate naming the file instead of as a picture of nothing.
+ *
+ * An absolute or remote src is left exactly as written: the browser resolves
+ * those the same way in a live page and an exported one, so there is nothing
+ * here to decide about them.
+ *
+ * It runs on the output of sanitize, not on the Markdown: raw HTML in a
+ * document carries <img> too, and by this point every one of them - written
+ * as Markdown or as HTML - is one tag with quoted, escaped attributes. That
+ * also makes it a plain string pass, which is what lets it be tested where
+ * there is no DOM to render Markdown in.
+ */
+export function resolvePreviewImages(html: string, assets?: PreviewAssets): string {
+  if (!html.includes('<img')) return html
+  return html.replace(/<img\b[^>]*>/gi, (tag) => {
+    const src = attrOf(tag, 'src')
+    if (src === null) return tag
+    const entry = lookupAsset(assets, src)
+    if (entry?.url) return replaceSrc(tag, entry.url)
+    if (entry) return placeholder(entry.path ?? src, entry.status, entry.size)
+    if (isAbsoluteURL(src)) return tag
+    return placeholder(src, 'unknown')
+  })
+}
+
+/** lookupAsset finds the entry for a src. marked percent-encodes a
+ * destination it had to read out of <angle brackets>, so a src that did not
+ * match is tried again decoded. */
+function lookupAsset(assets: PreviewAssets | undefined, src: string): PreviewAsset | undefined {
+  if (!assets) return undefined
+  if (Object.hasOwn(assets, src)) return assets[src]
+  try {
+    const decoded = decodeURI(src)
+    if (Object.hasOwn(assets, decoded)) return assets[decoded]
+  } catch {
+    // A src that is not valid percent-encoding is not one sbnn wrote a key
+    // for either.
+  }
+  return undefined
+}
+
+function isAbsoluteURL(src: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith('//')
+}
+
+/** attrOf reads an attribute out of a sanitised tag, where every value is
+ * quoted and every quote inside one is escaped. */
+function attrOf(tag: string, name: string): string | null {
+  const m = new RegExp(`\\s${name}\\s*=\\s*("[^"]*"|'[^']*'|[^\\s>]+)`, 'i').exec(tag)
+  if (!m) return null
+  const raw = m[1]
+  const value =
+    (raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))
+      ? raw.slice(1, -1)
+      : raw
+  return unescapeHTML(value)
+}
+
+function replaceSrc(tag: string, url: string): string {
+  return tag.replace(/\ssrc\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/i, ` src="${escapeHTML(url)}"`)
+}
+
+/** assetTrouble says, in the reader's words, why there is no picture. The
+ * wording is the same on a live page and an exported one because the status
+ * behind it is decided in one place for both. */
+function assetTrouble(status: string | undefined, size: number | undefined): string {
+  switch (status) {
+    case 'too-large':
+      return `too large to show here (${formatBytes(size)})`
+    case 'over-budget':
+      return `left out to keep this page loadable (${formatBytes(size)})`
+    case 'outside':
+      return 'outside the directory this diff was sent from'
+    case 'missing':
+      return 'not in the working tree'
+    case 'unsupported':
+      return 'not an image this page can show'
+    default:
+      return 'not part of this review'
+  }
+}
+
+function formatBytes(n: number | undefined): string {
+  if (n === undefined || n <= 0) return 'unknown size'
+  const mb = n / (1024 * 1024)
+  if (mb >= 1) return `${mb.toFixed(1)} MB`
+  return `${Math.max(1, Math.round(n / 1024))} KB`
+}
+
+/**
+ * placeholder is what stands where a picture cannot be drawn. It names the
+ * file, so that a reader who wants to see it knows what to open, and says
+ * why - a broken-image icon says neither.
+ */
+function placeholder(path: string, status?: string, size?: number): string {
+  const why = assetTrouble(status, size)
+  const label = `${path} - ${why}`
+  return (
+    `<span class="preview-asset-missing" role="img" aria-label="${escapeHTML(label)}"` +
+    ` title="${escapeHTML(label)}">` +
+    `<span class="preview-asset-name">${escapeHTML(path)}</span>` +
+    `<span class="preview-asset-why">${escapeHTML(why)}</span>` +
+    `</span>`
+  )
+}
+
+/** unescapeHTML undoes what the sanitiser's serialiser did to an attribute
+ * value, so that the src is compared as the Markdown wrote it. */
+function unescapeHTML(s: string): string {
+  return s.replace(
+    /&(amp|lt|gt|quot|#39|apos);/g,
+    (_, e: string) =>
+      ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", apos: "'" })[e] ?? _,
+  )
 }
 
 /**
