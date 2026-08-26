@@ -239,11 +239,23 @@ export function PreviewFileSection({
   // inside it: which files the review carries is known here and not by the
   // renderer, and an exported page has to answer it the same way. It is a
   // string pass over the sanitiser's output, like the images.
+  //
+  // The base is filePath(file) and never preview.path. Resolution and lookup
+  // are two halves of one operation and have to speak one language: a
+  // relative href is resolved against the previewed file's place in the tree
+  // the diff describes, and PreviewStack keys linkTargets by exactly those
+  // diff-relative paths. preview.path is something else - the file on disk
+  // the bytes were read from, absolute, and empty when the content was
+  // rebuilt from the diff - so `preview.path || filePath(file)` was right
+  // only in the branch where it was empty. With the file actually present,
+  // which is the ordinary case of `git diff | sbnn` inside the repository,
+  // ./b.md resolved to /home/you/repo/docs/b.md, which is never a key of
+  // linkTargets: the link between two files of the same review stopped being
+  // a link and was drawn as a dead span labelled with the reviewer's own
+  // absolute path (#339).
   const previewHTML = useMemo(
     () =>
-      preview?.kind === 'html'
-        ? resolvePreviewLinks(preview.html, preview.path || filePath(file), linkTargets)
-        : '',
+      preview?.kind === 'html' ? resolvePreviewLinks(preview.html, filePath(file), linkTargets) : '',
     [preview, file, linkTargets],
   )
 
