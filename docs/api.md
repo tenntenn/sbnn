@@ -660,8 +660,7 @@ a hook url has to be http or https, not "localhost": "localhost:9000/reviews"
 HTTP 400
 ```
 
-A `command` cannot be checked without running it, so its half is answered by
-the recorded outcome in [`lastCommandRun`](#hookrun) instead.
+The same URL with `http://` in front is what it was meant to be:
 
 ```console
 $ curl -X POST -d '{"url":"http://localhost:9000/reviews"}' \
@@ -672,6 +671,9 @@ $ curl -X POST -d '{"url":"http://localhost:9000/reviews"}' \
   "createdAt": "2026-08-26T02:36:11.377141242Z"
 }
 ```
+
+A `command` cannot be checked without running it, so its half is answered by
+the recorded outcome in [`lastCommandRun`](#hookrun) instead.
 
 **This is the most dangerous call in the API** — a command hook is a shell
 command the server runs on the user's machine — and it is why
