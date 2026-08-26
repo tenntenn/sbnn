@@ -577,6 +577,54 @@ $ curl -X POST -d '{"note":"second look","verdict":"changes-requested"}' \
 What runs when a review of this group is submitted.
 → array of [`Hook`](#hook)
 
+Each hook carries how it last went, so a hook that fired while nobody was
+watching can still be asked about. `lastCommandRun` and `lastPost` are absent
+until that half has run once, and the two halves are recorded separately —
+`h3` below ran its command and failed, then tried its URL and failed
+differently.
+
+```console
+$ curl -s localhost:6280/_/api/groups/api/hooks
+[
+  {
+    "id": "h1",
+    "url": "http://localhost:6422/reviews",
+    "createdAt": "2026-08-26T03:59:29.230539994Z",
+    "lastPost": {
+      "at": "2026-08-26T04:00:03.213754249Z",
+      "ok": true,
+      "detail": "200 OK"
+    }
+  },
+  {
+    "id": "h2",
+    "command": "echo notified $SBNN_GROUP",
+    "createdAt": "2026-08-26T03:59:59.038942595Z",
+    "lastCommandRun": {
+      "at": "2026-08-26T04:00:03.215200821Z",
+      "ok": true,
+      "detail": "notified api"
+    }
+  },
+  {
+    "id": "h3",
+    "command": "exit 3",
+    "url": "http://127.0.0.1:6499/dead",
+    "createdAt": "2026-08-26T03:59:59.046635504Z",
+    "lastCommandRun": {
+      "at": "2026-08-26T04:00:03.214615029Z",
+      "ok": false,
+      "detail": "exit status 3"
+    },
+    "lastPost": {
+      "at": "2026-08-26T04:00:03.215744799Z",
+      "ok": false,
+      "detail": "Post \"http://127.0.0.1:6499/dead\": dial tcp 127.0.0.1:6499: connect: connection refused"
+    }
+  }
+]
+```
+
 ### `POST /_/api/groups/{group}/hooks`
 
 Register a hook. → [`Hook`](#hook) in and out.
@@ -584,6 +632,36 @@ Register a hook. → [`Hook`](#hook) in and out.
 A hook carries a `command` run through the shell, a `url` sent a JSON POST, or
 both. `400 a hook needs a command or a url` for neither. Registering the same
 pair twice returns the existing hook rather than a duplicate.
+
+A `url` is checked here, against the same rule delivery applies, and a URL
+that could never be delivered to is refused with a `400` while the person who
+typed it is still there to read it — otherwise the typo is stored, persisted,
+listed back looking healthy, and fails once per review into a log file. The
+body is the plain-text reason, not JSON:
+
+| `url` | status | body |
+| --- | --- | --- |
+| `example.com/reviews` | 400 | `a hook url has to start with http:// or https://: "example.com/reviews"` |
+| `localhost:9000/reviews` | 400 | `a hook url has to be http or https, not "localhost": "localhost:9000/reviews"` |
+| `ftp://example.com/reviews` | 400 | `a hook url has to be http or https, not "ftp": "ftp://example.com/reviews"` |
+| `http:///reviews` | 400 | `a hook url needs a host: "http:///reviews"` |
+| `ht tp://x` | 400 | `"ht tp://x" is not a url: parse "ht tp://x": first path segment in URL cannot contain colon` |
+
+`localhost:9000/reviews` is the one worth knowing about: `url.Parse` reads
+`localhost` as the scheme, so a host:port with no `http://` in front is not
+a relative URL that could be guessed at — it is a URL with a scheme sbnn
+cannot speak.
+
+```console
+$ curl -s -w '\nHTTP %{http_code}\n' -X POST -d '{"url":"localhost:9000/reviews"}' \
+    localhost:6280/_/api/groups/api/hooks
+a hook url has to be http or https, not "localhost": "localhost:9000/reviews"
+
+HTTP 400
+```
+
+A `command` cannot be checked without running it, so its half is answered by
+the recorded outcome in [`lastCommandRun`](#hookrun) instead.
 
 ```console
 $ curl -X POST -d '{"url":"http://localhost:9000/reviews"}' \
@@ -839,6 +917,38 @@ down. It is read-only — sending it back does nothing.
 | `command` | string | run through the shell. Omitted when empty |
 | `url` | string | sent a JSON POST. Omitted when empty |
 | `createdAt` | time | |
+| `lastCommandRun` | [`HookRun`](#hookrun) | how `command` went the last time it ran. Omitted until it has run once |
+| `lastPost` | [`HookRun`](#hookrun) | how the POST to `url` went the last time. Omitted until it has run once |
+
+A hook fires when nobody is waiting, which is exactly when a silent failure
+costs the most, so each half keeps its own outcome and `GET .../hooks` lists
+it back. The two are separate because a hook with both a `command` and a
+`url` can have one half succeed and the other fail — see `h3` in the example
+under `GET .../hooks` above. Neither field is accepted on the way in:
+`POST .../hooks` reads only `command` and `url`. `sbnn hook` prints the same
+two outcomes on the command line.
+
+#### `HookRun`
+
+The outcome of one attempt to run one half of a hook. `internal/model`.
+
+| field | type | notes |
+| --- | --- | --- |
+| `at` | time | when the attempt finished |
+| `ok` | bool | the command exited 0, or the endpoint answered below 300 |
+| `detail` | string | the one-line reason. Omitted when empty |
+
+`detail` is folded onto one line and cut at 200 characters, because it is
+written to the session file on every review and shown on one line by
+`sbnn hook`. What goes in it:
+
+| case | `ok` | `detail` |
+| --- | --- | --- |
+| command exited 0 | `true` | its combined output, e.g. `notified api`. Absent when it printed nothing, so a silent success is `{"at": ..., "ok": true}` |
+| command exited non-zero | `false` | `exit status 3`, plus `: ` and the output when there was any |
+| POST answered below 300 | `true` | the status, e.g. `200 OK` |
+| POST answered 300 or above | `false` | `refused with ` and the status, e.g. `refused with 404 Not Found` |
+| POST never got there | `false` | the transport error, e.g. `Post "http://127.0.0.1:6499/dead": dial tcp 127.0.0.1:6499: connect: connection refused` |
 
 #### `AddDiffRequest`
 
