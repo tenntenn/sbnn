@@ -54,6 +54,27 @@ describe('the shortcut list', () => {
     )
   })
 
+  // #68 made the line gutter a stop in the tab order that answers Enter and
+  // Space, and #318 is that nothing said so: the sheet is where a reader
+  // looks, the README described commenting as clicking, and the gutter cell
+  // announces itself only once focus is already on it. Asserted by the claim
+  // rather than the wording - a row that mentions a line and one of the two
+  // keys - so rephrasing the sentence is free and dropping it is not.
+  it('says how to start a comment from the keyboard', () => {
+    const row = shortcuts.find((s) => s.keys.includes('Enter') || s.keys.includes('Space'))
+    assert.ok(row, 'no row covers the Enter/Space press that starts a comment on the focused line')
+    assert.match(
+      row.what,
+      /line/i,
+      `the Enter/Space row does not say it is about a line: ${JSON.stringify(row.what)}`,
+    )
+    assert.match(
+      row.what,
+      /comment/i,
+      `the Enter/Space row does not say it starts a comment: ${JSON.stringify(row.what)}`,
+    )
+  })
+
   it('explains every key it answers to', () => {
     for (const row of shortcuts) {
       assert.ok(row.keys.length > 0, `a row has no keys: ${JSON.stringify(row)}`)
