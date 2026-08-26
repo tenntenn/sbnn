@@ -71,10 +71,12 @@ It carries three analyzers.
   a struct field or an array element that nothing reads back, which is what a
   fix applied to a copy instead of the original looks like.
 
-`shadow` is deliberately **not** in the set. It reports 36 places in this tree,
-and every one of them is the ordinary `if err := f(); err != nil` written
-inside a function that already has an `err` — the idiom, not a bug. A check
-that is wrong 36 times out of 36 teaches people to ignore it.
+`shadow` is deliberately **not** in the set. It reports 36 places in this tree
+and gets all 36 wrong. Thirty-five are the ordinary `if err := f(); err != nil`
+written inside a function that already has an `err` — the idiom, not a bug. The
+last is a test-local `port` shadowing the package-level `--port` flag variable,
+which the test never touches. A check that is wrong 36 times out of 36 teaches
+people to ignore it.
 
 To add a rule, put the analyzer in `internal/analysis/<name>/` with an
 `analysistest` case under `testdata/src/a/`, and register it in
