@@ -80,28 +80,25 @@ Some assertions describe defects that are open right now. Those carry
 the defect exists and goes **red when the defect is fixed**, which is the
 signal to delete the annotation.
 
-| test | issue | where | why it still fails |
-|---|---|---|---|
-| hover and selected are different colours | #79 | desktop only | the shipped bundle selects the row *below* the one clicked, so `.file-item.active` and `.file-item:hover` resolve to one element and `getComputedStyle` reads its colour twice |
+**The table is empty: nothing is pinned today.** `geometry.spec.ts` carries no
+`test.fail()` call, so every assertion in the suite is a guard, and any failure
+is a regression rather than a defect coming good. `docs/doccheck` holds this
+section and the specs in step in both directions, so an annotation added
+without a row here is as loud as a row left behind after one is deleted.
 
-One row, and it is not pinning what its issue number says. #79 was a colour
-defect - both states painted with `--bg-inset` - and that is fixed: the bundle
-now settles on `rgb(255, 248, 197)` for `.file-item.active` and
-`rgb(238, 241, 244)` for `.file-item:hover` on `desktop-light`. What keeps the
-assertion failing is a different defect underneath it. The test clicks
-`.file-item` 0 and hovers 1, and in the shipped bundle the click leaves the
-active row on 1; the two selectors then match the same element, so of course
-its background equals itself. Measured: clicking file 0 selected file 1,
-clicking file 1 selected file 2, clicking file 3 was correct, and waiting
-before the click changed none of it.
+The last pin out was the hover-versus-selected assertion, and it is worth
+saying why, because it is not what its issue number says. That defect was a
+colour one - both states painted with `--bg-inset` - and the colour half closed
+first, the bundle settling on `rgb(255, 248, 197)` for `.file-item.active`
+against `rgb(238, 241, 244)` for `.file-item:hover` on `desktop-light`. What
+kept the assertion failing after that was a second defect underneath it: the
+test clicks `.file-item` 0 and hovers 1, and the shipped bundle left the active
+row on 1, so both selectors matched one element and its background equalled
+itself. That closed when the rebuilt bundle landed, and the assertion moved
+into "Tests that guard" below with the numbers it now holds at.
 
-So when this annotation finally comes out, it will be because a rebuilt
-`web/dist` carries the click fix, not because of anything about colour. Do not
-delete it, see a red suite and put it back saying "same colour": that is the
-loop this row exists to break.
-
-**#79** is skipped on the phone projects rather than annotated: hover is a
-pointer affordance and the narrow layout has no pointer behind it.
+It is skipped on the phone projects rather than run there: hover is a pointer
+affordance and the narrow layout has no pointer behind it.
 
 ## Tests that guard
 
@@ -116,10 +113,18 @@ reports the day someone fixes it.
 | the page does not scroll sideways (#74) | all four | the preview pane laid out wider than its column on the desktop layout, `clientWidth` 517 against `scrollWidth` 576; the narrow layout shows one pane at a time and never had it |
 | the selected file is painted differently from an unselected one | all four | selected `rgb(255, 248, 197)`, unselected `rgba(0, 0, 0, 0)` on `desktop-light` |
 | the exported page contacts no network host (#55) | all four | 3 requests on the wide layout, 2 on the narrow, all of them `file:`; 617 DOM nodes / 55 diff rows wide, 90 / 8 narrow |
+| hover and selected are different colours (#79) | desktop only | `.file-item.active` `rgb(255, 248, 197)` against `.file-item:hover` `rgb(238, 241, 244)` on `desktop-light`; the click underneath it lands where it is aimed now - clicking `.file-item` *i* leaves the active row on *i* for every *i*, measured 0..7 over the fixture's eight files |
 
-The first three were pinned defects until the bundle that fixes them landed.
-Their annotations are gone and the numbers they were measured at are kept here,
-because that is what a future failure has to be read against.
+The first three, and the last, were pinned defects until the bundle that fixes
+them landed. Their annotations are gone and the numbers they were measured at
+are kept here, because that is what a future failure has to be read against.
+
+One number in the last row is viewport-dependent and the table above is not the
+place for it: which file is active *before* anything is clicked depends on how
+much of the diff fits on screen. It is file 0 at the 1440x900 this suite runs
+at and file 1 at 1600x950, which is the size `docs/screenshot.png` is taken at.
+Every click after that selects the file clicked at both sizes, which is the
+part the assertion depends on.
 
 ## Proving a test can fail
 
@@ -139,11 +144,19 @@ web/dist` afterwards.
 | the same, with the `settled()` call commented out | **#79 passes** | `1 passed` - the false green the next section is about |
 
 Those four rows are a record of the day the pin was written, when the bundle
-painted both states `rgb(238, 241, 244)`. They no longer describe the bundle:
-`.file-item.active` is already `#fff8c5` and the pin holds anyway, for the
-reason given above. The point they make is about the method, not the colour -
-each row is an assertion watched failing on purpose, which is the only way to
-know it says anything.
+painted both states `rgb(238, 241, 244)`. They no longer describe the bundle,
+and the pin they describe is gone: `.file-item.active` is `#fff8c5`, the click
+underneath it lands where it is aimed, and the assertion is an ordinary guard.
+The point they make is about the method, not the colour - each row is an
+assertion watched failing on purpose, which is the only way to know it says
+anything.
+
+The last step of that record is the rebuild itself. Against the committed
+bundle of the day the assertion failed for the click reason, so the annotation
+was load-bearing; against the bundle rebuilt from the source that fixes it,
+Playwright reported `Expected to fail, but passed` on `desktop-light` and
+`desktop-dark` - two failures, on the two projects that run it - and deleting
+the annotation turned those into `22 passed, 2 skipped`.
 
 ## Reading a colour: wait for the transition
 
