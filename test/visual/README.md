@@ -80,8 +80,8 @@ Some assertions describe defects that are open right now. Those carry
 the defect exists and goes **red when the defect is fixed**, which is the
 signal to delete the annotation.
 
-**The table is empty: nothing is pinned today.** `geometry.spec.ts` carries no
-`test.fail()` call, so every assertion in the suite is a guard, and any failure
+**There is no table below, because nothing is pinned today.** `geometry.spec.ts`
+carries no such call, so every assertion in the suite is a guard, and any failure
 is a regression rather than a defect coming good. `docs/doccheck` holds this
 section and the specs in step in both directions, so an annotation added
 without a row here is as loud as a row left behind after one is deleted.
