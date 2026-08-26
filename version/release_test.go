@@ -89,3 +89,61 @@ func TestOnlyTheRootDistIsIgnored(t *testing.T) {
 		}
 	}
 }
+
+// tagprSetting reads one key out of .tagpr, which is git-config format: a
+// [tagpr] section header and then indented "key = value" lines. The second
+// return says whether the key is there at all, because an absent key and a key
+// set to "-" mean opposite things to tagpr.
+func tagprSetting(t *testing.T, key string) (string, bool) {
+	t.Helper()
+	for line := range strings.SplitSeq(readRepoFile(t, ".tagpr"), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok || strings.TrimSpace(k) != key {
+			continue
+		}
+		return strings.TrimSpace(v), true
+	}
+	return "", false
+}
+
+// #332 settled that the git tag is the only authority on the version: a
+// release binary gets the tag from GoReleaser's -X, `go install ...@v1.2.3`
+// reads it out of the build info, and anything else is a source build that
+// reports "dev". Nothing is supposed to write a version number into the tree.
+//
+// tagpr disagrees by default, and the two ways it can disagree are both live:
+//
+//   - Pointed at a file, it rewrites it. `bumpVersionFile` (tagpr v1.20.1
+//     versionfile.go:179) replaces the first match of `(v|\b)<current>\b`, and
+//     `retrieveVersionFromFile` (:199) falls back to the first bare
+//     `\d+\.\d+\.\d+` in the file and, at tagpr.go:756, lets that value
+//     *override the version being released*. Aimed at version/version.go those
+//     find the doc comments this package grew in #332: the pseudo-version
+//     example becomes "v0.0.1-20260826015029-0b87768de8e9", and the
+//     `go install ...@v1.2.3` example makes tagpr propose v1.2.3 as the next
+//     release. Before #332 the file held no digits and the setting looked
+//     inert, which is why the release pull request that has already been
+//     raised left it untouched.
+//
+//   - With no versionFile key at all, `cfg.versionFile` is nil, so tagpr.go:480
+//     runs detectVersionFile(".", currVer), which in this repository picks
+//     web/package.json ("version": "0.0.0"), rewrites it, and writes the path
+//     it chose back into .tagpr. Deleting the line is therefore worse than
+//     leaving it wrong.
+//
+// "-" is tagpr's own word for "git tags only" (its README: "If you do not want
+// to use versioning files but only git tags, specify the '-' string here"), and
+// it is the only value that leaves the tree alone.
+func TestTagprWritesNoVersionFile(t *testing.T) {
+	value, ok := tagprSetting(t, "versionFile")
+	if !ok {
+		t.Fatal(`.tagpr sets no versionFile, so tagpr picks one itself: ` +
+			`it would rewrite web/package.json and record that choice back into .tagpr. ` +
+			`Set "versionFile = -" to keep the git tag the only authority on the version.`)
+	}
+	if value != "-" {
+		t.Errorf(`.tagpr says versionFile = %s; want "-".`+"\n"+
+			`Any real path makes tagpr write a release number into the tree, which is what `+
+			`version.versionFrom exists to stop a source build from claiming.`, value)
+	}
+}
