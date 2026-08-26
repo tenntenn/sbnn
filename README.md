@@ -9,6 +9,11 @@ back from the command line.
 
 ![The sbnn review page: the file list, a split diff carrying an open review comment and its suggested change, and the preview pane beside it](docs/screenshot.png)
 
+<sub>That picture is taken from a binary serving the committed `web/dist`, so
+it shows what a downloaded sbnn does rather than what the source is up to.
+[`docs/screenshot.md`](docs/screenshot.md) has the conditions and how to
+retake it.</sub>
+
 ## Contents
 
 - [Install](#install)
