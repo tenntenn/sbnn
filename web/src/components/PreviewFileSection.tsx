@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FileDiff, PreviewFormat, PreviewKind, Status } from '../types'
 import { filePath, hunksOf, previewFormatOf } from '../types'
 import { client, type PreviewResult } from '../client'
+import { resolvePreviewLinks, type PreviewLinkTargets } from '../markdown'
 import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
 import { SourceView } from './SourceView'
@@ -10,6 +11,10 @@ interface Props {
   group: string
   diffId: string
   file: FileDiff
+  /** linkTargets is where each path this page carries can be reached, so a
+   * relative link in a preview leads to the other file's section rather than
+   * to the server root. */
+  linkTargets?: PreviewLinkTargets
   status: Status | null
   kind: PreviewKind
   /** active gates the fetch: a section far from the viewport has no reason
@@ -153,7 +158,16 @@ function previewRevision(file: FileDiff): string {
  * origin. An exported page has no mo behind it and renders everything
  * itself.
  */
-export function PreviewFileSection({ group, diffId, file, status, kind, active, onUserScroll }: Props) {
+export function PreviewFileSection({
+  group,
+  diffId,
+  file,
+  status,
+  kind,
+  active,
+  linkTargets,
+  onUserScroll,
+}: Props) {
   const [preview, setPreview] = useState<PreviewResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -220,6 +234,18 @@ export function PreviewFileSection({ group, diffId, file, status, kind, active, 
       cancelled = true
     }
   }, [group, diffId, file.id, revision, format, renderHere, reloadKey, active])
+
+  // The links are pointed at this page's own sections after the render, not
+  // inside it: which files the review carries is known here and not by the
+  // renderer, and an exported page has to answer it the same way. It is a
+  // string pass over the sanitiser's output, like the images.
+  const previewHTML = useMemo(
+    () =>
+      preview?.kind === 'html'
+        ? resolvePreviewLinks(preview.html, preview.path || filePath(file), linkTargets)
+        : '',
+    [preview, file, linkTargets],
+  )
 
   const frameUrl = preview?.kind === 'frame' ? preview.url : undefined
   const estimatedHeight = useMemo(() => estimatedFrameHeight(file), [file])
@@ -408,7 +434,7 @@ export function PreviewFileSection({ group, diffId, file, status, kind, active, 
           data-line-anchored={format === 'markdown' && preview.complete ? 'true' : undefined}
           onWheel={onUserScroll}
           onTouchMove={onUserScroll}
-          dangerouslySetInnerHTML={{ __html: preview.html }}
+          dangerouslySetInnerHTML={{ __html: previewHTML }}
         />
       ) : preview?.kind === 'frame' && preview.url ? (
         <iframe
