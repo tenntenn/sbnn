@@ -95,11 +95,10 @@ async function settled(page: Page, selector: string): Promise<void> {
 }
 
 test.describe('rendered geometry', () => {
-  // #73, open in every project. .file-path is direction: rtl, so the bidi
-  // algorithm moves the leading dot of a dotfile to the end: the source
-  // ".github/workflows/ci.yml" is painted "github/workflows/ci.yml.".
+  // #73, fixed. .file-path was direction: rtl, so the bidi algorithm moved
+  // the leading dot of a dotfile to the end: the source
+  // ".github/workflows/ci.yml" was painted "github/workflows/ci.yml.".
   test('paths are painted in the order they are written (#73)', async ({ page }) => {
-    test.fail(true, 'file paths are laid out right to left (#73)')
     await open(page)
     await showFiles(page)
     const paths = page.locator('.file-path')
@@ -115,10 +114,9 @@ test.describe('rendered geometry', () => {
     expect(mismatched, 'paths whose glyphs are painted out of order').toEqual([])
   })
 
-  // #119, open in every project. .disclosure is a 9.6px box around a 14px
-  // icon, so the icon overflows it: clientWidth 10, scrollWidth 14.
+  // #119, fixed. .disclosure was a 9.6px box around a 14px icon, so the
+  // icon overflowed it: clientWidth 10, scrollWidth 14.
   test('no element is wider than the box that holds it (#119)', async ({ page }) => {
-    test.fail(true, '.disclosure is narrower than the icon inside it (#119)')
     await open(page)
     const overflowing = await page.evaluate(() => {
       const bad: Array<{ cls: string; clientWidth: number; scrollWidth: number }> = []
@@ -136,12 +134,10 @@ test.describe('rendered geometry', () => {
     expect(overflowing, 'elements whose content is wider than they are').toEqual([])
   })
 
-  // #74, open on the desktop layout only. The preview pane lays out wider
-  // than the column it is given: clientWidth 517, scrollWidth 576. The
-  // narrow layout shows one pane at a time and does not have the defect,
-  // so there the assertion is expected to hold.
+  // #74, fixed. On the desktop layout the preview pane laid out wider than
+  // the column it was given: clientWidth 517, scrollWidth 576. The narrow
+  // layout shows one pane at a time and never had the defect.
   test('the page does not scroll sideways (#74)', async ({ page }) => {
-    test.fail(!onPhone(), 'the preview pane is wider than its column (#74)')
     await open(page)
     const wide = await page.evaluate(() => {
       const doc = document.scrollingElement as HTMLElement

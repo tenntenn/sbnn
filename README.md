@@ -7,7 +7,7 @@ diff viewer and reviewer. The name reads "sabun" — 差分, Japanese for "diff"
 on the left, a Markdown preview on the right, and review comments you can read
 back from the command line.
 
-![The sbnn review page: the file list, a split diff carrying an open review comment and its suggested change, and the Markdown preview](docs/screenshot.png)
+![The sbnn review page: the file list, a split diff carrying an open review comment and its suggested change, and the preview pane beside it](docs/screenshot.png)
 
 ## Contents
 
