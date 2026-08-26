@@ -308,13 +308,23 @@ one response that leaves the reviewer having to ask again.
 
 ### 7. Send the next round
 
-Clear the handled comments and send the updated diff so the next round starts
-clean. This is the one case where the diffs stay: the rounds of one review
-belong together.
+Clear the comments you handled and send the updated diff so the next round
+starts clean. This is the one case where the diffs stay: the rounds of one
+review belong together.
 
 ```
-sbnn comments --target <topic> --clear
+sbnn comments --target <topic> --clear --resolved-only
 git diff | sbnn --target <topic>
+```
+
+`--clear` on its own empties the whole group at once — the comments you never
+got to along with the ones you handled — so reach for it only when you have
+addressed every one of them. `--resolved-only` is the selective clear: it drops
+the comments marked as resolved and leaves the still open ones for the next
+round, which is what you want whenever you are handing back work in parts.
+
+```
+sbnn comments --target <topic> --clear   # everything, addressed or not
 ```
 
 When the work is done and the review has served its purpose, close it, so the
