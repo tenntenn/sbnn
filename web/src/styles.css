@@ -1499,6 +1499,32 @@ a {
   overflow-wrap: anywhere;
 }
 
+/* A relative link whose target is not in this review. It is not an <a> at
+   all - there is nothing here to open - so it says which file it meant and
+   that the review does not carry it, rather than looking like a link and
+   going nowhere. */
+.preview-link-outside {
+  display: inline;
+  color: var(--fg-muted);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.preview-link-why {
+  margin-left: var(--space-2xs);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.preview-link-why::before {
+  content: '(';
+}
+
+.preview-link-why::after {
+  content: ')';
+}
+
 .preview-asset-name {
   font-family: var(--font-mono);
   color: var(--fg);
