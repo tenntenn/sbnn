@@ -9,6 +9,11 @@ back from the command line.
 
 ![The sbnn review page: the file list, a split diff carrying an open review comment and its suggested change, and the preview pane beside it](docs/screenshot.png)
 
+<sub>That picture is taken from a binary serving the committed `web/dist`, so
+it shows what a downloaded sbnn does rather than what the source is up to.
+[`docs/screenshot.md`](docs/screenshot.md) has the conditions and how to
+retake it.</sub>
+
 ## Contents
 
 - [Install](#install)
@@ -197,6 +202,9 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
 - Select the lines to comment on by dragging over the line numbers, by
   shift-clicking, or - on a touch screen - by tapping one line and then
   another while the draft is open.
+- **From the keyboard: Tab to a line number and press Enter or Space.** Every
+  line number is a stop in the tab order, and Shift with the press extends the
+  selection the way shift-clicking does. The `?` sheet says so too.
 - **Comment on the preview by selecting text in it.** Let the drag go and a
   **+** appears where your pointer came up; it opens the same comment form,
   anchored to the source lines of the blocks you selected. The selection
@@ -466,11 +474,17 @@ makes them useful and worth being deliberate about.
 ### Reading the comments back
 
 ```console
-$ sbnn comments                    # Markdown, ready to paste into an agent
-$ sbnn comments --format json      # machine readable
-$ sbnn comments -t api             # comments of the "api" group
-$ sbnn comments --clear            # start the next review round
+$ sbnn comments                              # Markdown, ready to paste into an agent
+$ sbnn comments --format json                # machine readable
+$ sbnn comments -t api                       # comments of the "api" group
+$ sbnn comments --clear --resolved-only      # start the next round, keeping what is open
+$ sbnn comments --clear                      # ... and drop the open ones as well
 ```
+
+`--clear` empties the group whether or not the comments were addressed, so a
+remark nobody has answered yet goes with it. `--resolved-only` is the one to
+reach for between rounds: it removes the comments marked as resolved and
+leaves the rest for the next pass.
 
 ### Approve, comment, or request changes
 
@@ -695,7 +709,7 @@ to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
 | --- | --- | --- |
 | `sbnn` | Read a diff on stdin and serve it | `--title`, `--label key=value`, `--open` / `--no-open`, `--foreground`, `--on-review`, `--on-review-url`, `--history-file`, `--json` |
 | `sbnn` on the running server | Act on the server instead of adding a diff | `--status`, `--restart`, `--shutdown`, `--clear`, `--clear --all` |
-| `sbnn comments` | Print the comments left in the browser | `--format` (`prompt`, `markdown`, `json`), `--json`, `--clear`, `--include-resolved`, `--exit-code`, `--quiet` (`-q`) |
+| `sbnn comments` | Print the comments left in the browser | `--format` (`prompt`, `markdown`, `json`), `--json`, `--clear`, `--clear --resolved-only`, `--include-resolved`, `--exit-code`, `--quiet` (`-q`) |
 | `sbnn comment path[:line[-line]]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--json` |
 | `sbnn submit` | End the round, as the Submit button does | `--note` (`-m`), `--verdict` (`approved`, `commented`, `changes-requested`), `--approve`, `--request-changes`, `--exit-code`, `--quiet` |
 | `sbnn wait` | Block until the review is submitted, then print it | `--timeout`, `--format`, `--json`, `--exit-code`, `--quiet` |
@@ -791,7 +805,7 @@ to get `task`.
 
 ```console
 $ task build     # pnpm build in web/, then go build
-$ task test      # go test ./...
+$ task test      # go test ./... and the review UI tests in web/test
 $ task lint      # go vet, a gofmt check, go fix -diff, and go mod tidy with no diff
 $ task dev       # sbnn in the foreground plus the Vite dev server
 ```

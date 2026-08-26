@@ -193,3 +193,36 @@ func TestAPIDocSaysWhetherItIsStable(t *testing.T) {
 		t.Error("docs/api.md does not say whether /_/api/ is stable")
 	}
 }
+
+// The replay on Last-Event-ID is a snapshot of where each group stands, not
+// the backlog the header name suggests. A client author who assumes otherwise
+// loses the intermediate reviews with nothing to notice: the ids that were
+// skipped never arrive, so there is no gap in the sequence to see.
+//
+// That is the design (see TestReviewReplayIsOnePerGroupNotEveryNotice in
+// internal/server), and #336 was filed because the document did not say so.
+// The behaviour is held there; this holds the sentence that tells a reader.
+func TestAPIDocSaysTheReplayIsPerGroup(t *testing.T) {
+	doc := readAPIDoc(t)
+	i := strings.Index(doc, "### `GET /_/events`")
+	if i < 0 {
+		t.Fatal("docs/api.md has no `GET /_/events` section")
+	}
+	events := doc[i:]
+	if before, _, ok := strings.Cut(events[len("### `GET /_/events`"):], "\n## "); ok {
+		events = before
+	}
+	// Markdown wraps, so a phrase can be split across two lines. Match on the
+	// prose rather than on the line breaks.
+	events = strings.Join(strings.Fields(events), " ")
+	for _, want := range []string{
+		"Last-Event-ID",
+		"one stored notice per group",
+		"snapshot, not a backlog",
+	} {
+		if !strings.Contains(events, want) {
+			t.Errorf("the `GET /_/events` section of docs/api.md does not say %q;\n"+
+				"a reader is left thinking Last-Event-ID replays every review after n", want)
+		}
+	}
+}

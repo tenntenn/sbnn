@@ -441,3 +441,83 @@ func TestREADMEHasNoEmptyCodeBlocks(t *testing.T) {
 		t.Errorf("README.md:%d: this code block is never closed", openedAt)
 	}
 }
+
+// referenceRow finds one row of the "Command and flag reference" table and
+// returns its last cell, the one listing the flags. The table is keyed by the
+// command as it is typed, so `sbnn comments` is looked up by "comments".
+//
+// The row is matched on its first cell rather than searched for anywhere in
+// the file, because the point of the check below is that the *table* names the
+// flag. A flag mentioned once in a story three hundred lines earlier is not
+// what a reader scanning the reference finds.
+func referenceRow(t *testing.T, readme, command string) string {
+	t.Helper()
+	want := "`sbnn`"
+	if command != "" {
+		want = "`sbnn " + command + "`"
+	}
+	for line := range strings.SplitSeq(readme, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "|") {
+			continue
+		}
+		cells := strings.Split(strings.Trim(strings.TrimSpace(line), "|"), "|")
+		if len(cells) < 3 {
+			continue
+		}
+		if strings.TrimSpace(cells[0]) != want {
+			continue
+		}
+		return cells[len(cells)-1]
+	}
+	t.Fatalf("README.md has no reference-table row for %s; this test is looking in the wrong place", want)
+	return ""
+}
+
+// clearScopeFlags are the flags that change what `--clear` destroys. They are
+// singled out because getting them wrong is not recoverable: a reader who
+// follows a `--clear` line that never mentions the narrower form throws away
+// comments nobody has answered yet, and there is nothing left to read
+// afterwards to find out that happened.
+//
+// #331 put the same guard on skills/sbnn/SKILL.md
+// (TestSkillDocumentsTheScopeOfClear). The README needs its own, because the
+// checks above only run in one direction: they take the flags the README
+// prints and ask the binary whether they exist. A flag the binary has and the
+// README never prints is invisible to them, which is exactly how
+// --resolved-only stayed out of both `sbnn comments` blocks for #335.
+var clearScopeFlags = []struct {
+	command string
+	flag    string
+	why     string
+}{
+	{
+		command: "comments",
+		flag:    "--resolved-only",
+		why:     "the selective clear: without it --clear drops the still open comments too",
+	},
+}
+
+// TestREADMEDocumentsTheScopeOfClear checks both halves: that the binary still
+// has the flag, and that the README names it in the prose and in the reference
+// table. Either half failing is a real answer — the first says the list here is
+// out of date, the second says the README is.
+func TestREADMEDocumentsTheScopeOfClear(t *testing.T) {
+	c := buildCLI(t)
+	readme := readREADME(t)
+
+	for _, tt := range clearScopeFlags {
+		t.Run(tt.command+tt.flag, func(t *testing.T) {
+			if !c.flags(tt.command)[tt.flag] {
+				t.Fatalf("sbnn %s has no %s flag; this test needs updating", tt.command, tt.flag)
+			}
+			if !strings.Contains(readme, tt.flag) {
+				t.Errorf("README.md never names %s of sbnn %s: %s",
+					tt.flag, tt.command, tt.why)
+			}
+			if row := referenceRow(t, readme, tt.command); !strings.Contains(row, tt.flag) {
+				t.Errorf("the reference table row for sbnn %s does not list %s: %s\nrow flags: %s",
+					tt.command, tt.flag, tt.why, strings.TrimSpace(row))
+			}
+		})
+	}
+}

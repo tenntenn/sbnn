@@ -154,8 +154,14 @@ function replaceSrc(tag: string, url: string): string {
 
 /** assetTrouble says, in the reader's words, why there is no picture. The
  * wording is the same on a live page and an exported one because the status
- * behind it is decided in one place for both. */
-function assetTrouble(status: string | undefined, size: number | undefined): string {
+ * behind it is decided in one place for both.
+ *
+ * Exported because an image that *is* the diff gets the same treatment and
+ * the same sentence (#323): it is drawn by PreviewFileSection rather than by
+ * a pass over rendered Markdown, so it cannot go through placeholder() below,
+ * but a reader should not be able to tell which of the two they are looking
+ * at from the words. */
+export function assetTrouble(status: string | undefined, size: number | undefined): string {
   switch (status) {
     case 'too-large':
       return `too large to show here (${formatBytes(size)})`
@@ -172,7 +178,7 @@ function assetTrouble(status: string | undefined, size: number | undefined): str
   }
 }
 
-function formatBytes(n: number | undefined): string {
+export function formatBytes(n: number | undefined): string {
   if (n === undefined || n <= 0) return 'unknown size'
   const mb = n / (1024 * 1024)
   if (mb >= 1) return `${mb.toFixed(1)} MB`

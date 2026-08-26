@@ -7,7 +7,11 @@
  * them fires while something is being typed into - see typingInto below.
  *
  * The list is the documentation: the help overlay is drawn from it, so a
- * shortcut cannot exist without a line explaining it.
+ * shortcut cannot exist without a line explaining it. The converse is the
+ * failure #318 is about: the line gutter answers Enter and Space, and a
+ * reader who is not told so has to arrive at it by tabbing into a line
+ * number and guessing. A key the page answers to belongs here whether the
+ * page listens for it globally or the focused element does.
  */
 export interface Shortcut {
   keys: string[]
@@ -23,6 +27,15 @@ export const shortcuts: Shortcut[] = [
   { keys: ['f'], what: 'Fold or unfold this file' },
   { keys: ['v'], what: 'Split or unified' },
   { keys: ['s'], what: 'Follow the diff with the preview' },
+  // Handled by the gutter cell itself rather than by the page, because it
+  // needs the line that has focus. Listed all the same: the overlay is where
+  // a reader looks to find out what the keyboard can do, and tabbing until
+  // something happens is not a route anybody finds on purpose - which is why
+  // the sentence names the Tab that gets there.
+  {
+    keys: ['Enter', 'Space'],
+    what: 'Comment on a line: Tab to its line number, then press. Shift extends the range',
+  },
   { keys: ['r'], what: 'Submit review' },
   { keys: ['?'], what: 'This list' },
   { keys: ['Esc'], what: 'Close what is open' },

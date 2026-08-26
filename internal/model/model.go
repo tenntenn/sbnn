@@ -92,8 +92,23 @@ type File struct {
 	IsImage bool `json:"isImage"`
 	// IsNotebook reports whether the file is a Jupyter notebook, previewed
 	// by rendering its cells.
-	IsNotebook bool    `json:"isNotebook"`
-	Hunks      []*Hunk `json:"hunks"`
+	IsNotebook bool `json:"isNotebook"`
+	// ImageStatus says whether there is a picture to draw for an image file
+	// and, when there is not, why - "ok", "too-large", "missing",
+	// "outside". It is internal/asset.Status spelled as a string, because
+	// that package resolves paths through internal/source, which is built
+	// on this one; the values are its and nothing here reads into them.
+	//
+	// The page needs it before it draws: an image of the diff is fetched
+	// from an endpoint on a live page and carried as a data URL in an
+	// exported one, so without a verdict decided once, in Go, the two pages
+	// would answer differently for the same file. Empty for a file that is
+	// not an image, or was deleted.
+	ImageStatus string `json:"imageStatus,omitempty"`
+	// ImageSize is that file's size in bytes, so a placeholder can say how
+	// big the picture that did not fit was.
+	ImageSize int64   `json:"imageSize,omitempty"`
+	Hunks     []*Hunk `json:"hunks"`
 }
 
 // Path returns the path used to identify the file. Deleted files are
