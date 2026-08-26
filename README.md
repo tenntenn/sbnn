@@ -197,6 +197,9 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
 - Select the lines to comment on by dragging over the line numbers, by
   shift-clicking, or - on a touch screen - by tapping one line and then
   another while the draft is open.
+- **From the keyboard: Tab to a line number and press Enter or Space.** Every
+  line number is a stop in the tab order, and Shift with the press extends the
+  selection the way shift-clicking does. The `?` sheet says so too.
 - **Comment on the preview by selecting text in it.** Let the drag go and a
   **+** appears where your pointer came up; it opens the same comment form,
   anchored to the source lines of the blocks you selected. The selection
