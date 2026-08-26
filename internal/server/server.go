@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tenntenn/sbnn/internal/asset"
 	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/history"
 	"github.com/tenntenn/sbnn/internal/mo"
@@ -674,6 +675,11 @@ func (s *Server) handleAddDiff(w http.ResponseWriter, r *http.Request) {
 		Files:   files,
 	}
 	foldFiles(incoming, req.Collapse)
+	// Whether each image of the diff is one the page will draw is decided
+	// here, once, from the working tree as it is now: the page has to know
+	// before it asks for the bytes, and an exported page reaches the same
+	// verdict through the same function so that the two agree (#323).
+	asset.RecordInDiff(incoming)
 	d := s.store.AddDiff(name, incoming)
 	s.notify(name)
 	writeJSON(w, http.StatusOK, AddDiffResponse{

@@ -40,6 +40,20 @@ export interface FileDiff {
   isMarkdown: boolean
   /** isImage reports whether the file can be previewed as an image. */
   isImage: boolean
+  /**
+   * imageStatus says whether there is a picture to draw for this image and,
+   * when there is not, why: 'ok', 'too-large', 'missing', 'outside'. It is
+   * internal/asset.Status, decided in Go so that the live page and an
+   * exported page reach one answer for one file (#323).
+   *
+   * Absent for anything that is not an image, and for a diff added by an
+   * sbnn that predates the field - which is read as "draw it", the way the
+   * page always behaved.
+   */
+  imageStatus?: string
+  /** imageSize is the file's size in bytes, for the placeholder that stands
+   * in for a picture that did not fit. */
+  imageSize?: number
   /** isNotebook reports whether the file is a Jupyter notebook, previewed by
    * rendering its cells. */
   isNotebook: boolean

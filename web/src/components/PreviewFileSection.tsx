@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FileDiff, PreviewFormat, PreviewKind, Status } from '../types'
 import { filePath, hunksOf, previewFormatOf } from '../types'
 import { client, type PreviewResult } from '../client'
-import { resolvePreviewLinks, type PreviewLinkTargets } from '../markdown'
+import { assetTrouble, resolvePreviewLinks, type PreviewLinkTargets } from '../markdown'
 import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
 import { SourceView } from './SourceView'
@@ -186,7 +186,18 @@ export function PreviewFileSection({
   const revision = useMemo(() => previewRevision(file), [file])
   const renderHere = format !== 'markdown' || kind === 'preview'
 
-  const rawImageSrc = format === 'image' ? client.imageSrc(group, diffId, file.id) : undefined
+  // Whether there is a picture to draw at all was decided in Go, by
+  // internal/asset, and travels on the file: the live page fetches the bytes
+  // from an endpoint and an exported page carries them as a data URL, so
+  // without one verdict the same image would be shown on screen and left out
+  // of the exported page (#323). A file from an sbnn that predates the field
+  // has no status, and that reads as "draw it", which is what it always did.
+  const imageTrouble =
+    format === 'image' && file.imageStatus !== undefined && file.imageStatus !== 'ok'
+      ? assetTrouble(file.imageStatus, file.imageSize)
+      : null
+  const rawImageSrc =
+    format === 'image' && imageTrouble === null ? client.imageSrc(group, diffId, file.id) : undefined
   // The live endpoint answers the same URL every time, so a reload has to
   // change the URL itself to bypass the browser's own cache. A static
   // page's data URL never changes and needs no such busting.
@@ -381,6 +392,12 @@ export function PreviewFileSection({
       ) : format === 'image' ? (
         !active ? (
           <p className="empty">Not loaded yet…</p>
+        ) : imageTrouble !== null ? (
+          <span className="preview-asset-missing" role="img" aria-label={`${filePath(file)} - ${imageTrouble}`}
+            title={`${filePath(file)} - ${imageTrouble}`}>
+            <span className="preview-asset-name">{filePath(file)}</span>
+            <span className="preview-asset-why">{imageTrouble}</span>
+          </span>
         ) : imageSrc ? (
           <div className="preview-image-wrap" onWheel={onUserScroll} onTouchMove={onUserScroll}>
             <img

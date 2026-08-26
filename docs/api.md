@@ -854,6 +854,8 @@ One file of a round. `internal/model`.
 | `isMarkdown` | bool | |
 | `isImage` | bool | |
 | `isNotebook` | bool | |
+| `imageStatus` | string | for an image, whether there is a picture to draw: `ok`, `too-large`, `missing`, `outside`. Omitted otherwise |
+| `imageSize` | number | that file's size in bytes. Omitted when there is none |
 | `hunks` | array | [`Hunk`](#hunk). Empty for a binary file |
 
 #### `Hunk`

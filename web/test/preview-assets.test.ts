@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { resolvePreviewImages, type PreviewAssets } from '../src/markdown'
+import { assetTrouble, resolvePreviewImages, type PreviewAssets } from '../src/markdown'
 
 /**
  * A relative image in a preview used to resolve against the review page's own
@@ -97,4 +97,38 @@ test('nothing but the img tags is touched', () => {
   const out = resolvePreviewImages(html, { 'a.png': { url: 'u', status: 'ok' } })
   assert.match(out, /text with a &lt;img&gt; in it/)
   assert.match(out, /data-ln="1-3"/)
+})
+
+/**
+ * An image that *is* the diff had no cap at all: internal/export froze every
+ * one of them into the page, so a single large PNG made a page of tens of
+ * megabytes out of something meant to be mailed around (#323). It is now held
+ * to the same cap as a sibling image, and the verdict reaches the page on the
+ * file itself as file.imageStatus.
+ *
+ * It is drawn by PreviewFileSection rather than by a pass over rendered
+ * Markdown, so it cannot go through the placeholder below - but a reader must
+ * not be able to tell which of the two they are looking at from the words,
+ * which is why assetTrouble is one exported function and not two copies.
+ */
+test('a diff image and a sibling image are refused in the same words (#323)', () => {
+  const size = 33_554_436
+  const sibling = resolvePreviewImages('<p><img src="huge.png"></p>', {
+    'huge.png': { path: 'huge.png', status: 'too-large', size },
+  })
+  const words = assetTrouble('too-large', size)
+  assert.match(words, /too large/i, `the sentence does not say it is too large: ${words}`)
+  assert.match(words, /32\.0 MB/, `the sentence does not say how big it was: ${words}`)
+  assert.ok(
+    sibling.includes(words),
+    `the placeholder says something else than assetTrouble does:\n${sibling}\n${words}`,
+  )
+})
+
+test('every refusal an image of the diff can carry has words of its own', () => {
+  for (const status of ['too-large', 'missing', 'outside']) {
+    const words = assetTrouble(status, 1024)
+    assert.ok(words.length > 0, `${status} has no sentence`)
+    assert.notEqual(words, assetTrouble('unknown-to-this-page', 1024), `${status} falls through to the default`)
+  }
 })

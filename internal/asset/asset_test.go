@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tenntenn/sbnn/internal/asset"
+	"github.com/tenntenn/sbnn/internal/model"
 )
 
 // write puts a file of n bytes in the tree, creating the directories it needs.
@@ -201,4 +202,85 @@ func TestRefsSkipsWhatItHasNothingToSayAbout(t *testing.T) {
 	if n := len(refs); n != 3 {
 		t.Errorf("found %d references, want 3: %+v", n, refs)
 	}
+}
+
+// An image that is part of the diff itself had no cap at all and never did:
+// internal/export froze every one of them into the page unconditionally, so
+// one 32MiB PNG made a 45MB page out of something meant to be mailed around
+// (#323). The rule is the one a sibling image has had since #305, applied to
+// the same kind of thing - and it has to be reached by the live page as well
+// as by the exporter, which is why it lives here rather than in either.
+func TestInDiffCapsAnImageOfTheDiffItself(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "small.png", 1024)
+	write(t, dir, "big.png", asset.MaxBytes+1)
+	write(t, dir, "exactly.png", asset.MaxBytes)
+	write(t, dir, "notes.md", 10)
+
+	cases := []struct {
+		name       string
+		file       *model.File
+		wantStatus asset.Status
+		wantSize   int64
+	}{
+		{"a picture that fits", imageFile("small.png"), asset.StatusOK, 1024},
+		{"one byte past the cap", imageFile("big.png"), asset.StatusTooLarge, asset.MaxBytes + 1},
+		// The cap is what is drawn up to, not the first size refused.
+		{"exactly the cap", imageFile("exactly.png"), asset.StatusOK, asset.MaxBytes},
+		{"not in the working tree", imageFile("gone.png"), asset.StatusMissing, 0},
+		{"outside the directory the diff came from", imageFile("../elsewhere.png"), asset.StatusOutside, 0},
+		{"not an image at all", &model.File{NewPath: "notes.md"}, "", 0},
+		{
+			"an image that was deleted, which has no picture to weigh",
+			&model.File{NewPath: model.DevNull, OldPath: "small.png", IsImage: true, Status: model.StatusDeleted},
+			"", 0,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			status, size := asset.InDiff(dir, c.file)
+			if status != c.wantStatus || size != c.wantSize {
+				t.Errorf("InDiff(%s) = %q, %d, want %q, %d", c.file.Path(), status, size, c.wantStatus, c.wantSize)
+			}
+		})
+	}
+}
+
+// The same cap the sibling images are held to. Two numbers that drifted apart
+// would be two answers to one question.
+func TestInDiffUsesTheSameCapAsASiblingImage(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "big.png", asset.MaxBytes+1)
+	refs := asset.Refs(dir, "doc.md", "![x](big.png)")
+	if len(refs) != 1 || refs[0].Status != asset.StatusTooLarge {
+		t.Fatalf("a sibling image past MaxBytes is %+v, want too-large", refs)
+	}
+	if status, _ := asset.InDiff(dir, imageFile("big.png")); status != refs[0].Status {
+		t.Errorf("the same file is %q as an image of the diff and %q as a sibling of a document", status, refs[0].Status)
+	}
+}
+
+// RecordInDiff is how the verdict reaches the page: it travels on the file,
+// so the page knows before it asks for any bytes.
+func TestRecordInDiffWritesTheVerdictOntoEveryFile(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "big.png", asset.MaxBytes+1)
+	write(t, dir, "small.png", 7)
+	d := &model.Diff{BaseDir: dir, Files: []*model.File{
+		imageFile("big.png"), imageFile("small.png"), {NewPath: "notes.md"},
+	}}
+	asset.RecordInDiff(d)
+	if got := d.Files[0]; got.ImageStatus != string(asset.StatusTooLarge) || got.ImageSize != asset.MaxBytes+1 {
+		t.Errorf("big.png = %q, %d, want too-large and its size", got.ImageStatus, got.ImageSize)
+	}
+	if got := d.Files[1]; got.ImageStatus != string(asset.StatusOK) || got.ImageSize != 7 {
+		t.Errorf("small.png = %q, %d, want ok and its size", got.ImageStatus, got.ImageSize)
+	}
+	if got := d.Files[2]; got.ImageStatus != "" {
+		t.Errorf("notes.md = %q, want no status: it is not an image", got.ImageStatus)
+	}
+}
+
+func imageFile(path string) *model.File {
+	return &model.File{NewPath: path, IsImage: true, IsBinary: true, Status: model.StatusAdded}
 }

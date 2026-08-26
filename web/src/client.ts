@@ -133,7 +133,7 @@ export interface StaticPayload {
       assets?: PreviewAssets
     }
   >
-  images: Record<string, { dataUrl: string; path?: string }>
+  images: Record<string, { dataUrl?: string; path?: string; status?: string; size?: number }>
 }
 
 /**
@@ -526,7 +526,10 @@ function createStaticClient(data: StaticPayload): SbnnClient {
       throw new Error('an exported page carries no source text')
     },
     imageSrc(_group, diffId, fileId) {
-      return data.images?.[`${diffId}:${fileId}`]?.dataUrl
+      // An image the export left out carries a status instead of a data
+      // URL; the section draws the same placeholder the live page draws for
+      // it, off file.imageStatus, so there is nothing to hand back here.
+      return data.images?.[`${diffId}:${fileId}`]?.dataUrl ?? ''
     },
     subscribe(_group, onChange) {
       listeners.add(onChange)
