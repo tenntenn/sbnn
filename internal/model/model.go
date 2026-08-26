@@ -531,6 +531,25 @@ type Hook struct {
 	// URL is sent a JSON POST describing the review.
 	URL       string    `json:"url,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
+	// LastCommandRun and LastPost are what happened the last time each half
+	// of the hook ran. A hook exists for the case where nobody is waiting,
+	// which is exactly when a silent failure costs the most, so the outcome
+	// is kept with the hook and listed back with it instead of only being
+	// logged. They are nil until the hook has run once.
+	LastCommandRun *HookRun `json:"lastCommandRun,omitempty"`
+	LastPost       *HookRun `json:"lastPost,omitempty"`
+}
+
+// HookRun is the outcome of one attempt to run a hook.
+type HookRun struct {
+	At time.Time `json:"at"`
+	// OK is whether the attempt got through: the command exited 0, or the
+	// endpoint answered below 300.
+	OK bool `json:"ok"`
+	// Detail is the one-line reason, kept short enough to list. It is the
+	// error and the first line of the output for a command, and the status
+	// or the transport error for a URL.
+	Detail string `json:"detail,omitempty"`
 }
 
 // Reviewed reports whether the group was reviewed after its newest diff

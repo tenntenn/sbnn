@@ -511,3 +511,39 @@ func displayCommand(command string) string {
 	}
 	return fmt.Sprintf("sbnn %s", command)
 }
+
+// A flag that changes what `--clear` destroys is not a detail an agent can
+// discover on its own: it reads the skill, not `--help`. When such a flag is
+// added to the binary and the skill is not told about it, the skill goes on
+// describing a `--clear` that only has one setting, and the agent throws away
+// the comments it never got to. These are the flags the skill has to name.
+var clearScopeFlags = []struct {
+	command string
+	flag    string
+	why     string
+}{
+	{
+		command: "comments",
+		flag:    "--resolved-only",
+		why:     "the selective clear: without it --clear drops the still open comments too",
+	},
+}
+
+func TestSkillDocumentsTheScopeOfClear(t *testing.T) {
+	root := moduleRoot(t)
+	flags := commandFlags(t, buildSbnn(t, root))
+	text := skillText(t)
+
+	for _, tt := range clearScopeFlags {
+		t.Run(tt.command+tt.flag, func(t *testing.T) {
+			if !flags[tt.command][tt.flag] {
+				t.Fatalf("sbnn %s has no %s flag; this test needs updating",
+					tt.command, tt.flag)
+			}
+			if !strings.Contains(text, tt.flag) {
+				t.Errorf("the skill never names %s of sbnn %s: %s",
+					tt.flag, tt.command, tt.why)
+			}
+		})
+	}
+}

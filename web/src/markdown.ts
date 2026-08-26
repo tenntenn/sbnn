@@ -259,17 +259,145 @@ function splitFrontmatter(source: string): {
   }
 }
 
+/**
+ * PreviewLinkTargets maps a path in the review to the fragment that
+ * addresses that file's own section on this page. It is what lets a link
+ * between two files of the same diff be followed without leaving sbnn.
+ */
+export type PreviewLinkTargets = Record<string, string>
+
+/**
+ * resolvePreviewLinks points the <a> tags of a rendered preview at something
+ * that exists, or stops them pretending to.
+ *
+ * A relative href in a Markdown file is written against the file's own
+ * directory in the tree. The review page is served from the server root, so
+ * left alone `./notes.md` resolved to `/notes.md`, which the SPA catch-all
+ * answered with the review page again: the reader landed on a second copy of
+ * sbnn that read `notes.md` as a group name, found no such group, and said
+ * "Waiting for a diff". The link appeared to work and went nowhere.
+ *
+ * So every relative href is resolved against the previewed file's directory
+ * and then looked up in what this page is showing. A file the review carries
+ * becomes a link to that file's own section, followed in place. Anything else
+ * is not a link at all: it is drawn as the path it resolved to and the plain
+ * statement that it is not part of this review, which is the honest answer
+ * when there is nothing here to open.
+ *
+ * A bare fragment is left exactly as written - it addresses this document -
+ * and so is an absolute or remote href, which the browser resolves the same
+ * way in a live page and an exported one.
+ *
+ * Like resolvePreviewImages this runs on the sanitiser's output as a string,
+ * where every tag has quoted, escaped attributes: raw HTML in a document
+ * carries <a> too, and one pass catches both spellings. It is also what lets
+ * it be tested where there is no DOM to render Markdown in.
+ */
+export function resolvePreviewLinks(
+  html: string,
+  path: string,
+  targets?: PreviewLinkTargets,
+): string {
+  if (!html.includes('<a')) return html
+  return html.replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi, (tag, attrs: string, text: string) => {
+    const href = attrOf(`<a${attrs}>`, 'href')
+    if (href === null || href === '') return tag
+    if (isAbsoluteURL(href) || href.startsWith('#')) return tag
+    const resolved = resolveAgainst(path, href)
+    if (resolved === null) return tag
+    const fragment = targets?.[resolved]
+    if (fragment !== undefined) {
+      return (
+        `<a href="${escapeHTML(fragment)}" class="preview-link-file"` +
+        ` title="${escapeHTML(resolved)}">${text}</a>`
+      )
+    }
+    return outsideReview(resolved, text)
+  })
+}
+
+/** outsideReview is what stands where a link cannot be followed. It names
+ * the path the href resolved to, so a reader who wants the file knows what
+ * to open, and says why it is not one click away - which a link that quietly
+ * goes nowhere says neither. */
+function outsideReview(resolved: string, text: string): string {
+  const label = `${resolved} - not part of this review`
+  return (
+    `<span class="preview-link-outside" title="${escapeHTML(label)}"` +
+    ` aria-label="${escapeHTML(label)}">` +
+    `<span class="preview-link-text">${text}</span>` +
+    `<span class="preview-link-why">not in this review</span>` +
+    `</span>`
+  )
+}
+
+/**
+ * resolveAgainst turns an href written inside `path` into a path from the
+ * root of the tree the diff came from, dropping any query or fragment: what
+ * this page can look up is a file, not a place inside one.
+ *
+ * A leading slash is read as that same root rather than as the web server's,
+ * which is how a repository writes a link to a file at its top level. An
+ * href that climbs above the root has nothing to resolve to and is left
+ * alone, since rewriting it could only guess.
+ */
+function resolveAgainst(path: string, href: string): string | null {
+  const cut = href.search(/[?#]/)
+  const target = cut === -1 ? href : href.slice(0, cut)
+  if (target === '') return null
+  let decoded = target
+  try {
+    decoded = decodeURI(target)
+  } catch {
+    // Not valid percent-encoding; take it as written, the same way
+    // lookupAsset does.
+  }
+  const base = decoded.startsWith('/') ? [] : path.split('/').slice(0, -1)
+  const parts = decoded.replace(/^\//, '').split('/')
+  const out = [...base]
+  for (const part of parts) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      if (out.length === 0) return null
+      out.pop()
+      continue
+    }
+    out.push(part)
+  }
+  return out.length === 0 ? null : out.join('/')
+}
+
 export function escapeHTML(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c)
 }
 
-// Links open away from the page, and they are the only elements that gain
-// an attribute here, so the hook only has to look at them.
+/**
+ * isExternalHref reports whether a link points somewhere that is genuinely
+ * another page, and so is worth opening in a tab of its own.
+ *
+ * Only an absolute http(s) URL is. A relative href and a bare fragment both
+ * resolve against the review page's own URL, which is the server root - not
+ * against the directory the previewed file lives in - so opening one in a new
+ * tab lands the reader on a second copy of sbnn (or, now that the server
+ * answers asset-looking paths with 404, on a blank error tab) rather than on
+ * the thing they clicked. A mailto: or tel: href is handed to another
+ * application entirely and gains nothing from target either.
+ */
+function isExternalHref(href: string): boolean {
+  return /^https?:\/\//i.test(href) || href.startsWith('//')
+}
+
+// Links are the only elements that gain an attribute here, so the hook only
+// has to look at them. target is removed rather than merely not set: the
+// Markdown comes from a diff and may carry its own <a target="_blank">.
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-  if (node.tagName === 'A' && node.hasAttribute('href')) {
+  if (node.tagName !== 'A' || !node.hasAttribute('href')) return
+  if (isExternalHref(node.getAttribute('href') ?? '')) {
     node.setAttribute('target', '_blank')
     node.setAttribute('rel', 'noreferrer noopener')
+    return
   }
+  node.removeAttribute('target')
 })
 
 // An exported page is one file with the diff frozen into it; nothing in a

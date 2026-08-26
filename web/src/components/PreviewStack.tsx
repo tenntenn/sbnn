@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { Diff, FileDiff, PreviewKind, Status } from '../types'
-import { isPreviewable } from '../types'
+import { filePath, isPreviewable } from '../types'
+import type { PreviewLinkTargets } from '../markdown'
 import { PreviewFileSection } from './PreviewFileSection'
 import { sectionKey } from '../sectionKey'
+import { hashForKey } from '../urlState'
 import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
 import type { ScrollFraction } from './DiffStack'
@@ -87,6 +89,22 @@ export function PreviewStack({
     () => rounds.flatMap((r) => r.files.map((f) => sectionKey(r.diff.id, f.id))),
     [rounds],
   )
+
+  // Where a link between two files of the review leads. A relative href in
+  // one previewed file is resolved against that file's directory and looked
+  // up here, so it is followed to the other file's section on this page
+  // instead of to the server root. A path touched by more than one round
+  // resolves to the newest one, which is the copy the reader is being shown.
+  const linkTargets = useMemo<PreviewLinkTargets>(() => {
+    const targets: PreviewLinkTargets = {}
+    for (const round of rounds) {
+      for (const file of round.files) {
+        const path = filePath(file)
+        if (path !== '') targets[path] = hashForKey(sectionKey(round.diff.id, file.id))
+      }
+    }
+    return targets
+  }, [rounds])
 
   const nothingToPreview = diffs.length > 0 && rounds.length === 0
 
@@ -212,6 +230,7 @@ export function PreviewStack({
               >
                 <PreviewFileSection
                   group={group}
+                  linkTargets={linkTargets}
                   diffId={d.id}
                   file={file}
                   status={status}

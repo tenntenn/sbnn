@@ -1,0 +1,70 @@
+# What a tag turns into on the releases page.
+#
+# sbnn is one binary with the review page built into it, and web/dist is
+# committed on purpose so that this build needs no Node - see web/web.go. So
+# there is nothing to run before the compile, and `before` stays empty.
+#
+# tagpr cuts the tag and opens the GitHub release; this only attaches the
+# binaries to it, which is why release.mode is append.
+version: 2
+
+project_name: sbnn
+
+builds:
+  - id: sbnn
+    main: .
+    binary: sbnn
+    env:
+      # No cgo is reached for, and turning it off keeps the linux binaries
+      # static so they run in a container that has no matching libc.
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Version and Revision are read from the build info when there is one to
+    # read (see version/version.go and version/revision.go), and a GoReleaser
+    # build has none: it compiles a checkout, where the module version is
+    # "(devel)". So the tag and the commit are passed at link time instead.
+    ldflags:
+      - -s -w
+      - -X github.com/tenntenn/sbnn/version.Version={{.Version}}
+      - -X github.com/tenntenn/sbnn/version.Revision={{.FullCommit}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: sbnn
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # The name a reader has to recognise on the releases page, and the one
+    # `sbnn_Linux_x86_64.tar.gz` conventions have taught them to look for.
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  # tagpr has already made the release and written its notes from the pull
+  # requests it collected. Appending adds the binaries without touching them;
+  # the default would replace the release GoReleaser did not write.
+  mode: append
+  draft: false
+  prerelease: auto
+
+changelog:
+  # CHANGELOG.md is tagpr's, built from the merged pull requests. A second
+  # changelog generated from commit subjects would only disagree with it.
+  disable: true

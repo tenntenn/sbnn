@@ -1,4 +1,7 @@
 /sbnn
+# What GoReleaser writes. Only the one at the root: web/dist is the built
+# review page and is committed on purpose, so that `go install` needs no Node.
+/dist/
 node_modules/
 .DS_Store
 *.log

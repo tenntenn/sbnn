@@ -55,13 +55,29 @@ deliberate differences:
 
 ## Install
 
+Download a binary from the [releases page](https://github.com/tenntenn/sbnn/releases),
+or build it with Go:
+
 ```console
 $ go install github.com/tenntenn/sbnn@latest
 ```
 
-That is the whole installation. sbnn is one binary with the review page built
-into it, and it renders the Markdown preview itself, so nothing else has to be
-on PATH before you pipe a diff into it.
+Either way that is the whole installation. sbnn is one binary with the review
+page built into it, and it renders the Markdown preview itself, so nothing else
+has to be on PATH before you pipe a diff into it.
+
+Each release carries an archive per platform - macOS, Linux and Windows, on
+x86_64 and arm64 - and a `checksums.txt` beside them. sbnn reads any unified
+diff, so most of the people it is for are not reviewing Go and have no reason
+to have a Go toolchain; the same goes for a CI image or a container. On macOS
+and Linux:
+
+```console
+$ tar xzf sbnn_Linux_x86_64.tar.gz
+$ ./sbnn --version
+```
+
+Move the binary onto your `PATH` and it is installed.
 
 sbnn is built with the Go version `go.mod` names, `go 1.27.0`. Your own Go does
 not have to be that new: since Go 1.21 the default `GOTOOLCHAIN=auto` fetches
@@ -85,7 +101,10 @@ go: github.com/tenntenn/sbnn@latest: ... requires go >= 1.27.0 (running go 1.24.
 Upgrade Go to the version that line asks for, or leave `GOTOOLCHAIN` at its
 default and let it fetch that toolchain for you.
 
-Building from source this way is the only way to install sbnn today.
+`go install` builds from source, so the binary reports the module version it
+was installed at - `sbnn --version` says `dev` for an untagged commit and the
+release for `@v1.2.3`. A binary from the releases page is stamped with the tag
+it was built from.
 
 ## Usage
 
@@ -421,8 +440,21 @@ around:
 ```console
 $ git diff | sbnn --on-review 'claude -p "$(sbnn comments)"'
 $ sbnn hook --on-review-url http://localhost:9000/reviews   # a POST instead
-$ sbnn hook            # what is registered
+$ sbnn hook            # what is registered, and how it went last time
 $ sbnn hook --clear
+```
+
+A URL hook is checked when it is registered: sbnn can only POST to `http`
+and `https`, so anything else is refused with a 400 while you are still
+there to read it, rather than stored and failed once per review into a log
+file. `sbnn hook` also lists how each hook went the last time it ran, so a
+hook that has been failing is visible before the next review rather than
+after it:
+
+```console
+$ sbnn hook
+h1  POST http://localhost:9000/reviews
+      last post: failed, 2026-08-25T09:00:00+09:00 - connection refused
 ```
 
 The command runs through the shell with the review prompt on its stdin and

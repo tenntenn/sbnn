@@ -104,6 +104,33 @@ ones next to the code you are changing.
 
 **Say how you checked it.** The commands you ran and what they printed.
 
+## How a release happens
+
+Nothing is released by hand.
+
+1. Merging to `main` runs [tagpr](https://github.com/Songmu/tagpr), which keeps
+   a release pull request open with the merged pull requests collected into
+   `CHANGELOG.md`.
+2. Merging *that* pull request pushes the tag and opens the GitHub release.
+3. The tag push runs `.github/workflows/release.yml`, which runs GoReleaser
+   over `.goreleaser.yml`: six archives — macOS, Linux and Windows on x86_64
+   and arm64 — plus `checksums.txt`, appended to the release tagpr made.
+
+The version a binary reports comes from the tag, not from a file anyone edits.
+GoReleaser passes it at link time; a `go install github.com/tenntenn/sbnn@v1.2.3`
+build has no linker flags and reads the module version out of its own build
+info instead. Both paths are in `version/`, and `version/release_test.go`
+checks that `.goreleaser.yml` still names the variables it stamps.
+
+To try the build without releasing anything:
+
+```console
+$ go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean
+```
+
+It writes the archives into `dist/`, which is git-ignored. `web/dist` is a
+different directory and is committed on purpose.
+
 ## Reporting things
 
 - **Bugs and features:** open an issue, and include the diff sbnn was given.
