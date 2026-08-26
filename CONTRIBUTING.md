@@ -23,7 +23,7 @@ from reading the code.
 
 ```console
 $ task build     # pnpm build in web/, then go build ./...
-$ task test      # go test ./...
+$ task test      # go test ./... and the review UI tests in web/test
 $ task lint      # go vet, sbnnvet, a gofmt check, go fix -diff, go mod tidy with no diff
 $ task dev       # sbnn in the foreground plus the Vite dev server
 ```
@@ -36,6 +36,19 @@ catches a dependency added without tidying. `go fix -diff` prints the rewrite th
 standard library has since given a better spelling for rather than applying
 it, and exits non-zero when there is one; run `go fix ./...` to take the
 patch. Unformatted code that reaches review costs someone else a round trip.
+
+`task test` runs two suites: `go test ./...`, and the review UI tests under
+`web/test` — the word-level diff, the suggestion parser, the search matcher,
+the shortcut table, the exported page's static client, none of which any Go
+test reaches. CI runs them as two jobs, `go` and `web`, so the two halves are
+`task test-go` and `task test-web` if you want one of them on its own. The web
+half needs pnpm; if you have not got it, run `task test-go`.
+
+There is a third suite that `task test` does **not** run: `test/visual`, a
+Playwright harness that drives a real Chromium against the committed
+`web/dist`. It is separate on purpose — it measures the bundle rather than
+your source, and it pins defects that are still open with `test.fail()`, so it
+goes red when one of them is fixed. See [test/visual/README.md](test/visual/README.md).
 
 ## The repository's own vet tool
 
@@ -63,8 +76,11 @@ It carries three analyzers.
   `exec.Command`, `exec.CommandContext` or `exec.LookPath` given a constant
   that names the git binary — `"git"`, `"/usr/bin/git"`, `"git.exe"` — so the
   one line that would quietly undo the rule fails the build instead of the
-  review. Its source is `internal/analysis/nogit`, with the cases it does and
-  does not report spelled out in `testdata/src/a/a.go`.
+  review. Test files are exempt: a `_test.go` file is not compiled into sbnn,
+  so `version/release_test.go` may run `git ls-files` to prove no
+  `.tsbuildinfo` is tracked. Its source is `internal/analysis/nogit`, with the
+  cases it does and does not report spelled out in `testdata/src/a/a.go` and
+  `testdata/src/a/a_test.go`.
 - **`nilness`** and **`unusedwrite`** — two analyzers `golang.org/x/tools`
   ships that `go vet` does not run by default. `nilness` reports a dereference
   or a comparison that is nil on every path; `unusedwrite` reports a write to

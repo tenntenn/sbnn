@@ -2,6 +2,7 @@ package version
 
 import (
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -88,4 +89,29 @@ func TestOnlyTheRootDistIsIgnored(t *testing.T) {
 			t.Error("a bare dist/ rule would also ignore web/dist, which is committed on purpose")
 		}
 	}
+}
+
+// `tsc -b` rewrites its incremental cache on every `pnpm run build`, so a
+// tracked .tsbuildinfo makes the working tree dirty every time anyone builds
+// the review page. It carries nothing another checkout can use - timestamps
+// and file hashes from the machine that ran the build - so it has to be
+// ignored, and it has to be untracked as well: an ignore rule does nothing
+// for a file git already follows.
+func TestTheTypeScriptBuildCacheIsNotTracked(t *testing.T) {
+	t.Run("ignored", func(t *testing.T) {
+		if !strings.Contains(readRepoFile(t, ".gitignore"), ".tsbuildinfo") {
+			t.Error(".gitignore does not ignore tsc's .tsbuildinfo cache, so every build dirties the tree")
+		}
+	})
+	t.Run("untracked", func(t *testing.T) {
+		out, err := exec.Command("git", "-C", "..", "ls-files").Output()
+		if err != nil {
+			t.Skipf("git ls-files: %v", err)
+		}
+		for line := range strings.SplitSeq(string(out), "\n") {
+			if strings.HasSuffix(line, ".tsbuildinfo") {
+				t.Errorf("%s is tracked; ignoring it is not enough once git already follows it", line)
+			}
+		}
+	})
 }

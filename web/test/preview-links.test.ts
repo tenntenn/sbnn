@@ -183,3 +183,37 @@ test('html with no links is handed back untouched', () => {
   const html = '<p>nothing to see</p>'
   assert.equal(resolvePreviewLinks(html, 'docs/guide.md', targets), html)
 })
+
+/**
+ * #339: the base a preview's links resolve against has to be the same kind of
+ * path linkTargets is keyed by, and PreviewStack keys it by the diff-relative
+ * path. PreviewFileSection used to pass `preview.path || filePath(file)`, and
+ * preview.path is the file on disk the bytes were read from - absolute, and
+ * empty only when the content was rebuilt from the diff. So the fallback was
+ * reached exactly when the file was *missing* from the working tree, and the
+ * ordinary case of `git diff | sbnn` inside the repository took the other
+ * branch and resolved every relative href into a filesystem path no key can
+ * match.
+ *
+ * These two are the same document and the same href, resolved against the two
+ * kinds of base, and they show that one of them cannot work. The call site is
+ * pinned in web/previewlinkbase_test.go, which can read both files at once.
+ */
+test('a diff-relative base finds the other file of the review (#339)', () => {
+  const out = resolvePreviewLinks('<p><a href="./notes.md">the other doc</a></p>', 'docs/guide.md', targets)
+  assert.equal(hrefOf(out), '#d1:f2-abcd1234')
+})
+
+test('an absolute worktree base can never match a target, and leaks the path (#339)', () => {
+  const out = resolvePreviewLinks(
+    '<p><a href="./notes.md">the other doc</a></p>',
+    '/home/reviewer/checkout/docs/guide.md',
+    targets,
+  )
+  assert.doesNotMatch(out, /<a\b/, 'it resolved to a target, so the two path spaces do overlap after all')
+  assert.match(
+    out,
+    /home\/reviewer\/checkout\/docs\/notes\.md - not part of this review/,
+    "the label carries the reviewer's absolute path",
+  )
+})

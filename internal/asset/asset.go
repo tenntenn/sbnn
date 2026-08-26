@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/tenntenn/sbnn/internal/diff"
+	"github.com/tenntenn/sbnn/internal/model"
 	"github.com/tenntenn/sbnn/internal/source"
 )
 
@@ -365,4 +366,53 @@ func fenceOf(line string) string {
 		return ""
 	}
 	return line[:n]
+}
+
+// InDiff decides what becomes of an image that is part of the diff itself,
+// rather than one a previewed Markdown file points at.
+//
+// The two were decided differently and should not have been. A sibling image
+// has been capped at MaxBytes since #305; an image of the diff was frozen
+// into an exported page whatever it weighed, so one 32MiB PNG turned a page
+// meant to be mailed around into 45MB of base64. The rule is the same rule,
+// applied to the same kind of thing, and lives here so that both sides of it
+// - the live page, which draws the picture from an endpoint, and the exported
+// page, which carries the bytes - reach one answer for one file.
+//
+// It is deliberately per file and not per page. A budget spent across the
+// page can only be spent at export time: the live preview draws one file at a
+// time and knows nothing of the others, so the same file would be shown on
+// screen and left out of the export, which is exactly the divergence #305
+// exists to prevent. MaxTotalBytes is a property of one document for the same
+// reason. So the page total stays unbounded in the number of files, and every
+// individual picture in it is bounded.
+//
+// baseDir is the directory the diff was sent from; f must be the file itself.
+// A file that is not an image, or was deleted, has nothing to decide and gets
+// no status at all.
+func InDiff(baseDir string, f *model.File) (Status, int64) {
+	if !f.IsImage || f.Status == model.StatusDeleted {
+		return "", 0
+	}
+	abs := source.AbsPath(baseDir, f.Path())
+	if abs == "" {
+		return StatusOutside, 0
+	}
+	st, err := os.Stat(abs)
+	if err != nil || !st.Mode().IsRegular() {
+		return StatusMissing, 0
+	}
+	if st.Size() > MaxBytes {
+		return StatusTooLarge, st.Size()
+	}
+	return StatusOK, st.Size()
+}
+
+// RecordInDiff writes InDiff's answer onto every file of a diff, so that the
+// page can tell whether there is a picture to draw before it asks for one.
+func RecordInDiff(d *model.Diff) {
+	for _, f := range d.Files {
+		status, size := InDiff(d.BaseDir, f)
+		f.ImageStatus, f.ImageSize = string(status), size
+	}
 }

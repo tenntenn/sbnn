@@ -50,10 +50,23 @@ type Preview struct {
 }
 
 // Image is one image file's content, frozen at export time as a data URL so
-// the exported page needs no server to show it.
+// the exported page needs no server to show it - or, when it is too heavy to
+// carry, the reason there is no picture.
+//
+// Which of the two it is comes from internal/asset, the same place the live
+// page's verdict comes from, so a diff image reads the same way on screen and
+// in the file that was mailed around (#323). Before that it was always the
+// data URL: one 32MiB PNG made a 45MB page.
 type Image struct {
-	DataURL string `json:"dataUrl"`
+	DataURL string `json:"dataUrl,omitempty"`
 	Path    string `json:"path,omitempty"`
+	// Status is why there is no data URL, when there is none. It is
+	// internal/asset.Status; the page words it the same way it words a
+	// sibling image that did not fit.
+	Status string `json:"status,omitempty"`
+	// Size is the file's size in bytes, so the placeholder can say how big
+	// the picture was.
+	Size int64 `json:"size,omitempty"`
 }
 
 // Payload is the data the exported page reads out of window.__SBNN_DATA__.
@@ -125,6 +138,18 @@ func Build(g *model.Group, sbnnVersion string, now time.Time) *Payload {
 		// dropping it keeps the page roughly half the size.
 		frozen := *d
 		frozen.Raw = ""
+		// The files are copied rather than shared: the verdict on each
+		// image is written onto them below, and d belongs to the store of
+		// a server that may be serving it at the same moment.
+		frozen.Files = make([]*model.File, 0, len(d.Files))
+		for _, f := range d.Files {
+			cp := *f
+			cp.ImageStatus, cp.ImageSize = "", 0
+			if status, size := asset.InDiff(d.BaseDir, f); status != "" {
+				cp.ImageStatus, cp.ImageSize = string(status), size
+			}
+			frozen.Files = append(frozen.Files, &cp)
+		}
 		p.Diffs = append(p.Diffs, &frozen)
 
 		for _, f := range d.Files {
@@ -146,6 +171,17 @@ func Build(g *model.Group, sbnnVersion string, now time.Time) *Payload {
 				}
 				p.Previews[key] = prev
 			case f.IsImage && f.Status != model.StatusDeleted:
+				status, size := asset.InDiff(d.BaseDir, f)
+				if status != asset.StatusOK {
+					// Nothing is read: the point of the cap is that the
+					// bytes never move. A status the page can word is
+					// still worth carrying, so the reader is told there
+					// was a picture rather than shown a gap.
+					if status == asset.StatusTooLarge {
+						p.Images[key] = Image{Path: f.Path(), Status: string(status), Size: size}
+					}
+					continue
+				}
 				got := source.NewSide(d.BaseDir, f)
 				if got.Kind != source.FromWorktree || got.Content == "" {
 					continue

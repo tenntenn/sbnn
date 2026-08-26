@@ -706,3 +706,75 @@ func firstBytes(s string) string {
 	}
 	return s
 }
+
+// An image of the diff was frozen into the page whatever it weighed, so one
+// large PNG turned a page meant to be mailed around into tens of megabytes of
+// base64 (#323). Measured on origin/main with a 12MB PNG: a 17,516,408 byte
+// export from one file.
+//
+// The cap is the one internal/asset already held a sibling image to, and the
+// verdict travels on the file as well, so the page draws the same placeholder
+// for it that the live page draws - which is the agreement #305 is about.
+func TestBuildDoesNotFreezeAnImagePastTheCap(t *testing.T) {
+	dir := t.TempDir()
+	big := make([]byte, asset.MaxBytes+1)
+	if err := os.WriteFile(filepath.Join(dir, "logo.png"), big, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files := diff.Parse(notebookAndImageDiff)
+	g := &model.Group{
+		Name: "default",
+		Diffs: []*model.Diff{{
+			ID: "d1", Title: "first", BaseDir: dir, Raw: notebookAndImageDiff, Files: files,
+		}},
+	}
+	p := export.Build(g, "test", time.Now())
+
+	img := files[1]
+	got, ok := p.Images["d1:"+img.ID]
+	if !ok {
+		t.Fatal("the image is missing from the page entirely; the reader should be told there was one")
+	}
+	if got.DataURL != "" {
+		t.Errorf("dataUrl is %d bytes, want none: the file is %d bytes, past the %d cap",
+			len(got.DataURL), len(big), asset.MaxBytes)
+	}
+	if got.Status != string(asset.StatusTooLarge) || got.Size != int64(len(big)) {
+		t.Errorf("status = %q, size = %d, want %q and %d", got.Status, got.Size, asset.StatusTooLarge, len(big))
+	}
+	// The page decides what to draw off the file, before it looks in Images
+	// at all, so the verdict has to be on the frozen file too.
+	frozen := p.Diffs[0].Files[1]
+	if frozen.ImageStatus != string(asset.StatusTooLarge) || frozen.ImageSize != int64(len(big)) {
+		t.Errorf("frozen file carries %q, %d, want %q and %d",
+			frozen.ImageStatus, frozen.ImageSize, asset.StatusTooLarge, len(big))
+	}
+	// The store's own file is not the frozen one: a server may be serving
+	// this group while it is exported.
+	if img == frozen {
+		t.Error("Build froze the store's own file rather than a copy of it")
+	}
+}
+
+// The whole page, not just the entry: nothing about the bytes may reach it.
+func TestBuildOfAnOversizedImageStaysSmall(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "logo.png"), make([]byte, asset.MaxBytes*4), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files := diff.Parse(notebookAndImageDiff)
+	g := &model.Group{
+		Name: "default",
+		Diffs: []*model.Diff{{
+			ID: "d1", Title: "first", BaseDir: dir, Raw: notebookAndImageDiff, Files: files,
+		}},
+	}
+	b, err := json.Marshal(export.Build(g, "test", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) > asset.MaxBytes {
+		t.Errorf("the payload is %d bytes for one %d byte image, so the bytes were carried after all",
+			len(b), asset.MaxBytes*4)
+	}
+}

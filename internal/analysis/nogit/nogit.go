@@ -6,6 +6,11 @@
 // not on this machine. The rule is written down in AGENTS.md, and a single
 // exec.Command("git", ...) added in passing would quietly undo it, so it is
 // checked here rather than left to review.
+//
+// Test files are exempt. The rule constrains the binary sbnn ships, and a
+// _test.go file is not part of it; a test that asks git what the repository
+// tracks - version/release_test.go does, to prove no .tsbuildinfo is
+// committed - is making a statement about the checkout, not reviewing a diff.
 package nogit
 
 import (
@@ -26,7 +31,10 @@ const doc = `nogit reports calls that run the git binary
 sbnn takes diffs from stdin only; it must never shell out to git. The
 analyzer reports a call to os/exec.Command, exec.CommandContext or
 exec.LookPath whose command name is a constant naming the git binary -
-"git", "/usr/bin/git", "git.exe" and so on.`
+"git", "/usr/bin/git", "git.exe" and so on.
+
+Test files are not reported: a _test.go file is never compiled into sbnn,
+so what it runs cannot make the reviewer depend on git.`
 
 // Analyzer reports calls that run the git binary.
 var Analyzer = &analysis.Analyzer{
@@ -49,6 +57,14 @@ func run(pass *analysis.Pass) (any, error) {
 
 	insp.Preorder([]ast.Node{(*ast.CallExpr)(nil)}, func(n ast.Node) {
 		call := n.(*ast.CallExpr)
+
+		// A _test.go file is not compiled into sbnn, so nothing it runs can
+		// make the reviewer need git installed. Asking git ls-files what the
+		// tree tracks, the way version/release_test.go does, is a check on
+		// the repository rather than a diff arriving by the wrong route.
+		if strings.HasSuffix(pass.Fset.Position(call.Pos()).Filename, "_test.go") {
+			return
+		}
 
 		fn, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
 		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != "os/exec" {

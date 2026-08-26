@@ -164,6 +164,14 @@ func (p *previewer) image(d *model.Diff, f *model.File) (data []byte, contentTyp
 	if err := previewableImage(f); err != nil {
 		return nil, "", err
 	}
+	// The page is told before it asks - model.File.ImageStatus carries the
+	// same verdict - so this is the second line of defence rather than the
+	// first: a page held open since before the file grew, or anything else
+	// asking directly, must not be able to pull bytes past the cap either.
+	if status, size := asset.InDiff(d.BaseDir, f); status == asset.StatusTooLarge {
+		return nil, "", fmt.Errorf("%w: %s is %s, past the %s an image of the diff is drawn up to",
+			errNotPreviewable, f.Path(), byteLimit(size), byteLimit(asset.MaxBytes))
+	}
 	got := source.NewSide(d.BaseDir, f)
 	if got.Kind != source.FromWorktree || got.Content == "" {
 		return nil, "", fmt.Errorf("%w: nothing to preview for %s", errNotPreviewable, f.Path())

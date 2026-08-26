@@ -11,6 +11,7 @@ import {
 import type { Comment, Diff, ViewMode } from '../types'
 import { estimatedHeight } from '../estimatedHeight'
 import { sectionKey } from '../sectionKey'
+import { nextActive } from '../activeSection'
 import { DiffFileSection } from './DiffFileSection'
 import { Icon } from './Icon'
 
@@ -150,6 +151,10 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
   const sectionEls = useRef(new Map<string, HTMLDivElement>())
   const intersecting = useRef(new Set<string>())
   const activeKeyRef = useRef<string | null>(null)
+  // The section the reader last jumped to from the sidebar or the keyboard.
+  // It outranks the scroll rule while it is still on screen; see
+  // ../activeSection.
+  const jumpedToRef = useRef<string | null>(null)
   const toolbarRef = useRef<HTMLDivElement>(null)
   const [toolbarHeight, setToolbarHeight] = useState(0)
 
@@ -204,6 +209,10 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
     scrollToSection(key: string) {
       const el = sectionEls.current.get(key)
       if (!el) return
+      // Record the jump before the scroll, so the observer callbacks the
+      // scroll produces already know the reader asked for this file.
+      jumpedToRef.current = key
+      activeKeyRef.current = key
       const root = containerRef.current
       if (!root) {
         el.scrollIntoView({ block: 'start' })
@@ -234,11 +243,12 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
     const root = containerRef.current
     if (!root) return
     const recomputeActive = () => {
-      let found: string | null = null
-      for (const key of order) {
-        if (intersecting.current.has(key)) found = key
-      }
-      if (found === null) found = order[0] ?? null
+      const { key: found, jumpedTo } = nextActive(
+        order,
+        intersecting.current,
+        jumpedToRef.current,
+      )
+      jumpedToRef.current = jumpedTo
       if (found !== activeKeyRef.current) {
         activeKeyRef.current = found
         onActiveChangeRef.current(found)

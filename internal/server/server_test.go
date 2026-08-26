@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tenntenn/sbnn/internal/asset"
 	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/history"
 	"github.com/tenntenn/sbnn/internal/mo"
@@ -1772,5 +1773,68 @@ func TestHandleAddCommentRefusesASuggestionWithNoLines(t *testing.T) {
 				t.Fatalf("status = %s, want 400", resp.Status)
 			}
 		})
+	}
+}
+
+// The page has to know whether there is a picture to draw before it asks for
+// the bytes: on a live page it fetches them from the image endpoint, and in
+// an exported page they are carried inline, so a verdict decided separately
+// on each side would show a file on screen and leave it out of the export -
+// the divergence #305 exists to prevent. So the verdict travels on the file,
+// decided once by internal/asset (#323).
+func TestAnOversizedDiffImageIsRefusedAndSaidSoOnTheFile(t *testing.T) {
+	work := t.TempDir()
+	if err := os.WriteFile(filepath.Join(work, "logo.png"), make([]byte, asset.MaxBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: imageDiff, BaseDir: work}, &added)
+	file := added.Diff.Files[0]
+	if file.ImageStatus != string(asset.StatusTooLarge) {
+		t.Fatalf("imageStatus = %q, want %q: the page cannot tell there is nothing to draw",
+			file.ImageStatus, asset.StatusTooLarge)
+	}
+	if file.ImageSize != asset.MaxBytes+1 {
+		t.Errorf("imageSize = %d, want %d, so the placeholder can say how big it was", file.ImageSize, asset.MaxBytes+1)
+	}
+
+	// And the bytes stay where they are even for something that asks anyway.
+	resp, err := http.Get(ts.URL + "/_/api/groups/default/diffs/" + added.Diff.ID + "/files/" + file.ID + "/image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %s, want 400: %d bytes were served past the cap", resp.Status, resp.ContentLength)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "logo.png") {
+		t.Errorf("the refusal does not name the file: %s", body)
+	}
+}
+
+// The status is not a way of hiding pictures: an image that fits is still
+// served, and still says so.
+func TestADiffImageThatFitsIsStillDrawn(t *testing.T) {
+	work := t.TempDir()
+	if err := os.WriteFile(filepath.Join(work, "logo.png"), []byte("fakepng"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ts, _ := newTestServer(t)
+	var added AddDiffResponse
+	postJSON(t, ts.URL+"/_/api/groups/default/diffs", AddDiffRequest{Content: imageDiff, BaseDir: work}, &added)
+	file := added.Diff.Files[0]
+	if file.ImageStatus != string(asset.StatusOK) || file.ImageSize != 7 {
+		t.Errorf("imageStatus = %q, imageSize = %d, want %q and 7", file.ImageStatus, file.ImageSize, asset.StatusOK)
+	}
+	resp, err := http.Get(ts.URL + "/_/api/groups/default/diffs/" + added.Diff.ID + "/files/" + file.ID + "/image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %s, want 200", resp.Status)
 	}
 }

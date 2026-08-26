@@ -749,6 +749,32 @@ opening the stream for the first time is given nothing: it has missed nothing
 by definition, and replaying to `sbnn wait` would have it return a review
 submitted before anyone asked it to wait.
 
+**The replay is a snapshot, not a backlog.** The server keeps one stored
+notice per group — the most recent — so a reconnect is answered with at most
+one `review` event per group, whatever `n` you send. Review a group four times
+while disconnected and you are handed the fourth, not all four:
+
+```console
+$ curl -N -H 'Last-Event-ID: 1' localhost:6280/_/events
+retry: 2000
+
+id: 4
+data: {"type":"review","group":"gv", ...}
+
+id: 5
+data: {"type":"review","group":"api", ...}
+```
+
+Ids 2 and 3 were also reviews of `gv` and do not arrive; nothing in the id
+sequence says so. This is deliberate rather than a gap to be closed. Both
+clients want the current verdict: the browser refetches the group on any
+notice, so repeats would be identical refetches, and `sbnn wait` asks whether
+the group has been reviewed, not how often. Keeping the full history would
+also make the store grow for the life of the process. So treat a resumed
+stream as "here is where each group stands now", and read the round-by-round
+history from [`GET /_/api/reviews`](#get-_apireviews) instead, which is where
+it is kept.
+
 A `change` notice may be dropped for a subscriber that has fallen behind; a
 `review` notice is not.
 
@@ -854,6 +880,8 @@ One file of a round. `internal/model`.
 | `isMarkdown` | bool | |
 | `isImage` | bool | |
 | `isNotebook` | bool | |
+| `imageStatus` | string | for an image, whether there is a picture to draw: `ok`, `too-large`, `missing`, `outside`. Omitted otherwise |
+| `imageSize` | number | that file's size in bytes. Omitted when there is none |
 | `hunks` | array | [`Hunk`](#hunk). Empty for a binary file |
 
 #### `Hunk`
