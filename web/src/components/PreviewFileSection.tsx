@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FileDiff, PreviewFormat, PreviewKind, Status } from '../types'
-import { filePath, previewFormatOf } from '../types'
+import { filePath, hunksOf, previewFormatOf } from '../types'
 import { client, type PreviewResult } from '../client'
 import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
@@ -88,7 +88,7 @@ function measuredFrameHeight(frame: HTMLIFrameElement): number | null {
  */
 function estimatedFrameHeight(file: FileDiff): number | null {
   let lines = 0
-  for (const hunk of file.hunks) {
+  for (const hunk of hunksOf(file)) {
     for (const line of hunk.lines) {
       if (line.kind !== 'delete') lines++
     }
@@ -126,7 +126,8 @@ function previewRevision(file: FileDiff): string {
       hash = Math.imul(hash, 0x01000193)
     }
   }
-  for (const hunk of file.hunks) {
+  const hunks = hunksOf(file)
+  for (const hunk of hunks) {
     mix(hunk.header)
     for (const line of hunk.lines) {
       mix(line.kind)
@@ -137,7 +138,7 @@ function previewRevision(file: FileDiff): string {
     filePath(file),
     file.status,
     file.isBinary ? 'bin' : 'text',
-    file.hunks.length,
+    hunks.length,
     (hash >>> 0).toString(36),
   ].join('|')
 }
