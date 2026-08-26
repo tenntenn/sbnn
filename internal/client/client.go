@@ -23,6 +23,9 @@ import (
 type Client struct {
 	Addr string
 	HTTP *http.Client
+	// MaxResponse bounds what a server may answer with. Zero means
+	// maxResponseSize.
+	MaxResponse int64
 }
 
 // New returns a client for the server at addr (host:port).
@@ -216,8 +219,35 @@ func (c *Client) do(ctx context.Context, method, u string, body, out any) error 
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return nil
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(out)
+	limit := c.MaxResponse
+	if limit <= 0 {
+		limit = maxResponseSize
+	}
+	// N is one past the limit, so a body that fills it is known to have
+	// overrun rather than merely reached the edge.
+	lr := &io.LimitedReader{R: resp.Body, N: limit + 1}
+	if err := json.NewDecoder(lr).Decode(out); err != nil {
+		if lr.N <= 0 {
+			return fmt.Errorf("%s %s: the answer is larger than %dMB, which sbnn cannot read",
+				method, u, limit>>20)
+		}
+		return err
+	}
+	return nil
 }
+
+// maxResponseSize bounds what a server may answer with.
+//
+// It used to be a flat 64MB read through an io.LimitReader, which is the same
+// mistake #155 is about, at the other end of the wire: the answer to a diff is
+// the *parsed* diff, where every line of the patch becomes an object, so 32MB
+// of patch comes back as about 128MB of JSON. The cap cut that in half, the
+// decoder met a body that stopped mid-object, and a diff the server had just
+// accepted was reported to the sender as "unexpected EOF".
+//
+// Eight times the largest diff sbnn accepts covers the measured four with room
+// to spare, and a body past that is reported as the oversized body it is.
+const maxResponseSize = 8 * server.MaxDiffSize
 
 // SubmitReview marks the review of a group as done, which is what wakes
 // anything waiting on it.
@@ -259,6 +289,20 @@ func (c *Client) DeleteHooks(ctx context.Context, group string) (int, error) {
 	return res.Removed, nil
 }
 
+// DeleteHook removes one hook by ID and returns how many went, which is 0
+// when the group has no hook with that ID: the server reports that as a
+// count, not as an error, so the caller decides what it means.
+func (c *Client) DeleteHook(ctx context.Context, group, id string) (int, error) {
+	var res struct {
+		Removed int `json:"removed"`
+	}
+	u := c.url("/_/api/groups/%s/hooks/%s", url.PathEscape(group), url.PathEscape(id))
+	if err := c.do(ctx, http.MethodDelete, u, nil, &res); err != nil {
+		return 0, err
+	}
+	return res.Removed, nil
+}
+
 // ReviewNotice is what the server pushes when a review is submitted.
 type ReviewNotice struct {
 	Type       string    `json:"type"`
@@ -267,9 +311,22 @@ type ReviewNotice struct {
 	Comments   int       `json:"comments"`
 }
 
-// WaitForReview blocks on the server's event stream until the given group is
-// reviewed. Nothing is polled: the server pushes the notice.
-func (c *Client) WaitForReview(ctx context.Context, group string) (*ReviewNotice, error) {
+// ReviewStream is an open subscription to the server's event stream. It
+// exists so that subscribing and waiting can be two steps: whoever waits
+// can subscribe first and only then ask whether the review has already
+// happened, which is the only order in which neither answer can be missed.
+type ReviewStream struct {
+	group   string
+	addr    string
+	body    io.ReadCloser
+	scanner *bufio.Scanner
+}
+
+// Subscribe opens the server's event stream and returns once the server has
+// accepted the request. From that point a review notice is delivered to
+// this client rather than published to nobody: the notices are not replayed
+// and a publish to a broker with no subscriber is simply dropped.
+func (c *Client) Subscribe(ctx context.Context, group string) (*ReviewStream, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url("/_/events"), nil)
 	if err != nil {
 		return nil, err
@@ -282,15 +339,23 @@ func (c *Client) WaitForReview(ctx context.Context, group string) (*ReviewNotice
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return nil, fmt.Errorf("cannot listen to %s: %s", c.Addr, resp.Status)
 	}
-
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
-	for scanner.Scan() {
-		line := scanner.Text()
+	return &ReviewStream{group: group, addr: c.Addr, body: resp.Body, scanner: scanner}, nil
+}
+
+// Close ends the subscription.
+func (s *ReviewStream) Close() error { return s.body.Close() }
+
+// Next blocks until the group is reviewed. Nothing is polled: the server
+// pushes the notice.
+func (s *ReviewStream) Next(ctx context.Context) (*ReviewNotice, error) {
+	for s.scanner.Scan() {
+		line := s.scanner.Text()
 		data, ok := strings.CutPrefix(line, "data: ")
 		if !ok {
 			continue
@@ -299,15 +364,27 @@ func (c *Client) WaitForReview(ctx context.Context, group string) (*ReviewNotice
 		if err := json.Unmarshal([]byte(data), &notice); err != nil {
 			continue
 		}
-		if notice.Type == "review" && (notice.Group == "" || notice.Group == group) {
+		if notice.Type == "review" && (notice.Group == "" || notice.Group == s.group) {
 			return &notice, nil
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := s.scanner.Err(); err != nil {
+		return nil, err
+	}
 	return nil, fmt.Errorf("the sbnn server closed the event stream")
+}
+
+// WaitForReview subscribes and then blocks until the given group is
+// reviewed. It is the one-shot form, for a caller that has no reason to
+// look at the group in between.
+func (c *Client) WaitForReview(ctx context.Context, group string) (*ReviewNotice, error) {
+	stream, err := c.Subscribe(ctx, group)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+	return stream.Next(ctx)
 }

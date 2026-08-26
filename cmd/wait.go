@@ -76,56 +76,102 @@ func runWait(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	// Everything the flags alone can decide is decided here, before the
+	// server is contacted and long before the wait begins: a wait that runs
+	// for hours and then refuses to print what it waited for is the review
+	// gone, not just an error message.
+	format, err := resolveFormat(waitFormat, waitJSON)
+	if err != nil {
+		return err
+	}
 	c := client.New(addr(), 10*time.Second)
 	if _, err := c.Status(ctx); err != nil {
 		return fmt.Errorf("no sbnn server found on %s", c.Addr)
 	}
 
-	g, err := c.Group(ctx, group)
-	if err != nil {
-		return err
-	}
-	if g.Reviewed() {
-		// The review landed before anyone started waiting for it.
-		return printReview(ctx, c, group)
-	}
-
+	// --timeout bounds the wait. Printing the review afterwards is not part
+	// of the wait, so it keeps the plain context.
+	waitCtx := ctx
 	if waitTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, waitTimeout)
+		waitCtx, cancel = context.WithTimeout(ctx, waitTimeout)
 		defer cancel()
 	}
-	fmt.Fprintf(os.Stderr, "sbnn: waiting for the review of %s\n", server.GroupURL(c.BaseURL(), group))
 
-	notice, err := c.WaitForReview(ctx, group)
+	// Subscribe before asking whether the review has already happened. The
+	// other way round leaves a window - the Group round trip, plus opening
+	// the event stream - in which a review is submitted to a broker this
+	// client is not in yet. The notice is not replayed and publishing to
+	// nobody is a no-op, so the wait would then never end. Subscribing
+	// first cannot lose it: a review submitted from here on arrives on the
+	// stream, and one submitted earlier is in the answer below.
+	stream, err := c.Subscribe(waitCtx, group)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			fmt.Fprintf(os.Stderr, "sbnn: no review after %s\n", waitTimeout)
-			os.Exit(exitNotReviewed)
-		}
 		return err
 	}
+	defer stream.Close()
+
+	g, err := c.Group(waitCtx, group)
+	if err != nil {
+		return notReviewed(err)
+	}
+	if g.Reviewed() {
+		// The review landed before anyone started waiting for it. The
+		// stream may be holding the same notice; it goes unread, so this
+		// review is reported once and not twice.
+		return printReview(ctx, c, group, format)
+	}
+
+	fmt.Fprintf(os.Stderr, "sbnn: waiting for the review of %s\n", server.GroupURL(c.BaseURL(), group))
+
+	notice, err := stream.Next(waitCtx)
+	if err != nil {
+		return notReviewed(err)
+	}
 	fmt.Fprintf(os.Stderr, "sbnn: review submitted, %d open comment(s)\n", notice.Comments)
-	return printReview(ctx, c, group)
+	return printReview(ctx, c, group, format)
 }
 
-// exitReview ends with the status the reviewer's verdict calls for.
+// notReviewed turns the deadline of --timeout into the status that says
+// "not reviewed yet" rather than "something went wrong", and passes any
+// other failure through.
+func notReviewed(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		fmt.Fprintf(os.Stderr, "sbnn: no review after %s\n", waitTimeout)
+		os.Exit(exitNotReviewed)
+	}
+	return err
+}
+
+// exitReview ends with the status the reviewer's verdict calls for - as long
+// as the verdict is about the change that is there now.
+//
+// ReviewVerdict is written by a submit and cleared by nothing: not by
+// clearing the comments, not by the diff that starts the next round. So a
+// group whose newest diff arrived after the last submission still carries
+// the verdict of the round before it, and reading that one leaves the
+// pipeline the help recommends - sbnn wait && sbnn comments -q && git commit
+// - stepping over open comments after an approval, and refusing a round that
+// has nothing wrong with it after a request for changes. Group.Reviewed is
+// the same question sbnn wait asks before it decides to wait, which is why
+// the two commands agree once both ask it. Until the round is submitted the
+// older rule applies: what is still open blocks, and nothing else does.
 func exitReview(ctx context.Context, c *client.Client, group string) error {
 	g, err := c.Group(ctx, group)
 	if err != nil {
 		return err
 	}
+	if !g.Reviewed() {
+		return exitWithComments(g.Comments)
+	}
 	return exitWithVerdict(g.ReviewVerdict, g.Comments)
 }
 
-// printReview writes the review the same way `sbnn comments` does.
-func printReview(ctx context.Context, c *client.Client, group string) error {
+// printReview writes the review the same way `sbnn comments` does. The
+// format has already been resolved and checked by runWait.
+func printReview(ctx context.Context, c *client.Client, group, format string) error {
 	if waitQuiet {
 		return exitReview(ctx, c, group)
-	}
-	format := waitFormat
-	if waitJSON {
-		format = "json"
 	}
 	switch format {
 	case "json":
@@ -157,6 +203,7 @@ func printReview(ctx context.Context, c *client.Client, group string) error {
 		}
 		return nil
 	default:
+		// Unreachable: runWait resolves the format before waiting.
 		return fmt.Errorf("unknown format %q: use prompt, markdown or json", format)
 	}
 }

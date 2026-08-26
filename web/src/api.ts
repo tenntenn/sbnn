@@ -1,3 +1,4 @@
+import type { PreviewAssets } from './markdown'
 import type { Comment, Group, Preview, Status, Verdict } from './types'
 
 /** groupFromLocation reads the group name out of the URL path. */
@@ -45,6 +46,9 @@ export interface FileContent {
   source: 'worktree' | 'reconstructed'
   complete: boolean
   content: string
+  /** assets is where the images this file points at really are, since a
+   * relative src in the preview resolves against the server root instead. */
+  assets?: PreviewAssets
 }
 
 export function getFileContent(
@@ -131,9 +135,29 @@ export async function getPrompt(group: string): Promise<string> {
 /**
  * subscribe listens to server sent events and calls onChange whenever the
  * given group changed. It returns an unsubscribe function.
+ *
+ * Events are fire-and-forget: the broker keeps no backlog and stamps no `id:`,
+ * so everything published while the stream was down is simply gone. An
+ * EventSource reconnects by itself - after a server restart, after a laptop
+ * wakes, after any network blip - and a page that listened for messages only
+ * would come back attached to a live stream while still showing whatever it
+ * held before, with nothing left to tell it otherwise. So a freshly opened
+ * connection is itself the signal to refetch. That fires on the first connect
+ * too, which costs one duplicate load and in exchange makes "the page is
+ * stale forever" unreachable; it is not worth optimising away.
  */
 export function subscribe(group: string, onChange: () => void): () => void {
   const source = new EventSource('/_/events')
+  source.onopen = () => {
+    onChange()
+  }
+  // EventSource retries on its own, so an error is a gap rather than an end:
+  // calling close() here is precisely what would make the staleness permanent.
+  // The reconnect that follows lands in onopen above and takes the page with
+  // it; the log is here so a stream that never comes back is visible.
+  source.onerror = () => {
+    console.debug('sbnn: event stream lost, reconnecting')
+  }
   source.onmessage = (ev) => {
     try {
       const data = JSON.parse(ev.data) as { type?: string; group?: string }

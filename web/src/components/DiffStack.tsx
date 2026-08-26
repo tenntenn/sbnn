@@ -9,6 +9,7 @@ import {
   type RefObject,
 } from 'react'
 import type { Comment, Diff, ViewMode } from '../types'
+import { estimatedHeight } from '../estimatedHeight'
 import { sectionKey } from '../sectionKey'
 import { DiffFileSection } from './DiffFileSection'
 import { Icon } from './Icon'
@@ -49,8 +50,83 @@ interface Props {
 // up into this band.
 const ACTIVE_BAND = 0.7
 
+/** sectionScrollTop is where the scroller has to end up for a section's top
+ * to come to rest just below the sticky toolbar.
+ *
+ * The section's offset within the scroller is the gap between the two
+ * viewport rects plus how far the scroller has already been scrolled;
+ * backing off by the toolbar's height leaves the file's own header visible
+ * instead of hidden underneath it. The first file cannot be backed off past
+ * the top of the scroller, where it already clears the toolbar anyway. */
+export function sectionScrollTop(
+  rootScrollTop: number,
+  rootTop: number,
+  elTop: number,
+  clearance: number,
+): number {
+  return Math.max(0, rootScrollTop + (elTop - rootTop) - clearance)
+}
+
+/** resolveFolded settles whether a file is shown folded.
+ *
+ * The server may fold a file on its own, and that default steps aside when
+ * the file carries comments - an automatic fold must never hide one. An
+ * override is the reader's own choice, made on this page with the header
+ * button or `f`, and it wins outright: a reviewer who is done with a long
+ * generated file gets to put it away even after commenting on it. */
+export function resolveFolded(
+  override: boolean | undefined,
+  senderFolded: boolean,
+  hasComments: boolean,
+): boolean {
+  if (override !== undefined) return override
+  return senderFolded && !hasComments
+}
+
 function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n))
+}
+
+/**
+ * FileStepper is the way on to the next file when only one is on screen.
+ *
+ * The wide layout puts every file in one continuous scroll, so reaching the
+ * next one is just scrolling. A phone shows one file at a time, and a short
+ * file leaves most of the pane empty - which reads as the end of the review
+ * unless something says otherwise. This says otherwise: where the reader is
+ * in the list, and the two steps either side of it.
+ *
+ * It is a row of its own at the foot of the pane, so it has to be laid out
+ * by the stylesheet rather than beside the diff: `.content` puts its children
+ * in a row, and a stepper standing next to the diff takes a column of a
+ * phone's width away from it. `.diff-pane` is the column the two share.
+ */
+export function FileStepper({
+  at,
+  total,
+  onStep,
+}: {
+  /** at is the zero-based position of the file on screen. */
+  at: number
+  total: number
+  onStep: (by: number) => void
+}) {
+  if (total < 2 || at < 0) return null
+  return (
+    <nav className="file-stepper" aria-label="Files in this review">
+      <button className="ghost" disabled={at === 0} onClick={() => onStep(-1)}>
+        <Icon name="chevron_left" small />
+        Previous file
+      </button>
+      <span className="hint">
+        {at + 1} of {total}
+      </span>
+      <button className="ghost" disabled={at === total - 1} onClick={() => onStep(1)}>
+        Next file
+        <Icon name="chevron_right" small />
+      </button>
+    </nav>
+  )
 }
 
 export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
@@ -117,9 +193,33 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
   // active one.
   if (activeKeyRef.current === null && order.length > 0) activeKeyRef.current = order[0]
 
+  // How far down the scroller a jump has to stop so the file's own sticky
+  // header comes to rest below the toolbar rather than under it. Measured at
+  // the moment of the jump, from the toolbar itself: it wraps onto a second
+  // row on a narrow pane, and the reader may have jumped in the same frame
+  // that it did.
+  const toolbarClearance = () => toolbarRef.current?.getBoundingClientRect().height ?? 0
+
   useImperativeHandle(ref, () => ({
     scrollToSection(key: string) {
-      sectionEls.current.get(key)?.scrollIntoView({ block: 'start' })
+      const el = sectionEls.current.get(key)
+      if (!el) return
+      const root = containerRef.current
+      if (!root) {
+        el.scrollIntoView({ block: 'start' })
+        return
+      }
+      // scrollIntoView({ block: 'start' }) aligns with the top of the
+      // scroller, which is where the toolbar is painted, so the arithmetic
+      // is done here instead.
+      root.scrollTo({
+        top: sectionScrollTop(
+          root.scrollTop,
+          root.getBoundingClientRect().top,
+          el.getBoundingClientRect().top,
+          toolbarClearance(),
+        ),
+      })
     },
   }))
 
@@ -223,7 +323,7 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
           {d.files.map((file) => {
             const key = sectionKey(d.id, file.id)
             const fileComments = commentsByKey.get(key) ?? []
-            const folded = (foldOverrides.get(key) ?? Boolean(file.folded)) && fileComments.length === 0
+            const folded = resolveFolded(foldOverrides.get(key), Boolean(file.folded), fileComments.length > 0)
             const viewMode = viewModeOverrides.get(key) ?? viewModeDefault ?? file.viewMode
             return (
               <div
@@ -231,6 +331,17 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
                 id={key}
                 data-section-key={key}
                 className="file-section"
+                // A large review mounts every file at once, and laying out
+                // and painting all of them is what makes the first render
+                // of a few hundred files take seconds. content-visibility
+                // lets the browser do that work for the sections near the
+                // viewport only; a browser that does not know the property
+                // simply renders everything as before. The style is inline
+                // because the size has to be per-file to be worth anything.
+                style={{
+                  contentVisibility: 'auto',
+                  containIntrinsicSize: `auto ${estimatedHeight(file, folded, fileComments.length, viewMode)}px`,
+                }}
                 ref={(el) => {
                   if (el) sectionEls.current.set(key, el)
                   else sectionEls.current.delete(key)
@@ -243,6 +354,7 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
                   comments={fileComments}
                   onChanged={onChanged}
                   folded={folded}
+                  foldedByReader={foldOverrides.get(key) === true}
                   onSetFolded={(value) => onSetFolded(key, value)}
                   viewMode={viewMode}
                   onSetViewMode={(mode) => onSetViewMode(key, mode)}

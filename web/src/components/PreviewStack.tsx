@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import type { Diff, PreviewKind, Status } from '../types'
+import type { Diff, FileDiff, PreviewKind, Status } from '../types'
+import { isPreviewable } from '../types'
 import { PreviewFileSection } from './PreviewFileSection'
 import { sectionKey } from '../sectionKey'
 import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
 import type { ScrollFraction } from './DiffStack'
+import { client } from '../client'
 
 // How far ahead of the visible area a section is fetched: generous enough
 // that the render is usually ready by the time the reader arrives, small
@@ -61,10 +63,32 @@ export function PreviewStack({
     return () => observer.disconnect()
   }, [])
 
-  const order = useMemo(
-    () => diffs.flatMap((d) => d.files.map((f) => sectionKey(d.id, f.id))),
-    [diffs],
+  // Only a file the preview pane has something to show for gets a section.
+  // A round of 500 files where half are code used to mount 500 preview
+  // sections, every one of the code files carrying nothing but a header and
+  // the line "... has no preview" - half the sections on the page, and half
+  // its DOM nodes, saying nothing.
+  // An exported page has no server to read a working tree file from, so a
+  // source file has nothing to show there and stays out of the pane.
+  const hasSource = !client.isStatic
+
+  const rounds = useMemo(
+    () =>
+      diffs
+        .map((d) => ({
+          diff: d,
+          files: d.files.filter((f) => isPreviewable(f, hasSource)) as FileDiff[],
+        }))
+        .filter((r) => r.files.length > 0),
+    [diffs, hasSource],
   )
+
+  const order = useMemo(
+    () => rounds.flatMap((r) => r.files.map((f) => sectionKey(r.diff.id, f.id))),
+    [rounds],
+  )
+
+  const nothingToPreview = diffs.length > 0 && rounds.length === 0
 
   // Lazy activation: a section starts fetching (and, for mo, mounting its
   // iframe) once it is near the viewport, and stays activated - scrolling
@@ -158,15 +182,22 @@ export function PreviewStack({
         </span>
       </div>
 
-      {diffs.map((d) => (
+      {nothingToPreview && (
+        <p className="empty">No file in this review has a preview.</p>
+      )}
+
+      {rounds.map(({ diff: d, files }) => (
         <div key={d.id}>
           {diffs.length > 1 && (
             <div className="diff-round-divider">
               <span className="diff-round-title">{d.title}</span>
-              <span className="hint">{d.files.length}</span>
+              {/* The count is of the files shown here, which is not the
+                  round's file count once the ones with no preview are left
+                  out of this pane. */}
+              <span className="hint">{files.length}</span>
             </div>
           )}
-          {d.files.map((file) => {
+          {files.map((file) => {
             const key = sectionKey(d.id, file.id)
             return (
               <div

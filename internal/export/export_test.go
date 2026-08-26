@@ -3,6 +3,7 @@ package export_test
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/tenntenn/sbnn/internal/asset"
 	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/export"
 	"github.com/tenntenn/sbnn/internal/model"
@@ -170,8 +172,24 @@ func TestBuildPrefersWorktree(t *testing.T) {
 	}
 }
 
+func indexHTML(refs ...string) []byte {
+	var b strings.Builder
+	b.WriteString("<!doctype html>\n<html lang=\"en\">\n<head>\n")
+	for _, ref := range refs {
+		switch {
+		case strings.HasSuffix(ref, ".css"):
+			fmt.Fprintf(&b, "<link rel=\"stylesheet\" crossorigin href=%q>\n", ref)
+		default:
+			fmt.Fprintf(&b, "<script type=\"module\" crossorigin src=%q></script>\n", ref)
+		}
+	}
+	b.WriteString("</head>\n<body>\n<div id=\"root\"></div>\n</body>\n</html>\n")
+	return []byte(b.String())
+}
+
 func assets() fstest.MapFS {
 	return fstest.MapFS{
+		"index.html":       {Data: indexHTML("/assets/index.js", "/assets/index.css")},
 		"assets/index.css": {Data: []byte(".diff{color:red}")},
 		"assets/index.js":  {Data: []byte("console.log('sbnn')")},
 	}
@@ -225,24 +243,23 @@ func TestRenderEmbedsReadableJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	const prefix = "window.__SBNN_DATA__ = "
-	start := strings.Index(page, prefix)
-	if start < 0 {
+	_, rest, ok := strings.Cut(page, prefix)
+	if !ok {
 		t.Fatal("no payload in the page")
 	}
-	rest := page[start+len(prefix):]
-	end := strings.Index(rest, ";</script>")
-	if end < 0 {
+	payload, _, ok := strings.Cut(rest, ";</script>")
+	if !ok {
 		t.Fatal("payload is not terminated")
 	}
 	var decoded export.Payload
-	if err := json.Unmarshal([]byte(rest[:end]), &decoded); err != nil {
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
 		t.Fatalf("payload is not valid JSON: %v", err)
 	}
 	if decoded.Group != "default" || len(decoded.Diffs) != 1 {
 		t.Errorf("payload = %+v", decoded)
 	}
 	// encoding/json escapes the characters that could end the script early.
-	if strings.Contains(rest[:end], "</script") {
+	if strings.Contains(payload, "</script") {
 		t.Error("payload can terminate its own script element")
 	}
 }
@@ -252,4 +269,440 @@ func TestRenderNeedsBuiltUI(t *testing.T) {
 	if _, err := export.Render(p, fstest.MapFS{}, export.Options{}); err == nil {
 		t.Fatal("want an error when the UI is not built into the binary")
 	}
+}
+
+// TestRenderRejectsCodeSplitBuild pins the day Vite emits a second chunk:
+// the chunks used to be concatenated in name order into one module, which
+// produces a page that is silently blank in the browser.
+func TestRenderRejectsCodeSplitBuild(t *testing.T) {
+	tests := []struct {
+		name  string
+		fs    fstest.MapFS
+		wants []string
+	}{
+		{
+			name: "chunk imported by the entry",
+			fs: fstest.MapFS{
+				"index.html":           {Data: indexHTML("/assets/index-aaa.js", "/assets/index-aaa.css")},
+				"assets/index-aaa.css": {Data: []byte(".diff{color:red}")},
+				"assets/index-aaa.js":  {Data: []byte("import './vendor-bbb.js';console.log('sbnn')")},
+				"assets/vendor-bbb.js": {Data: []byte("export const react = 1")},
+			},
+			wants: []string{"assets/index-aaa.js", "assets/vendor-bbb.js"},
+		},
+		{
+			name: "two entries in index.html",
+			fs: fstest.MapFS{
+				"index.html":  {Data: indexHTML("/assets/a.js", "/assets/b.js")},
+				"assets/a.js": {Data: []byte("console.log('a')")},
+				"assets/b.js": {Data: []byte("console.log('b')")},
+			},
+			wants: []string{"assets/a.js", "assets/b.js"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := export.Build(group(t, ""), "test", time.Now())
+			page, err := export.Render(p, tt.fs, export.Options{})
+			if err == nil {
+				t.Fatalf("Render succeeded on a code split build; page = %q", page)
+			}
+			for _, want := range tt.wants {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not name %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestRenderFollowsIndexHTML checks that the entry module and the stylesheet
+// order come from index.html, not from the name order of assets/.
+func TestRenderFollowsIndexHTML(t *testing.T) {
+	fsys := fstest.MapFS{
+		"index.html":         {Data: indexHTML("/assets/zz-entry.js", "/assets/zz.css", "/assets/aa.css")},
+		"assets/zz-entry.js": {Data: []byte("console.log('entry')")},
+		"assets/zz.css":      {Data: []byte(".second{}")},
+		"assets/aa.css":      {Data: []byte(".first{}")},
+		// Not referenced and not a script: no reason to inline it.
+		"assets/font.woff2": {Data: []byte("woff")},
+	}
+	p := export.Build(group(t, ""), "test", time.Now())
+	page, err := export.Render(p, fsys, export.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(page, "console.log('entry')") {
+		t.Error("the entry module was not inlined")
+	}
+	second, first := strings.Index(page, ".second{}"), strings.Index(page, ".first{}")
+	if second < 0 || first < 0 {
+		t.Fatalf("stylesheets missing: .second at %d, .first at %d", second, first)
+	}
+	if second > first {
+		t.Error("stylesheets are not in index.html order")
+	}
+	if strings.Contains(page, "woff") {
+		t.Error("a font was inlined as CSS or script")
+	}
+}
+
+func TestRenderReportsMissingAsset(t *testing.T) {
+	fsys := fstest.MapFS{
+		"index.html": {Data: indexHTML("/assets/gone.js")},
+	}
+	p := export.Build(group(t, ""), "test", time.Now())
+	if _, err := export.Render(p, fsys, export.Options{}); err == nil {
+		t.Fatal("want an error when index.html references a script that is not embedded")
+	} else if !strings.Contains(err.Error(), "gone.js") {
+		t.Errorf("error %q does not name the missing asset", err)
+	}
+}
+
+func TestRenderNeedsAScript(t *testing.T) {
+	fsys := fstest.MapFS{
+		"index.html":       {Data: indexHTML("/assets/index.css")},
+		"assets/index.css": {Data: []byte(".diff{}")},
+	}
+	p := export.Build(group(t, ""), "test", time.Now())
+	if _, err := export.Render(p, fsys, export.Options{}); err == nil {
+		t.Fatal("want an error when index.html loads no script")
+	}
+}
+
+// TestBuildCarriesTheReview pins the three fields that say how the review
+// ended. Without them an exported page renders a submitted review as if it
+// had never been submitted.
+func TestBuildCarriesTheReview(t *testing.T) {
+	reviewedAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	tests := []struct {
+		name    string
+		set     func(*model.Group)
+		wantAt  time.Time
+		wantNot string
+		wantVer model.Verdict
+	}{
+		{
+			name: "approved with a note",
+			set: func(g *model.Group) {
+				g.ReviewedAt = reviewedAt
+				g.ReviewNote = "Ship it, the naming nits are optional."
+				g.ReviewVerdict = model.VerdictApproved
+			},
+			wantAt:  reviewedAt,
+			wantNot: "Ship it, the naming nits are optional.",
+			wantVer: model.VerdictApproved,
+		},
+		{
+			name: "changes requested without a note",
+			set: func(g *model.Group) {
+				g.ReviewedAt = reviewedAt
+				g.ReviewVerdict = model.VerdictChangesRequested
+			},
+			wantAt:  reviewedAt,
+			wantVer: model.VerdictChangesRequested,
+		},
+		{
+			name: "never submitted",
+			set:  func(*model.Group) {},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := group(t, "")
+			tt.set(g)
+			p := export.Build(g, "test", time.Now())
+			if !p.ReviewedAt.Equal(tt.wantAt) {
+				t.Errorf("ReviewedAt = %v, want %v", p.ReviewedAt, tt.wantAt)
+			}
+			if p.ReviewNote != tt.wantNot {
+				t.Errorf("ReviewNote = %q, want %q", p.ReviewNote, tt.wantNot)
+			}
+			if p.ReviewVerdict != tt.wantVer {
+				t.Errorf("ReviewVerdict = %q, want %q", p.ReviewVerdict, tt.wantVer)
+			}
+		})
+	}
+}
+
+// TestRenderEmbedsTheReviewUnderTheLiveNames checks the JSON the page reads:
+// the static client has to see the same keys the live API sends, or it
+// cannot render a frozen review the way it renders a live one.
+func TestRenderEmbedsTheReviewUnderTheLiveNames(t *testing.T) {
+	g := group(t, "")
+	g.ReviewedAt = time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	g.ReviewNote = "One question about the retry loop."
+	g.ReviewVerdict = model.VerdictApproved
+
+	page, err := export.Render(export.Build(g, "test", time.Now()), assets(), export.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payloadJSON(t, page), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"reviewedAt":    "2026-03-04T05:06:07Z",
+		"reviewNote":    "One question about the retry loop.",
+		"reviewVerdict": "approved",
+	}
+	for key, val := range want {
+		if got := decoded[key]; got != val {
+			t.Errorf("%s = %v, want %v", key, got, val)
+		}
+	}
+
+	// A group sent through the live API marshals the same three keys, so a
+	// page cannot end up reading one name from a server and another from an
+	// exported payload.
+	live, err := json.Marshal(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var liveDecoded map[string]any
+	if err := json.Unmarshal(live, &liveDecoded); err != nil {
+		t.Fatal(err)
+	}
+	for key, val := range want {
+		if got := liveDecoded[key]; got != val {
+			t.Errorf("model.Group marshals %s as %v, want %v", key, got, val)
+		}
+	}
+}
+
+// TestRenderOmitsAnUnsubmittedReview keeps an unreviewed group free of keys
+// that would make the page draw a review banner.
+func TestRenderOmitsAnUnsubmittedReview(t *testing.T) {
+	page, err := export.Render(export.Build(group(t, ""), "test", time.Now()), assets(), export.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payloadJSON(t, page), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"reviewedAt", "reviewNote", "reviewVerdict"} {
+		if _, ok := decoded[key]; ok {
+			t.Errorf("%s is present for a group that was never reviewed", key)
+		}
+	}
+	if decoded["version"] != float64(export.PayloadVersion) {
+		t.Errorf("version = %v, want %d", decoded["version"], export.PayloadVersion)
+	}
+}
+
+// TestBuildSaysWhetherTheVerdictStillCoversTheDiffs pins the flag the page
+// needs to tell a current verdict from a stale one. A live page reads that
+// from the status summary; an exported page has no server to ask, so a page
+// exported one diff after an approval would otherwise show Approved against
+// a change nobody has looked at.
+func TestBuildSaysWhetherTheVerdictStillCoversTheDiffs(t *testing.T) {
+	reviewedAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	tests := []struct {
+		name string
+		set  func(*model.Group)
+		want bool
+	}{
+		{
+			name: "approved, and nothing has arrived since",
+			set: func(g *model.Group) {
+				g.ReviewedAt = reviewedAt
+				g.ReviewVerdict = model.VerdictApproved
+				g.Diffs[0].CreatedAt = reviewedAt.Add(-time.Hour)
+			},
+			want: true,
+		},
+		{
+			name: "approved, then another diff arrived",
+			set: func(g *model.Group) {
+				g.ReviewedAt = reviewedAt
+				g.ReviewVerdict = model.VerdictApproved
+				g.Diffs[0].CreatedAt = reviewedAt.Add(time.Hour)
+			},
+			want: false,
+		},
+		{
+			name: "never submitted",
+			set:  func(*model.Group) {},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := group(t, "")
+			tt.set(g)
+			if got := export.Build(g, "test", time.Now()).Reviewed; got != tt.want {
+				t.Errorf("Reviewed = %v, want %v (Group.Reviewed() = %v)", got, tt.want, g.Reviewed())
+			}
+		})
+	}
+}
+
+// The flag has to reach the page under a name the page reads, and it is a
+// plain false rather than an absent key: absent is what a page written by an
+// older sbnn looks like, and those two do not mean the same thing.
+func TestRenderEmbedsWhetherTheReviewIsCurrent(t *testing.T) {
+	g := group(t, "")
+	g.ReviewedAt = time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	g.ReviewVerdict = model.VerdictApproved
+	g.Diffs[0].CreatedAt = g.ReviewedAt.Add(time.Hour)
+
+	page, err := export.Render(export.Build(g, "test", time.Now()), assets(), export.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payloadJSON(t, page), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := decoded["reviewed"]
+	if !ok {
+		t.Fatal("the payload has no reviewed key, so the page cannot tell a stale verdict from a current one")
+	}
+	if got != false {
+		t.Errorf("reviewed = %v, want false: a diff arrived after the approval", got)
+	}
+	if decoded["reviewVerdict"] != "approved" {
+		t.Errorf("reviewVerdict = %v, want approved: the review still happened", decoded["reviewVerdict"])
+	}
+}
+
+// payloadJSON pulls window.__SBNN_DATA__ back out of a rendered page.
+func payloadJSON(t *testing.T, page string) []byte {
+	t.Helper()
+	const prefix = "window.__SBNN_DATA__ = "
+	_, rest, ok := strings.Cut(page, prefix)
+	if !ok {
+		t.Fatal("no payload in the page")
+	}
+	payload, _, ok := strings.Cut(rest, ";</script>")
+	if !ok {
+		t.Fatal("payload is not terminated")
+	}
+	return []byte(payload)
+}
+
+// siblingDiff adds a Markdown file that draws a picture sitting next to it,
+// which the diff itself never mentions.
+const siblingDiff = `diff --git a/docs/guide.md b/docs/guide.md
+new file mode 100644
+--- /dev/null
++++ b/docs/guide.md
+@@ -0,0 +1,5 @@
++# Guide
++
++![the shape of it](diagram.png)
++![the whole thing](../overview.png)
++![what is out there](../../secret.png)
+`
+
+func siblingGroup(baseDir string) *model.Group {
+	files := diff.Parse(siblingDiff)
+	return &model.Group{
+		Name: "default",
+		Diffs: []*model.Diff{{
+			ID:      "d1",
+			Title:   "first",
+			BaseDir: baseDir,
+			Raw:     siblingDiff,
+			Files:   files,
+		}},
+	}
+}
+
+func writeFile(t *testing.T, path string, n int) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, make([]byte, n), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// previewAssets is the frozen asset table of the only Markdown file of a
+// sibling group.
+func previewAssets(t *testing.T, p *export.Payload, g *model.Group) map[string]asset.Entry {
+	t.Helper()
+	md := g.Diffs[0].Files[0]
+	prev, ok := p.Previews["d1:"+md.ID]
+	if !ok {
+		t.Fatalf("no preview for %s", md.Path())
+	}
+	return prev.Assets
+}
+
+func TestBuildFreezesTheImagesTheMarkdownPointsAt(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "docs", "diagram.png"), 8)
+	writeFile(t, filepath.Join(dir, "overview.png"), 16)
+
+	g := siblingGroup(dir)
+	assets := previewAssets(t, export.Build(g, "test", time.Now()), g)
+
+	near, ok := assets["diagram.png"]
+	if !ok {
+		t.Fatalf("no asset for diagram.png: %+v", assets)
+	}
+	want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(make([]byte, 8))
+	if near.URL != want {
+		t.Errorf("diagram.png url = %q, want the bytes frozen in as %q", near.URL, want)
+	}
+	if near.Status != asset.StatusOK {
+		t.Errorf("diagram.png status = %q, want ok", near.Status)
+	}
+	if up := assets["../overview.png"]; up.Status != asset.StatusOK || up.URL == "" {
+		t.Errorf("../overview.png = %+v, want a file above the document to be carried too", up)
+	}
+}
+
+func TestBuildRefusesAnImageOutsideTheDiffDirectory(t *testing.T) {
+	dir := t.TempDir()
+	// The file is really there, one level above what the diff was sent from.
+	writeFile(t, filepath.Join(filepath.Dir(dir), "secret.png"), 8)
+	t.Cleanup(func() { os.Remove(filepath.Join(filepath.Dir(dir), "secret.png")) })
+
+	g := siblingGroup(dir)
+	assets := previewAssets(t, export.Build(g, "test", time.Now()), g)
+
+	out, ok := assets["../../secret.png"]
+	if !ok {
+		t.Fatalf("no entry for ../../secret.png: %+v", assets)
+	}
+	if out.Status != asset.StatusOutside {
+		t.Errorf("../../secret.png status = %q, want outside", out.Status)
+	}
+	if out.URL != "" {
+		t.Errorf("../../secret.png was carried into the page as %q", firstBytes(out.URL))
+	}
+}
+
+func TestBuildLeavesAnOversizedImageOutButNamesIt(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "docs", "diagram.png"), asset.MaxBytes+1)
+
+	g := siblingGroup(dir)
+	assets := previewAssets(t, export.Build(g, "test", time.Now()), g)
+
+	big := assets["diagram.png"]
+	if big.Status != asset.StatusTooLarge {
+		t.Errorf("status = %q, want too-large", big.Status)
+	}
+	if big.URL != "" {
+		t.Error("an image past the cap must not be frozen into the page")
+	}
+	if big.Path != "docs/diagram.png" {
+		t.Errorf("path = %q, want the file to stay nameable on the page", big.Path)
+	}
+	if big.Size != asset.MaxBytes+1 {
+		t.Errorf("size = %d, want the real size so the page can say how big it was", big.Size)
+	}
+}
+
+func firstBytes(s string) string {
+	if len(s) > 40 {
+		return s[:40] + "..."
+	}
+	return s
 }
