@@ -573,6 +573,16 @@ func (s *Store) AddHook(group string, h *model.Hook) (*model.Hook, error) {
 	if h.Command == "" && h.URL == "" {
 		return nil, fmt.Errorf("a hook needs a command or a url")
 	}
+	// A URL is checked by the same rule delivery applies, while the person
+	// who typed it is still there to be told. Without this a typo is stored,
+	// persisted, listed back looking healthy, and fails once per review into
+	// a log file. A command cannot be checked without running it, so its
+	// half is answered by the recorded outcome instead.
+	if h.URL != "" {
+		if err := validateHookURL(h.URL); err != nil {
+			return nil, err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := s.group(group, true)
@@ -588,6 +598,35 @@ func (s *Store) AddHook(group string, h *model.Hook) (*model.Hook, error) {
 	g.Hooks = append(g.Hooks, h)
 	s.persist()
 	return clone(h), nil
+}
+
+// RecordHookCommandRun stores how the command half of a hook went.
+func (s *Store) RecordHookCommandRun(group, id string, run model.HookRun) {
+	s.setHookRun(group, id, func(h *model.Hook) { h.LastCommandRun = &run })
+}
+
+// RecordHookPostRun stores how the URL half of a hook went.
+func (s *Store) RecordHookPostRun(group, id string, run model.HookRun) {
+	s.setHookRun(group, id, func(h *model.Hook) { h.LastPost = &run })
+}
+
+// setHookRun is a no-op when the hook has gone since the review was
+// submitted: a hook removed while its own delivery was in flight should not
+// come back.
+func (s *Store) setHookRun(group, id string, set func(*model.Hook)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g := s.group(group, false)
+	if g == nil {
+		return
+	}
+	for _, h := range g.Hooks {
+		if h.ID == id {
+			set(h)
+			s.persist()
+			return
+		}
+	}
 }
 
 // Hooks returns the hooks of a group.

@@ -420,8 +420,21 @@ around:
 ```console
 $ git diff | sbnn --on-review 'claude -p "$(sbnn comments)"'
 $ sbnn hook --on-review-url http://localhost:9000/reviews   # a POST instead
-$ sbnn hook            # what is registered
+$ sbnn hook            # what is registered, and how it went last time
 $ sbnn hook --clear
+```
+
+A URL hook is checked when it is registered: sbnn can only POST to `http`
+and `https`, so anything else is refused with a 400 while you are still
+there to read it, rather than stored and failed once per review into a log
+file. `sbnn hook` also lists how each hook went the last time it ran, so a
+hook that has been failing is visible before the next review rather than
+after it:
+
+```console
+$ sbnn hook
+h1  POST http://localhost:9000/reviews
+      last post: failed, 2026-08-25T09:00:00+09:00 - connection refused
 ```
 
 The command runs through the shell with the review prompt on its stdin and

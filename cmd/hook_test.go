@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tenntenn/sbnn/internal/client"
+	"github.com/tenntenn/sbnn/internal/model"
 )
 
 // DeleteHook is what makes "sbnn hook --remove <id>" possible, so what it
@@ -316,5 +317,71 @@ func TestHookFlagsThatAreNotActionsStayCombinable(t *testing.T) {
 	setHookFlags(t, map[string]string{"clear": "true", "target": "api", "json": "true"})
 	if err := hookCmd.ValidateFlagGroups(); err != nil {
 		t.Errorf("--clear --target api --json: %v", err)
+	}
+}
+
+// A hook that has been failing every review used to list back looking
+// exactly like one that works: "sbnn hook" printed the id and the command
+// and nothing else. The listing is where the reviewer looks, so the last
+// outcome has to be there.
+func TestHookOutcomeLines(t *testing.T) {
+	at := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+	stamp := at.Local().Format(time.RFC3339)
+
+	tests := map[string]struct {
+		hook model.Hook
+		want []string
+	}{
+		"a hook that has not run yet says so": {
+			hook: model.Hook{URL: "http://localhost:9000/hooks"},
+			want: []string{"not run yet"},
+		},
+		"a delivered url": {
+			hook: model.Hook{
+				URL:      "http://localhost:9000/hooks",
+				LastPost: &model.HookRun{At: at, OK: true, Detail: "200 OK"},
+			},
+			want: []string{"last post: ok, " + stamp + " - 200 OK"},
+		},
+		"a url nothing is listening on": {
+			hook: model.Hook{
+				URL:      "http://localhost:9000/hooks",
+				LastPost: &model.HookRun{At: at, Detail: "connection refused"},
+			},
+			want: []string{"last post: failed, " + stamp + " - connection refused"},
+		},
+		"a command that exited non-zero": {
+			hook: model.Hook{
+				Command:        "notify-send done",
+				LastCommandRun: &model.HookRun{At: at, Detail: "exit status 127"},
+			},
+			want: []string{"last run: failed, " + stamp + " - exit status 127"},
+		},
+		"a hook with both halves reports both": {
+			hook: model.Hook{
+				Command:        "notify-send done",
+				URL:            "http://localhost:9000/hooks",
+				LastCommandRun: &model.HookRun{At: at, OK: true},
+				LastPost:       &model.HookRun{At: at, Detail: "refused with 500 Internal Server Error"},
+			},
+			want: []string{
+				"last run: ok, " + stamp,
+				"last post: failed, " + stamp + " - refused with 500 Internal Server Error",
+			},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := hookOutcome(&tt.hook)
+			if len(got) != len(tt.want) {
+				t.Fatalf("hookOutcome = %q, want %q", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("line %d = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }

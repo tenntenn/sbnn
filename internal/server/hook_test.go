@@ -227,3 +227,198 @@ func envMap(env []string) map[string]string {
 	}
 	return out
 }
+
+// A hook URL that is not http or https is one postHook can never deliver
+// to, so it has to be recognisable as such without trying.
+func TestValidateHookURL(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		ok   bool
+	}{
+		{"http", "http://x/y", true},
+		{"https", "https://x/y", true},
+		{"host and port", "http://localhost:9000/hooks", true},
+		{"prose", "not a url", false},
+		{"file", "file:///etc/passwd", false},
+		{"no host", "http://", false},
+		{"empty", "", false},
+		{"scheme relative", "//example.com/hooks", false},
+		{"path only", "/hooks", false},
+		{"a bare host, which is what a typo looks like", "localhost:9000/hooks", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateHookURL(tc.url)
+			if tc.ok && err != nil {
+				t.Errorf("validateHookURL(%q) = %v, want no error", tc.url, err)
+			}
+			if !tc.ok && err == nil {
+				t.Errorf("validateHookURL(%q) = nil, want an error", tc.url)
+			}
+		})
+	}
+}
+
+// Registration is the last moment anyone is there to read a mistake. A URL
+// that cannot be delivered to was answered 200 and stored forever, so the
+// listing showed a healthy hook and every review failed into a log file.
+func TestAddHookRefusesAUrlItCannotDeliver(t *testing.T) {
+	cases := []struct {
+		name string
+		hook model.Hook
+		want int
+	}{
+		{"prose", model.Hook{URL: "not a url"}, http.StatusBadRequest},
+		{"a scheme postHook cannot speak", model.Hook{URL: "file:///etc/passwd"}, http.StatusBadRequest},
+		{"no host", model.Hook{URL: "http://"}, http.StatusBadRequest},
+		{"a path, not a url", model.Hook{URL: "/hooks"}, http.StatusBadRequest},
+		{"http", model.Hook{URL: "http://localhost:9000/hooks"}, http.StatusOK},
+		{"https", model.Hook{URL: "https://example.com/hooks"}, http.StatusOK},
+		// The command half cannot be checked without running it, so it
+		// stays as permissive as it was.
+		{"a command alone", model.Hook{Command: "echo one"}, http.StatusOK},
+		{"nothing at all", model.Hook{}, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, _ := newTestServer(t)
+			resp := postJSON(t, ts.URL+"/_/api/groups/default/hooks", tc.hook, nil)
+			if resp.StatusCode != tc.want {
+				t.Errorf("POST hooks %+v: status = %d, want %d", tc.hook, resp.StatusCode, tc.want)
+			}
+			// A refusal must not leave the hook behind either.
+			var hooks []*model.Hook
+			getJSON(t, ts.URL+"/_/api/groups/default/hooks", &hooks)
+			wantStored := 0
+			if tc.want == http.StatusOK {
+				wantStored = 1
+			}
+			if len(hooks) != wantStored {
+				t.Errorf("%d hooks stored, want %d", len(hooks), wantStored)
+			}
+		})
+	}
+}
+
+// A session file written before registration checked URLs still holds one,
+// and it is loaded back on start. Delivery keeps its own guard, and says
+// which hook and which URL, because the log line is all it leaves.
+func TestPostHookRefusesAUrlItCannotDeliver(t *testing.T) {
+	logs := captureLogs(t)
+	s := newHookServer(t)
+	h := &model.Hook{ID: "h5", URL: "file:///etc/passwd"}
+
+	run := s.postHook(t.Context(), h, ReviewEvent{Group: "api"})
+
+	if run.OK {
+		t.Error("postHook reported an undeliverable url as delivered")
+	}
+	got := logs.String()
+	if !strings.Contains(got, "unusable url") {
+		t.Errorf("no warning for an undeliverable hook url:\n%s", got)
+	}
+	for _, want := range []string{"h5", "file:///etc/passwd"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the warning does not name %q:\n%s", want, got)
+		}
+	}
+}
+
+// The outcome has to survive to the listing, because that is where the
+// reviewer looks. A hook that has failed every round since it was registered
+// used to list back looking exactly like one that works.
+func TestRunHookRecordsTheOutcome(t *testing.T) {
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.Write([]byte(`{"received":true}`))
+	}))
+	defer ok.Close()
+	refuses := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		http.Error(w, "no", http.StatusInternalServerError)
+	}))
+	defer refuses.Close()
+	// A URL that parses and has a host, but nothing is listening on it.
+	gone := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	goneURL := gone.URL
+	gone.Close()
+
+	cases := []struct {
+		name       string
+		hook       model.Hook
+		wantPostOK *bool
+		wantCmdOK  *bool
+		wantDetail string
+	}{
+		{name: "a url that answers", hook: model.Hook{URL: ok.URL},
+			wantPostOK: new(true), wantDetail: "200"},
+		{name: "a url that refuses", hook: model.Hook{URL: refuses.URL},
+			wantPostOK: new(false), wantDetail: "500"},
+		{name: "a url with nothing listening", hook: model.Hook{URL: goneURL},
+			wantPostOK: new(false)},
+		{name: "a command that works", hook: model.Hook{Command: "echo fine"},
+			wantCmdOK: new(true), wantDetail: "fine"},
+		{name: "a command that fails", hook: model.Hook{Command: "echo broken >&2; exit 3"},
+			wantCmdOK: new(false), wantDetail: "exit status 3"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.hook.Command != "" && runtime.GOOS == "windows" {
+				t.Skip("the command hook is run through cmd on windows")
+			}
+			ts, srv := newTestServer(t)
+			var added model.Hook
+			postJSON(t, ts.URL+"/_/api/groups/api/hooks", tc.hook, &added)
+
+			srv.runHook(&added, ReviewEvent{Group: "api"})
+
+			// Read it back the way a client does, not out of the store:
+			// the outcome is only useful if it reaches the listing.
+			var hooks []*model.Hook
+			getJSON(t, ts.URL+"/_/api/groups/api/hooks", &hooks)
+			if len(hooks) != 1 {
+				t.Fatalf("got %d hooks, want 1", len(hooks))
+			}
+			got := hooks[0]
+
+			check := func(what string, run *model.HookRun, want *bool) {
+				if want == nil {
+					if run != nil {
+						t.Errorf("%s was recorded for a hook that has no %s: %+v", what, what, run)
+					}
+					return
+				}
+				if run == nil {
+					t.Fatalf("no %s outcome was recorded", what)
+				}
+				if run.OK != *want {
+					t.Errorf("%s ok = %v, want %v (detail %q)", what, run.OK, *want, run.Detail)
+				}
+				if run.At.IsZero() {
+					t.Errorf("%s outcome has no time", what)
+				}
+				if tc.wantDetail != "" && !strings.Contains(run.Detail, tc.wantDetail) {
+					t.Errorf("%s detail = %q, want it to mention %q", what, run.Detail, tc.wantDetail)
+				}
+			}
+			check("lastPost", got.LastPost, tc.wantPostOK)
+			check("lastCommandRun", got.LastCommandRun, tc.wantCmdOK)
+		})
+	}
+}
+
+// The outcome is written to the session file every round, so a command that
+// fails with a wall of output must not grow it by a wall of output a round.
+func TestHookRunDetailIsOneShortLine(t *testing.T) {
+	run := hookRun(false, "exit status 1: "+strings.Repeat("noise ", 500)+"\nand more\n")
+	if len(run.Detail) > maxHookDetail+len(" ...") {
+		t.Errorf("detail is %d bytes, want at most %d", len(run.Detail), maxHookDetail+len(" ..."))
+	}
+	if strings.ContainsAny(run.Detail, "\r\n") {
+		t.Errorf("detail spans lines: %q", run.Detail)
+	}
+	if !strings.HasPrefix(run.Detail, "exit status 1") {
+		t.Errorf("detail = %q, want it to start with the reason", run.Detail)
+	}
+}
