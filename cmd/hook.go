@@ -199,8 +199,45 @@ func listHooks(ctx context.Context, c *client.Client, group string) error {
 	}
 	for _, h := range hooks {
 		fmt.Printf("%s  %s\n", h.ID, describeHook(h))
+		for _, line := range hookOutcome(h) {
+			fmt.Printf("      %s\n", line)
+		}
 	}
 	return nil
+}
+
+// hookOutcome describes how the hook went the last time it ran.
+//
+// Without it a hook that has failed every review since it was registered
+// lists back looking exactly like one that works, and the reviewer only
+// finds out by noticing that nothing happened - which is the one thing a
+// hook exists to avoid, because by then nobody is waiting.
+func hookOutcome(h *model.Hook) []string {
+	var out []string
+	add := func(what string, r *model.HookRun) {
+		if r == nil {
+			return
+		}
+		outcome := "failed"
+		if r.OK {
+			outcome = "ok"
+		}
+		line := fmt.Sprintf("last %s: %s, %s", what, outcome, r.At.Local().Format(time.RFC3339))
+		if r.Detail != "" {
+			line += " - " + r.Detail
+		}
+		out = append(out, line)
+	}
+	if h.Command != "" {
+		add("run", h.LastCommandRun)
+	}
+	if h.URL != "" {
+		add("post", h.LastPost)
+	}
+	if out == nil {
+		return []string{"not run yet"}
+	}
+	return out
 }
 
 func describeHook(h *model.Hook) string {

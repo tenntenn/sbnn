@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tenntenn/sbnn/internal/model"
@@ -20,11 +20,6 @@ import (
 // hookTimeout bounds a hook, so that a command waiting for something never
 // keeps a review round open.
 const hookTimeout = 10 * time.Minute
-
-// maxHookResponse bounds what is read back from a hook endpoint. The body is
-// read only so that the connection can be reused; a hook that answers with a
-// gigabyte should not be able to hold sbnn while it does.
-const maxHookResponse = 64 << 10
 
 // ReviewEvent is what a hook is told about a submitted review.
 type ReviewEvent struct {
@@ -74,12 +69,34 @@ func (s *Server) runHook(h *model.Hook, event ReviewEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), hookTimeout)
 	defer cancel()
 
+	// Each half records how it went. A hook is the case where nobody is
+	// waiting, so a failure has to be readable later; the log line alone
+	// lives in a file nobody opens.
 	if h.Command != "" {
-		s.runHookCommand(ctx, h, event)
+		s.store.RecordHookCommandRun(event.Group, h.ID, s.runHookCommand(ctx, h, event))
 	}
 	if h.URL != "" {
-		s.postHook(ctx, h, event)
+		s.store.RecordHookPostRun(event.Group, h.ID, s.postHook(ctx, h, event))
 	}
+}
+
+// maxHookDetail bounds the outcome kept for a hook. It is shown on one line
+// by "sbnn hook", and it is written to the session file on every review, so
+// a command that fails with a megabyte on stderr must not grow the file by a
+// megabyte a round.
+const maxHookDetail = 200
+
+// hookRun builds the outcome record, folding a multi-line message onto the
+// one line that "sbnn hook" has room for.
+func hookRun(ok bool, detail string) model.HookRun {
+	detail = strings.TrimSpace(detail)
+	if i := strings.IndexAny(detail, "\r\n"); i >= 0 {
+		detail = strings.TrimSpace(detail[:i]) + " ..."
+	}
+	if len(detail) > maxHookDetail {
+		detail = detail[:maxHookDetail] + " ..."
+	}
+	return model.HookRun{At: time.Now(), OK: ok, Detail: detail}
 }
 
 // hookEnv is what a command hook is told about the review, besides the prompt
@@ -115,7 +132,7 @@ func (s *Server) hookEnv(event ReviewEvent) []string {
 
 // runHookCommand runs the command through the shell, with the review prompt
 // on its stdin and the details in the environment.
-func (s *Server) runHookCommand(ctx context.Context, h *model.Hook, event ReviewEvent) {
+func (s *Server) runHookCommand(ctx context.Context, h *model.Hook, event ReviewEvent) model.HookRun {
 	shell, flag := "/bin/sh", "-c"
 	if runtime.GOOS == "windows" {
 		shell, flag = "cmd", "/c"
@@ -127,29 +144,36 @@ func (s *Server) runHookCommand(ctx context.Context, h *model.Hook, event Review
 	if err != nil {
 		slog.Warn("review hook failed", "hook", h.ID, "command", h.Command, "error", err,
 			"output", string(bytes.TrimSpace(out)))
-		return
+		detail := err.Error()
+		if trimmed := string(bytes.TrimSpace(out)); trimmed != "" {
+			detail += ": " + trimmed
+		}
+		return hookRun(false, detail)
 	}
 	slog.Info("review hook ran", "hook", h.ID, "command", h.Command,
 		"output", string(bytes.TrimSpace(out)))
+	return hookRun(true, string(bytes.TrimSpace(out)))
 }
 
-// validateHookURL reports whether a URL is one a hook could actually be
-// delivered to.
+// validateHookURL reports whether a URL is one postHook could actually
+// deliver to.
 //
 // postHook speaks http and https and nothing else, so a hook URL that is
 // neither is a hook that will never run. Left to delivery it fails once per
-// review, at warn level, in a log file nobody is reading - by which time the
-// person who registered it is long gone.
-//
-// It is a function of its own so that registration can refuse a bad URL up
-// front by the same rule delivery applies.
+// review, at warn level, in a log file nobody is reading - and by then the
+// person who registered it is long gone. Registration calls this too, so a
+// mistyped URL is refused with a 400 while someone is still there to read
+// it.
 func validateHookURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("%q is not a url: %w", raw, err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("a hook url has to be http or https, not %q", u.Scheme)
+		if u.Scheme == "" {
+			return fmt.Errorf("a hook url has to start with http:// or https://: %q", raw)
+		}
+		return fmt.Errorf("a hook url has to be http or https, not %q: %q", u.Scheme, raw)
 	}
 	if u.Host == "" {
 		return fmt.Errorf("a hook url needs a host: %q", raw)
@@ -157,37 +181,33 @@ func validateHookURL(raw string) error {
 	return nil
 }
 
-func (s *Server) postHook(ctx context.Context, h *model.Hook, event ReviewEvent) {
+func (s *Server) postHook(ctx context.Context, h *model.Hook, event ReviewEvent) model.HookRun {
+	// Registration refuses these now, but a session file written before it
+	// did still holds them, and they are loaded back on start.
 	if err := validateHookURL(h.URL); err != nil {
 		slog.Warn("review hook has an unusable url", "hook", h.ID, "url", h.URL, "error", err)
-		return
+		return hookRun(false, err.Error())
 	}
 	body, err := json.Marshal(event)
 	if err != nil {
-		return
+		return hookRun(false, err.Error())
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.URL, bytes.NewReader(body))
 	if err != nil {
 		slog.Warn("review hook has an unusable url", "hook", h.ID, "url", h.URL, "error", err)
-		return
+		return hookRun(false, err.Error())
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		slog.Warn("review hook could not be delivered", "hook", h.ID, "url", h.URL, "error", err)
-		return
+		return hookRun(false, err.Error())
 	}
-	defer func() {
-		// Read what is left before closing, or the connection is
-		// dropped instead of returned to the pool and every review
-		// pays for a fresh one. Bounded, because how much a hook
-		// endpoint answers with is not sbnn's to decide.
-		io.Copy(io.Discard, io.LimitReader(resp.Body, maxHookResponse))
-		resp.Body.Close()
-	}()
+	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		slog.Warn("review hook was refused", "hook", h.ID, "url", h.URL, "status", resp.Status)
-		return
+		return hookRun(false, "refused with "+resp.Status)
 	}
 	slog.Info("review hook delivered", "hook", h.ID, "url", h.URL, "status", resp.Status)
+	return hookRun(true, resp.Status)
 }
