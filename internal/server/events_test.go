@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -181,6 +182,54 @@ func TestClosingAGroupForgetsItsReviewNotice(t *testing.T) {
 
 	if got := srv.broker.missedReviews(0); len(got) != 0 {
 		t.Errorf("stored notices after closing the group = %+v, want none", got)
+	}
+}
+
+// The replay hands back one notice per group, not every review after the id.
+// #336 measured this against a running server - a group reviewed four times
+// replayed only the fourth - and asked whether it is the design or a defect.
+// It is the design, and this holds it so the answer stops being re-derived:
+//
+//   - broker.reviews is keyed by group name, and forgetReviews exists to keep
+//     even that from growing without bound. A per-id backlog would grow for
+//     the life of the process with nothing to trim it.
+//   - Both clients want the current verdict rather than the history. The
+//     browser calls onChange() on any notice and refetches the group, so
+//     repeats would be identical refetches. `sbnn wait` asks whether the group
+//     has been reviewed, and it does not send Last-Event-ID at all - the
+//     replay is for the browser's EventSource, which resends the header by
+//     itself on reconnect.
+//   - The round-by-round history is kept, in GET /_/api/reviews.
+//
+// docs/api.md says the same thing in the GET /_/events section, and
+// TestAPIDocSaysTheReplayIsPerGroup in docs/doccheck holds it there.
+func TestReviewReplayIsOnePerGroupNotEveryNotice(t *testing.T) {
+	ts, srv := newTestServer(t)
+	for round := 1; round <= 4; round++ {
+		srv.broker.publishReview("gv",
+			fmt.Appendf(nil, `{"type":"review","group":"gv","round":%d}`, round))
+	}
+	// A second group, so the client has something to read up to and the test
+	// does not have to wait out the ping deadline.
+	srv.broker.publishReview("api", []byte(`{"type":"review","group":"api"}`))
+
+	got := readEventStream(t, ts.URL, "1", `"group":"api"`)
+
+	if n := strings.Count(got, `"group":"gv"`); n != 1 {
+		t.Errorf("gv notices replayed = %d, want 1\nstream:\n%s", n, got)
+	}
+	if !strings.Contains(got, `"round":4`) {
+		t.Errorf("stream = %q, want the newest review of gv", got)
+	}
+	for _, round := range []int{1, 2, 3} {
+		if strings.Contains(got, fmt.Sprintf(`"round":%d`, round)) {
+			t.Errorf("stream replayed round %d; only the newest notice per group is stored", round)
+		}
+	}
+	// Ids 2 and 3 are simply absent: there is no gap in the sequence to
+	// notice, which is the part docs/api.md has to spell out.
+	if strings.Contains(got, "id: 2") || strings.Contains(got, "id: 3") {
+		t.Errorf("stream = %q, want ids 2 and 3 unreplayed", got)
 	}
 }
 
