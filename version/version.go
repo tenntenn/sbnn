@@ -16,6 +16,12 @@ import (
 // `go install github.com/tenntenn/sbnn@v1.2.3` carries no linker flags at
 // all, so the module version out of the build info is the only place the
 // release can be read from (see versionFrom).
+//
+// Nothing in the tree writes this. In particular .tagpr says
+// "versionFile = -" on purpose: pointing tagpr at this file would have it
+// rewrite the version-shaped strings in the comments above and then release
+// whichever number it read back out of them. See
+// TestTagprWritesNoVersionFile.
 var Version = "dev"
 
 // Revision is the commit sbnn was built from. It is read from the build info
