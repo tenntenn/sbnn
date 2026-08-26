@@ -33,6 +33,14 @@ tasks:
     cmds:
       - "{{.GO}} vet ./..."
       - "gofmt -l . | grep -v '^web/node_modules' && exit 1 || true"
+      # go fix rewrites code the standard library has since given a better
+      # spelling -- strings.Cut for an Index/slice pair, for range N, slices.Sort.
+      # -diff prints the patch instead of applying it and exits non-zero when
+      # there is one, so this reports rather than edits under your feet. Run
+      # `go fix ./...` to take the patch.
+      - "{{.GO}} fix -diff ./..."
+      - "{{.GO}} mod tidy"
+      - "git diff --exit-code go.mod go.sum"
 
   dev:
     desc: Runs the sbnn server in the foreground and the Vite dev server, which proxies /_ to it.

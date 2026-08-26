@@ -6,6 +6,8 @@
 package source
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +60,14 @@ func NewSide(baseDir string, f *model.File) Result {
 // shown in the preview and baked into an exported page, so a path that
 // leaves the directory the diff was sent from is refused and rebuilt from
 // the diff instead.
+//
+// Climbing out with ".." is only the obvious way out. A path that stays
+// inside lexically still leaves the directory when a symlink on the way
+// points elsewhere, and a symlink is something a patch can add to the tree
+// as easily as it names one that is already there. So both the base and the
+// candidate are resolved before they are compared, and the comparison is
+// what decides. The returned path is the unresolved one, so that the reader
+// is shown the file where the diff says it is.
 func AbsPath(baseDir, rel string) string {
 	if rel == "" || baseDir == "" {
 		return ""
@@ -72,7 +82,51 @@ func AbsPath(baseDir, rel string) string {
 	if !within(base, abs) {
 		return ""
 	}
+	realBase, err := evalSymlinks(base)
+	if err != nil {
+		return ""
+	}
+	realAbs, err := evalSymlinks(abs)
+	if err != nil {
+		return ""
+	}
+	if !within(realBase, realAbs) {
+		return ""
+	}
 	return abs
+}
+
+// evalSymlinks is filepath.EvalSymlinks for a path that need not exist yet.
+//
+// A diff routinely names a file that is not on disk, and EvalSymlinks fails
+// outright on those, so the path is resolved as far as it does exist and the
+// missing tail is appended to the result. That still catches a symlinked
+// directory on the way, which is what the check is after; only the names
+// below the last existing directory are taken at face value, and those
+// cannot be symlinks because they are not there at all.
+func evalSymlinks(path string) (string, error) {
+	var rest string
+	for {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err == nil {
+			return filepath.Join(resolved, rest), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		// A dangling symlink is an entry that exists without resolving,
+		// which is not the same as a name that is free to be created.
+		// Refuse it rather than treat it as a file yet to be written.
+		if _, lerr := os.Lstat(path); lerr == nil {
+			return "", err
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", err
+		}
+		rest = filepath.Join(filepath.Base(path), rest)
+		path = parent
+	}
 }
 
 // within reports whether path is base itself or something under it.

@@ -1,18 +1,19 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { groupFromLocation } from './api'
 import { client } from './client'
-import { readSetting, writeSetting } from './storage'
-import type { Comment, Diff, FileDiff, PreviewKind, Status, ViewMode, Verdict } from './types'
+import { readBoolSetting, readEnumSetting, readNumberSetting, readSetting, readStringSet, writeBoolSetting, writeSetting, writeStringSet } from './storage'
+import { isPreviewable, type Comment, type Diff, type FileDiff, type PreviewKind, type Status, type ViewMode, type Verdict } from './types'
 import { DiffFileSection } from './components/DiffFileSection'
-import { DiffStack, type DiffStackHandle, type ScrollFraction } from './components/DiffStack'
+import { DiffStack, FileStepper, resolveFolded, type DiffStackHandle, type ScrollFraction } from './components/DiffStack'
 import { Divider } from './components/Divider'
 import { Icon } from './components/Icon'
 import { PreviewFileSection } from './components/PreviewFileSection'
+import { PreviewSelection } from './components/PreviewSelection'
 import { PreviewStack } from './components/PreviewStack'
 import { Sidebar } from './components/Sidebar'
 import { clampRatio, SplitPane, SPLIT_DEFAULT } from './components/SplitPane'
 import { useNarrowLayout } from './useMediaQuery'
-import { plainKey, shortcuts, typingInto } from './shortcuts'
+import { plainKey, shortcuts, stepToComment, typingInto } from './shortcuts'
 import { applyTheme, storedTheme, type Theme } from './theme'
 import { sectionKey } from './sectionKey'
 
@@ -25,29 +26,63 @@ const SIDEBAR_DEFAULT = 280
 const SIDEBAR_MAX = 720
 const SIDEBAR_SNAP = 48
 const SIDEBAR_STEP = 24
+// What survives a reload follows one rule, so that the answer is guessable
+// before it is tried: a reader's preference is remembered, and everything
+// about one particular review or one particular moment is not.
+//
+// Remembered (a preference - how this reader likes sbnn to look and behave):
+// the sidebar width, the split ratio, the preview renderer, the theme, the
+// sidebar layout, the split/unified default, and follow-the-diff scrolling.
+//
+// Not remembered (belongs to a review, or to right now): per-file view mode
+// and fold overrides, which rounds are shut, the path filter, an unsent
+// comment draft, and which file is in focus.
+//
+// Every key is 'sbnn.' + the name, and every one of them is read back through
+// storage.ts so that a stale or hand-edited value falls back to the default
+// rather than reaching the UI.
 const SIDEBAR_KEY = 'sbnn.sidebar.width'
 const SPLIT_KEY = 'sbnn.split'
 const PREVIEW_KIND_KEY = 'sbnn.preview.renderer'
+const VIEW_MODE_KEY = 'sbnn.viewmode'
+const SYNC_SCROLL_KEY = 'sbnn.sync'
+// Read marks are per review rather than per reader, so they hang off the
+// group name instead of living in one global setting: two reviews open in two
+// tabs keep their own place.
+const READ_KEY_PREFIX = 'sbnn.read.'
 
 function storedSplitRatio(): number {
+  // Kept apart from readNumberSetting because the ends are not like the
+  // middle: 0 and 1 mean "one pane only" and have to survive as they are,
+  // where anything between them is held away from the edges by clampRatio.
   const stored = readSetting(SPLIT_KEY)
-  if (stored === null) return SPLIT_DEFAULT
+  if (stored === null || stored.trim() === '') return SPLIT_DEFAULT
   const ratio = Number(stored)
   if (!Number.isFinite(ratio) || ratio < 0 || ratio > 1) return SPLIT_DEFAULT
   return ratio === 0 || ratio === 1 ? ratio : clampRatio(ratio)
 }
 
 function storedSidebarWidth(): number {
-  // An unset entry reads as null, which Number() would happily turn into a
-  // collapsed sidebar, so the absence is checked before the value.
-  const stored = readSetting(SIDEBAR_KEY)
-  if (stored === null) return SIDEBAR_DEFAULT
-  const width = Number(stored)
-  return Number.isFinite(width) && width >= 0 && width <= SIDEBAR_MAX ? width : SIDEBAR_DEFAULT
+  // 0 is a real width here - it is the collapsed sidebar - so the range
+  // starts there, and it is readNumberSetting that keeps a missing or blank
+  // entry from arriving as one.
+  return readNumberSetting(SIDEBAR_KEY, 0, SIDEBAR_MAX, SIDEBAR_DEFAULT)
 }
 
 function storedPreviewKind(): PreviewKind {
-  return readSetting(PREVIEW_KIND_KEY) === 'mo' ? 'mo' : 'preview'
+  return readEnumSetting<PreviewKind>(PREVIEW_KIND_KEY, ['preview', 'mo'], 'preview')
+}
+
+// 'auto' is how "no default of my own" is written down, since it has to be
+// told apart from a key that was never set - both mean null here, but only
+// one of them can be written back.
+function storedViewModeDefault(): ViewMode | null {
+  const stored = readEnumSetting<ViewMode | 'auto'>(VIEW_MODE_KEY, ['split', 'unified', 'auto'], 'auto')
+  return stored === 'auto' ? null : stored
+}
+
+function storedSyncScroll(): boolean {
+  return readBoolSetting(SYNC_SCROLL_KEY, true)
 }
 
 export function App() {
@@ -57,6 +92,12 @@ export function App() {
   const [comments, setComments] = useState<Comment[]>([])
   const [reviewedAt, setReviewedAt] = useState<string | null>(null)
   const [reviewVerdict, setReviewVerdict] = useState<Verdict | null>(null)
+  // roundReviewed is whether the verdict still covers what is on the page.
+  // A live page reads that from the status summary; an exported one has no
+  // server to ask, so it is frozen into the payload - otherwise a page
+  // exported after a diff arrived would show the previous round's Approved
+  // against a diff nobody has looked at.
+  const [roundReviewed, setRoundReviewed] = useState<boolean | null>(null)
   const [status, setStatus] = useState<Status | null>(null)
   // activeKey is the file the reader is currently looking at: on a phone
   // the one file shown, on a wide screen whichever the diff pane has been
@@ -65,11 +106,14 @@ export function App() {
   // touch the same path as their Nth file share one.
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const [foldOverrides, setFoldOverrides] = useState<Map<string, boolean>>(() => new Map())
+  // Where `n` / `p` stand: the comment last stepped to, which is a position
+  // of its own and cannot be read back off the file being shown.
+  const [currentCommentId, setCurrentCommentId] = useState<string | null>(null)
   const [viewModeOverrides, setViewModeOverrides] = useState<Map<string, ViewMode>>(() => new Map())
   // viewModeDefault is every file's view mode until its own toggle says
   // otherwise; null respects each file's own server-picked default (added
   // files unified, most modified files split) rather than forcing one.
-  const [viewModeDefault, setViewModeDefault] = useState<ViewMode | null>(null)
+  const [viewModeDefault, setViewModeDefault] = useState<ViewMode | null>(storedViewModeDefault)
   const [scrollFraction, setScrollFraction] = useState<ScrollFraction | null>(null)
   const [splitRatio, setSplitRatio] = useState(storedSplitRatio)
   const [pane, setPane] = useState<Pane>('diff')
@@ -84,13 +128,19 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(storedTheme)
   const [query, setQuery] = useState('')
   const [previewKind, setPreviewKind] = useState<PreviewKind>(storedPreviewKind)
+  // readKeys is where the reader got to: the diffId:fileId pairs they have
+  // said they are done with. Keying on the pair rather than the fileId is
+  // what makes a new round arrive unread without anything having to expire
+  // the old marks - the round is part of the key, so a re-sent file is
+  // simply a key nobody has marked yet.
+  const [readKeys, setReadKeys] = useState<Set<string>>(() => readStringSet(READ_KEY_PREFIX + group))
   // Scrolling the diff moves the preview with it, to the same file and the
   // same fraction into that file's own section, rather than by line: the
   // two documents do not agree on lines, and pretending they do lands the
   // reader in the wrong place with more confidence. It is off the moment
   // the reader says so, and the reader says so simply by scrolling the
   // preview themselves.
-  const [syncScroll, setSyncScroll] = useState(true)
+  const [syncScroll, setSyncScroll] = useState(storedSyncScroll)
   const bodyRef = useRef<HTMLDivElement>(null)
   const diffScrollRef = useRef<HTMLDivElement>(null)
   const previewScrollRef = useRef<HTMLDivElement>(null)
@@ -120,6 +170,18 @@ export function App() {
     writeSetting(PREVIEW_KIND_KEY, previewKind)
   }, [previewKind])
 
+  useEffect(() => {
+    writeSetting(VIEW_MODE_KEY, viewModeDefault ?? 'auto')
+  }, [viewModeDefault])
+
+  useEffect(() => {
+    writeBoolSetting(SYNC_SCROLL_KEY, syncScroll)
+  }, [syncScroll])
+
+  useEffect(() => {
+    writeStringSet(READ_KEY_PREFIX + group, readKeys)
+  }, [group, readKeys])
+
   const resizeSidebar = useCallback((clientX: number) => {
     const rect = bodyRef.current?.getBoundingClientRect()
     if (!rect) return
@@ -146,6 +208,7 @@ export function App() {
       setComments(data.comments)
       setReviewedAt(data.reviewedAt ?? null)
       setReviewVerdict(data.reviewVerdict ?? null)
+      setRoundReviewed(data.reviewed ?? null)
       setStatus(data.status)
       setError(null)
     } catch (err) {
@@ -174,6 +237,38 @@ export function App() {
     () => diffs.flatMap((d) => d.files.map((f) => sectionKey(d.id, f.id))),
     [diffs],
   )
+
+  // A removed round leaves marks behind that nothing can ever show again, so
+  // they are dropped once there is a file list to check them against. The
+  // empty case is skipped deliberately: the first render happens before the
+  // first load returns, and pruning against nothing would clear every mark
+  // the reader came back for. Returning the set unchanged when there is
+  // nothing to drop is what keeps this from looping.
+  useEffect(() => {
+    if (flatKeys.length === 0) return
+    setReadKeys((current) => {
+      if (current.size === 0) return current
+      const live = new Set(flatKeys)
+      const next = new Set([...current].filter((key) => live.has(key)))
+      return next.size === current.size ? current : next
+    })
+  }, [flatKeys])
+
+  const readCount = useMemo(
+    () => flatKeys.reduce((n, key) => (readKeys.has(key) ? n + 1 : n), 0),
+    [flatKeys, readKeys],
+  )
+
+  const setRead = useCallback((key: string, value: boolean) => {
+    setReadKeys((prev) => {
+      const next = new Set(prev)
+      if (value) next.add(key)
+      else next.delete(key)
+      return next
+    })
+  }, [])
+
+  const markAllUnread = useCallback(() => setReadKeys(new Set()), [])
 
   // Keep a file active: the newest diff is what the reviewer just sent. On
   // a wide screen this is only the starting point - scrolling the diff pane
@@ -238,7 +333,7 @@ export function App() {
   // The review is what anything waiting on sbnn is waiting for, so saying "I
   // am done" is an explicit act rather than a guess from the last comment.
   const summary = status?.groups.find((g) => g.name === group)
-  const reviewed = summary ? summary.reviewed : reviewedAt !== null
+  const reviewed = summary ? summary.reviewed : (roundReviewed ?? reviewedAt !== null)
   const hooks = summary?.hooks ?? 0
 
   const submitReview = async (verdict: Verdict) => {
@@ -300,20 +395,25 @@ export function App() {
   // in another file, and going there is the point. Every file's comments
   // are on the page at once now, so landing on the right one is a direct
   // scrollIntoView rather than a guess at "the first .comment on screen".
+  //
+  // Where the tour stands is the comment it last visited, not the file:
+  // deriving it from the active file made every comment after the second in
+  // a file unreachable, because arriving at the second one left the reader
+  // in the same file the search started from.
   const stepComment = useCallback(
     (by: number) => {
-      const open = comments.filter((c) => !c.resolved)
-      if (open.length === 0) return
-      const at = activeKey ? open.findIndex((c) => sectionKey(c.diffId, c.fileId) === activeKey) : -1
-      const index = at < 0 ? (by > 0 ? 0 : open.length - 1) : at + by
-      const target = open[(index + open.length) % open.length]
+      const stops = comments
+        .filter((c) => !c.resolved)
+        .map((c) => ({ id: c.id, key: sectionKey(c.diffId, c.fileId) }))
+      const target = stepToComment(stops, currentCommentId, activeKey, by)
       if (!target) return
-      goToKey(sectionKey(target.diffId, target.fileId))
+      setCurrentCommentId(target.id)
+      goToKey(target.key)
       window.setTimeout(() => {
         document.getElementById(`comment-${target.id}`)?.scrollIntoView({ block: 'center' })
       }, 50)
     },
-    [comments, activeKey, goToKey],
+    [comments, currentCommentId, activeKey, goToKey],
   )
 
   // One place where every key is answered. Each is a single unmodified
@@ -349,7 +449,15 @@ export function App() {
         case 'f': {
           if (!activeKey) break
           const entry = filesByKey.get(activeKey)
-          const current = foldOverrides.get(activeKey) ?? Boolean(entry?.file.folded)
+          // Toggle away from what is on screen, not from the raw override:
+          // the two differ on a commented file the sender had folded, and
+          // pressing `f` there used to store a value that changed nothing.
+          const hasComments = comments.some((c) => sectionKey(c.diffId, c.fileId) === activeKey)
+          const current = resolveFolded(
+            foldOverrides.get(activeKey),
+            Boolean(entry?.file.folded),
+            hasComments,
+          )
           setFolded(activeKey, !current)
           break
         }
@@ -383,6 +491,7 @@ export function App() {
     focusSearch,
     diffs.length,
     activeKey,
+    comments,
     filesByKey,
     foldOverrides,
     viewModeOverrides,
@@ -405,6 +514,10 @@ export function App() {
       query={query}
       onQuery={setQuery}
       searchRef={searchRef}
+      readKeys={readKeys}
+      readCount={readCount}
+      onSetRead={setRead}
+      onMarkAllUnread={markAllUnread}
     />
   )
 
@@ -413,21 +526,32 @@ export function App() {
 
   const diffPane = narrow ? (
     activeEntry ? (
-      <DiffFileSection
-        key={activeKey}
-        group={group}
-        diff={activeEntry.diff}
-        file={activeEntry.file}
-        comments={activeComments}
-        narrow
-        onChanged={() => void reload()}
-        folded={
-          (foldOverrides.get(activeKey!) ?? Boolean(activeEntry.file.folded)) && activeComments.length === 0
-        }
-        onSetFolded={(value) => setFolded(activeKey!, value)}
-        viewMode={viewModeOverrides.get(activeKey!) ?? viewModeDefault ?? activeEntry.file.viewMode}
-        onSetViewMode={(mode) => setViewModeFor(activeKey!, mode)}
-      />
+      // `.content` lays its children out in a row, so the stepper beside the
+      // diff would take a column of the phone's width away from it. One
+      // column of its own keeps the diff full width and the stepper below it.
+      <div className="diff-pane">
+        <DiffFileSection
+          key={activeKey}
+          group={group}
+          diff={activeEntry.diff}
+          file={activeEntry.file}
+          comments={activeComments}
+          narrow
+          onChanged={() => void reload()}
+          folded={resolveFolded(
+            foldOverrides.get(activeKey!),
+            Boolean(activeEntry.file.folded),
+            activeComments.length > 0,
+          )}
+          foldedByReader={foldOverrides.get(activeKey!) === true}
+          onSetFolded={(value) => setFolded(activeKey!, value)}
+          viewMode={viewModeOverrides.get(activeKey!) ?? viewModeDefault ?? activeEntry.file.viewMode}
+          onSetViewMode={(mode) => setViewModeFor(activeKey!, mode)}
+        />
+        {/* One file at a time hides the rest of the review; this is the
+            way on to them. */}
+        <FileStepper at={flatKeys.indexOf(activeKey!)} total={flatKeys.length} onStep={stepFile} />
+      </div>
     ) : (
       <p className="empty">Select a file.</p>
     )
@@ -648,8 +772,12 @@ export function App() {
             className={pane === 'preview' ? 'active' : ''}
             aria-pressed={pane === 'preview'}
             onClick={() => setPane('preview')}
-            disabled={!activeEntry?.file.isMarkdown}
-            title={activeEntry?.file.isMarkdown ? undefined : 'Only Markdown files have a preview'}
+            disabled={!activeEntry || !isPreviewable(activeEntry.file, !client.isStatic)}
+            title={
+              activeEntry && isPreviewable(activeEntry.file, !client.isStatic)
+                ? undefined
+                : 'This file has no preview'
+            }
           >
             Preview
           </button>
@@ -791,6 +919,13 @@ export function App() {
           </main>
         </div>
       )}
+
+      {/* One for the page, not one per preview: a selection is only ever in
+          one of them, and it says itself which file it is in. It sits here
+          rather than beside the preview because it is pinned to the window,
+          and because both layouts - the stack of files and the phone's
+          single one - need it. */}
+      <PreviewSelection group={group} onChanged={() => void reload()} />
     </div>
   )
 }

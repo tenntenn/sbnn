@@ -1,0 +1,19 @@
+# Review comments (sbnn group "default")
+
+The reviewer left comments without deciding either way.
+
+1 comment(s) to address.
+
+## 1. main.go:4
+
+Diff: first
+
+```
+time.Sleep(2 * time.Second)
+```
+
+Worth a comment saying why.
+
+---
+
+Address every comment above. A suggestion block replaces the lines it names, verbatim. When a comment is not worth acting on, say why instead of changing the code.

@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -34,7 +37,7 @@ var (
 const DefaultAuthor = "agent"
 
 var commentCmd = &cobra.Command{
-	Use:   "comment [path:line[-line]]",
+	Use:   "comment [path[:line[-line]]]",
 	Short: "Leave a review comment from the command line",
 	Long: `Leave a review comment on a diff that was already sent to sbnn.
 
@@ -53,6 +56,16 @@ diff shows; --side old comments on a removed line instead. The file is looked
 up in the newest diff of the group that carries that path, unless --diff
 names one. sbnn fills in the reviewed code itself.
 
+A path on its own, with no line, comments on the file as a whole:
+
+  $ sbnn comment new.txt -m "this rename looks wrong"
+  $ sbnn comment exec.sh -m "why is this now executable?"
+
+That is the only thing to say about a file the diff carries without any
+lines - a pure rename, a mode change, a binary file - and it reads as a
+comment on the file for every other one too. A suggestion needs lines to
+replace, so it cannot go on a comment that names none.
+
 A suggestion is a fenced block inside the comment, the way GitHub writes one,
 so it can also be typed straight into -m.
 
@@ -61,9 +74,19 @@ Many at once, for a whole self review:
   $ sbnn comment --json <<'EOF'
   [
     {"path": "cmd/root.go", "line": "88", "body": "left over"},
-    {"path": "README.md", "line": "12-18", "body": "reworded", "suggestion": "..."}
+    {"path": "README.md", "line": "12-18", "body": "reworded", "suggestion": "..."},
+    {"path": "new.txt", "body": "this rename looks wrong"}
   ]
   EOF
+
+An entry that leaves "line" out is the same whole-file comment a bare path
+makes on the command line.
+
+Each entry carries its own text, so --message, --suggest and --suggest-file
+are refused next to --json: the array is already on stdin, and --suggest -
+would be reading the same stdin the array comes from. Of the rest, --author,
+--diff and --question act as defaults for entries that leave "author",
+"diffId" or "question" out; the side is taken from the entry alone.
 
 Comments made this way are read back exactly like the ones written in the
 browser, with ` + "`sbnn comments`" + `.`,
@@ -88,6 +111,14 @@ func init() {
 	f.StringVar(&commentDiffID, "diff", "", "Diff ID (default: the newest diff carrying the path)")
 	f.BoolVar(&commentBulk, "json", false, "Read a JSON array of comments from stdin")
 	f.BoolVar(&commentJSONOut, "json-output", false, "Print the stored comments as JSON")
+
+	// --json takes every comment from stdin, so nothing else may read stdin or
+	// claim to hold the one comment's text. Marked in pairs rather than as one
+	// group of four, because --message and --suggest belong together: a
+	// suggestion usually comes with a sentence saying why.
+	commentCmd.MarkFlagsMutuallyExclusive("json", "message")
+	commentCmd.MarkFlagsMutuallyExclusive("json", "suggest")
+	commentCmd.MarkFlagsMutuallyExclusive("json", "suggest-file")
 }
 
 func runComment(cmd *cobra.Command, args []string) error {
@@ -109,7 +140,7 @@ func runComment(cmd *cobra.Command, args []string) error {
 		requests, err = readBulkComments(os.Stdin)
 	} else {
 		if len(args) != 1 {
-			return fmt.Errorf("say which lines to comment on, as path:line or path:line-line")
+			return fmt.Errorf("say what to comment on, as path, path:line or path:line-line")
 		}
 		requests, err = singleComment(args[0])
 	}
@@ -120,29 +151,85 @@ func runComment(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no comment to add")
 	}
 
-	stored := make([]*model.Comment, 0, len(requests))
-	for _, req := range requests {
-		added, err := c.AddComment(ctx, group, req)
-		if err != nil {
-			return err
-		}
-		stored = append(stored, added)
-		if !commentJSONOut {
-			fmt.Fprintf(os.Stderr, "sbnn: %s on %s%s\n", added.ID, added.Path, lineRangeOf(added))
-		}
+	if err := addComments(ctx, c, group, requests, os.Stdout, os.Stderr); err != nil {
+		return err
 	}
 	if commentJSONOut {
-		return jsonEncoder(os.Stdout).Encode(stored)
+		return nil
 	}
 	fmt.Println(server.GroupURL(c.BaseURL(), group))
 	return nil
 }
 
-func lineRangeOf(c *model.Comment) string {
-	if c.EndLine > c.StartLine {
-		return fmt.Sprintf(":%d-%d", c.StartLine, c.EndLine)
+// commentAdder is the one thing addComments needs from the client.
+type commentAdder interface {
+	AddComment(ctx context.Context, group string, req server.AddCommentRequest) (*model.Comment, error)
+}
+
+// addComments stores the requests one at a time and stops at the first
+// failure. The ones before it are already on the server and stay there, so
+// they are reported before the error goes up: with --json-output nothing has
+// been printed yet, and a caller that saw only the error would re-run the
+// same input and store them a second time.
+func addComments(ctx context.Context, adder commentAdder, group string, requests []server.AddCommentRequest, out, errOut io.Writer) error {
+	stored := make([]*model.Comment, 0, len(requests))
+	for i, req := range requests {
+		added, err := adder.AddComment(ctx, group, req)
+		if err != nil {
+			if len(requests) > 1 {
+				err = fmt.Errorf("comment %d of %d (%s%s): %w",
+					i+1, len(requests), req.Path, requestLines(req), err)
+			}
+			return reportStored(out, errOut, stored, len(requests), err)
+		}
+		stored = append(stored, added)
+		if !commentJSONOut {
+			fmt.Fprintf(errOut, "sbnn: %s on %s%s\n", added.ID, added.Path, lineRangeOf(added))
+		}
 	}
-	return fmt.Sprintf(":%d", c.StartLine)
+	if commentJSONOut {
+		return jsonEncoder(out).Encode(stored)
+	}
+	return nil
+}
+
+// reportStored says what survived a run that failed part-way through, so that
+// the rest of it can be sent again without duplicating what is there.
+func reportStored(out, errOut io.Writer, stored []*model.Comment, total int, cause error) error {
+	if len(stored) == 0 {
+		return cause
+	}
+	if commentJSONOut {
+		if err := jsonEncoder(out).Encode(stored); err != nil {
+			return errors.Join(cause, err)
+		}
+	}
+	fmt.Fprintf(errOut,
+		"sbnn: %d of %d comments were stored before this and are still there; send the rest without the first %d entries, or they will be added twice\n",
+		len(stored), total, len(stored))
+	return cause
+}
+
+// requestLines and lineRangeOf name the lines a comment is on, and name
+// nothing at all for a comment on the file as a whole - "cmd/root.go:0" is
+// not a place, and the same rule is what server.lineRange follows when it
+// writes the prompt.
+func requestLines(req server.AddCommentRequest) string {
+	return lineSuffix(req.StartLine, req.EndLine)
+}
+
+func lineRangeOf(c *model.Comment) string {
+	return lineSuffix(c.StartLine, c.EndLine)
+}
+
+func lineSuffix(start, end int) string {
+	if start <= 0 {
+		return ""
+	}
+	if end > start {
+		return fmt.Sprintf(":%d-%d", start, end)
+	}
+	return fmt.Sprintf(":%d", start)
 }
 
 // singleComment builds the request for "path:line" or "path:line-line".
@@ -151,12 +238,18 @@ func singleComment(spec string) ([]server.AddCommentRequest, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("say what to comment on, as path, path:line or path:line-line")
+	}
 	suggestion, err := suggestionText()
 	if err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(commentBody) == "" && suggestion == "" {
 		return nil, fmt.Errorf("say something with -m, or propose something with --suggest")
+	}
+	if err := suggestionNeedsLines(path, start, commentBody, suggestion); err != nil {
+		return nil, err
 	}
 	side, err := normalizeSide(commentSide)
 	if err != nil {
@@ -206,9 +299,12 @@ type bulkComment struct {
 	Side       string    `json:"side"`
 	Body       string    `json:"body"`
 	Suggestion string    `json:"suggestion"`
-	Question   bool      `json:"question"`
-	Author     string    `json:"author"`
-	DiffID     string    `json:"diffId"`
+	// Question is a pointer so an entry that says "question": false keeps its
+	// false even when --question sets the default for the entries that leave
+	// the field out, the same way an empty "author" falls back to --author.
+	Question *bool  `json:"question"`
+	Author   string `json:"author"`
+	DiffID   string `json:"diffId"`
 }
 
 // flexLines accepts "12", "12-18" and 12 alike.
@@ -233,12 +329,39 @@ func (l *flexLines) UnmarshalJSON(b []byte) error {
 		l.Start, l.End = start, end
 		return nil
 	}
-	var n int
-	if err := json.Unmarshal(b, &n); err != nil {
+	var num json.Number
+	if err := json.Unmarshal(b, &num); err != nil {
 		return fmt.Errorf("line must be a number or a string like \"12-18\": %w", err)
+	}
+	n, err := lineFromNumber(num)
+	if err != nil {
+		return err
 	}
 	l.Start, l.End = n, n
 	return nil
+}
+
+// lineFromNumber reads a JSON number as a line number. JSON has a single
+// numeric type, so 12 and 12.0 are the same number and both name line 12;
+// generators that do arithmetic (jq, Python, anything in JavaScript) emit the
+// second spelling for whole numbers. Only a real fraction is refused.
+func lineFromNumber(num json.Number) (int, error) {
+	text := num.String()
+	if strings.ContainsAny(text, ".eE") {
+		f, err := num.Float64()
+		if err != nil {
+			return 0, fmt.Errorf("line %s is not a line number", text)
+		}
+		if f != math.Trunc(f) {
+			return 0, fmt.Errorf("line must be a whole number, not %s", text)
+		}
+		text = strconv.FormatFloat(f, 'f', -1, 64)
+	}
+	n, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("line %s is out of range for a line number", text)
+	}
+	return n, nil
 }
 
 func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
@@ -255,14 +378,23 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 		if start == 0 {
 			start, end = e.StartLine, e.EndLine
 		}
-		if start <= 0 {
-			return nil, fmt.Errorf("comment %d (%s) has no line", i+1, e.Path)
+		// No line at all is a comment about the file itself, the same
+		// thing a bare path means on the command line. A negative one, and
+		// an end without a start, name no place and are still refused.
+		if start < 0 || end < 0 {
+			return nil, fmt.Errorf("comment %d (%s) has a line number below 1; leave the line out to comment on the whole file", i+1, e.Path)
 		}
-		if end < start {
+		if start == 0 && end != 0 {
+			return nil, fmt.Errorf("comment %d (%s) has an endLine but no line", i+1, e.Path)
+		}
+		if start > 0 && end < start {
 			end = start
 		}
 		if strings.TrimSpace(e.Body) == "" && strings.TrimSpace(e.Suggestion) == "" {
 			return nil, fmt.Errorf("comment %d (%s) says nothing", i+1, e.Path)
+		}
+		if err := suggestionNeedsLines(e.Path, start, e.Body, e.Suggestion); err != nil {
+			return nil, fmt.Errorf("comment %d: %w", i+1, err)
 		}
 		side, err := normalizeSide(e.Side)
 		if err != nil {
@@ -276,6 +408,10 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 		if diffID == "" {
 			diffID = commentDiffID
 		}
+		question := commentQuestion
+		if e.Question != nil {
+			question = *e.Question
+		}
 		requests = append(requests, server.AddCommentRequest{
 			DiffID:     diffID,
 			Path:       e.Path,
@@ -284,15 +420,33 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 			StartLine:  start,
 			EndLine:    end,
 			Body:       e.Body,
-			Question:   e.Question || commentQuestion,
+			Question:   question,
 			Suggestion: e.Suggestion,
 		})
 	}
 	return requests, nil
 }
 
+// suggestionNeedsLines refuses a suggestion on a comment that names no
+// lines. A suggestion is a replacement for the lines the comment is on, and
+// a comment about the file as a whole is on none of them; the server refuses
+// it too, but the check is made here as well so a --json run stops before
+// storing the entries ahead of the offending one.
+func suggestionNeedsLines(path string, start int, body, suggestion string) error {
+	if start > 0 {
+		return nil
+	}
+	// The same reading the server does: --suggest is appended to the body
+	// as a fenced block, and a block typed straight into -m is a suggestion
+	// just as much.
+	if len(model.Suggestions(model.WithSuggestion(body, suggestion))) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s: a suggestion replaces the lines a comment names, so say which, as %s:line", path, path)
+}
+
 func normalizeSide(side string) (string, error) {
-	switch side {
+	switch strings.ToLower(strings.TrimSpace(side)) {
 	case "", "new":
 		return "new", nil
 	case "old":
@@ -304,12 +458,19 @@ func normalizeSide(side string) (string, error) {
 
 var lineSpecPattern = regexp.MustCompile(`^(\d+)(?:-(\d+))?$`)
 
-// parseLineSpec splits "path:12" or "path:12-18". Paths may contain colons on
-// some systems, so the last colon wins.
+// parseLineSpec splits "path:12" and "path:12-18", and reads a bare "path"
+// as the file itself: start and end come back 0, which is how a comment says
+// it is about the whole file rather than about lines of it.
+//
+// Paths may contain colons, so what settles which of the two a spec is, is
+// the text after the last colon: it is read as a line spec when it begins
+// with a digit, and belongs to the path otherwise. That keeps "main.go:0"
+// and "main.go:4x" the errors they were - a line number is positive when one
+// is given - while leaving a path like "odd:name.txt" alone.
 func parseLineSpec(spec string) (path string, start, end int, err error) {
 	i := strings.LastIndex(spec, ":")
-	if i <= 0 || i == len(spec)-1 {
-		return "", 0, 0, fmt.Errorf("cannot read %q: say path:line or path:line-line", spec)
+	if i <= 0 || !startsWithDigit(spec[i+1:]) {
+		return spec, 0, 0, nil
 	}
 	start, end, err = parseLines(spec[i+1:])
 	if err != nil {
@@ -318,18 +479,40 @@ func parseLineSpec(spec string) (path string, start, end int, err error) {
 	return spec[:i], start, end, nil
 }
 
+func startsWithDigit(s string) bool {
+	return s != "" && s[0] >= '0' && s[0] <= '9'
+}
+
 func parseLines(s string) (start, end int, err error) {
 	m := lineSpecPattern.FindStringSubmatch(strings.TrimSpace(s))
 	if m == nil {
 		return 0, 0, fmt.Errorf("%q is not a line or a line range", s)
 	}
-	start, _ = strconv.Atoi(m[1])
+	start, err = lineNumber(m[1])
+	if err != nil {
+		return 0, 0, err
+	}
 	end = start
 	if m[2] != "" {
-		end, _ = strconv.Atoi(m[2])
+		end, err = lineNumber(m[2])
+		if err != nil {
+			return 0, 0, err
+		}
 	}
 	if start <= 0 || end < start {
 		return 0, 0, fmt.Errorf("%q is not a line range", s)
 	}
 	return start, end, nil
+}
+
+// lineNumber converts one run of digits. The pattern lets through a number
+// too large to hold, which Atoi answers with both MaxInt and an error; taking
+// the value and dropping the error anchors the comment to a line no file will
+// ever have, and nothing downstream notices.
+func lineNumber(digits string) (int, error) {
+	n, err := strconv.Atoi(digits)
+	if err != nil {
+		return 0, fmt.Errorf("line %s is out of range for a line number", digits)
+	}
+	return n, nil
 }

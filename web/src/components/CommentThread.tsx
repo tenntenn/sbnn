@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
 import type { Comment } from '../types'
 import { client } from '../client'
-import { originalLines, parseBody, suggestionBlock, suggestions } from '../suggestion'
+import { renderComment } from '../markdown'
+import { insertSuggestion, originalLines, parseBody, suggestionBlock, suggestions } from '../suggestion'
 
 interface ThreadProps {
   group: string
@@ -20,7 +21,11 @@ export function CommentThread({ group, comments, onChanged }: ThreadProps) {
   )
 }
 
+/** rangeLabel names what a comment is on. A comment that names no lines is
+ * about the file as a whole, and "path:0" is not a place, so it is the bare
+ * path - the same rule the prompt follows. */
 function rangeLabel(c: Pick<Comment, 'path' | 'side' | 'startLine' | 'endLine'>): string {
+  if (c.startLine <= 0) return c.path
   const lines = c.endLine > c.startLine ? `${c.startLine}-${c.endLine}` : `${c.startLine}`
   return `${c.path}:${lines}${c.side === 'old' ? ' (old)' : ''}`
 }
@@ -82,6 +87,28 @@ function SuggestedChange({
       </table>
     </div>
   )
+}
+
+/**
+ * CommentBody draws one prose segment of a comment.
+ *
+ * A comment body is Markdown - model.Comment says so, and `sbnn comments`
+ * hands it to an agent as Markdown - so the reviewer reading the same field
+ * in the browser gets it rendered too. renderComment returns HTML that has
+ * been through DOMPurify, which is what makes it safe to set as innerHTML
+ * here. Nothing else on this path may reach dangerouslySetInnerHTML.
+ *
+ * It is renderComment and not the preview's renderMarkdown because a comment
+ * draws no image: the page is opened locally and the body is written by an
+ * agent, so an <img> would turn opening a review into a request to whatever
+ * host the comment named. renderComment says the rest.
+ *
+ * Suggestion blocks never arrive here: parseBody has already peeled them off
+ * into their own segments, which SuggestedChange keeps drawing as a diff.
+ */
+function CommentBody({ text }: { text: string }) {
+  const html = renderComment(text)
+  return <div className="comment-body" dangerouslySetInnerHTML={{ __html: html }} />
 }
 
 function CommentItem({
@@ -173,9 +200,7 @@ function CommentItem({
         <>
           {segments.map((segment, i) =>
             segment.kind === 'text' ? (
-              <div key={i} className="comment-body">
-                {segment.text}
-              </div>
+              <CommentBody key={i} text={segment.text} />
             ) : (
               <SuggestedChange key={i} comment={comment} suggestion={segment.text} />
             ),
@@ -260,13 +285,11 @@ function SuggestButton({
     }
     const value = textarea.value
     const at = textarea.selectionStart ?? value.length
-    const before = value.slice(0, at).replace(/\n+$/, '')
-    const after = value.slice(at).replace(/^\n+/, '')
-    const next = [before, block, after].filter((part) => part !== '').join('\n\n')
+    const { body: next, block: written, blockAt } = insertSuggestion(value, at, seed)
     onInsert(next)
     // Put the cursor inside the block so the text can be edited right away.
     window.setTimeout(() => {
-      const start = next.indexOf(block) + block.indexOf('\n') + 1
+      const start = blockAt + written.indexOf('\n') + 1
       textarea.focus()
       textarea.setSelectionRange(start, start + seed.length)
     }, 0)
