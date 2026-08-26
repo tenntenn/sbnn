@@ -80,16 +80,28 @@ Some assertions describe defects that are open right now. Those carry
 the defect exists and goes **red when the defect is fixed**, which is the
 signal to delete the annotation.
 
-| test | issue | where | measured when written |
+| test | issue | where | why it still fails |
 |---|---|---|---|
-| paths are painted in the order they are written | #73 | all four | `.file-path` is `direction: rtl`, so `.github/workflows/ci.yml` paints as `github/workflows/ci.yml.` |
-| no element is wider than the box that holds it | #119 | all four | `.disclosure` is `clientWidth` 10 around a 14px icon |
-| the page does not scroll sideways | #74 | desktop only | the preview pane is `clientWidth` 517, `scrollWidth` 576; the narrow layout shows one pane at a time and holds |
-| hover and selected are different colours | #79 | desktop only | both settle on `rgb(238, 241, 244)`: the bundle paints `.file-item:hover` and `.file-item.active` with the same `--bg-inset` |
+| hover and selected are different colours | #79 | desktop only | the shipped bundle selects the row *below* the one clicked, so `.file-item.active` and `.file-item:hover` resolve to one element and `getComputedStyle` reads its colour twice |
 
-**#74** holds on the phone layout, so only the desktop projects carry that
-annotation. **#79** is skipped there instead: hover is a pointer affordance
-and the narrow layout has no pointer behind it.
+One row, and it is not pinning what its issue number says. #79 was a colour
+defect - both states painted with `--bg-inset` - and that is fixed: the bundle
+now settles on `rgb(255, 248, 197)` for `.file-item.active` and
+`rgb(238, 241, 244)` for `.file-item:hover` on `desktop-light`. What keeps the
+assertion failing is a different defect underneath it. The test clicks
+`.file-item` 0 and hovers 1, and in the shipped bundle the click leaves the
+active row on 1; the two selectors then match the same element, so of course
+its background equals itself. Measured: clicking file 0 selected file 1,
+clicking file 1 selected file 2, clicking file 3 was correct, and waiting
+before the click changed none of it.
+
+So when this annotation finally comes out, it will be because a rebuilt
+`web/dist` carries the click fix, not because of anything about colour. Do not
+delete it, see a red suite and put it back saying "same colour": that is the
+loop this row exists to break.
+
+**#79** is skipped on the phone projects rather than annotated: hover is a
+pointer affordance and the narrow layout has no pointer behind it.
 
 ## Tests that guard
 
@@ -97,11 +109,17 @@ The rest assert what holds today, and go red when it stops holding. These
 are the ones that make the harness worth running: a pinned defect only
 reports the day someone fixes it.
 
-| test | where | measured when written |
+| test | where | measured |
 |---|---|---|
-| the selected file is painted differently from an unselected one | all four | selected `rgb(238, 241, 244)`, unselected `rgba(0, 0, 0, 0)` |
+| paths are painted in the order they are written (#73) | all four | `.file-path` was `direction: rtl`, so the bidi algorithm moved the leading dot of a dotfile to the end and `.github/workflows/ci.yml` painted as `github/workflows/ci.yml.` |
+| no element is wider than the box that holds it (#119) | all four | `.disclosure` was a 9.6px box around a 14px icon: `clientWidth` 10, `scrollWidth` 14 |
+| the page does not scroll sideways (#74) | all four | the preview pane laid out wider than its column on the desktop layout, `clientWidth` 517 against `scrollWidth` 576; the narrow layout shows one pane at a time and never had it |
+| the selected file is painted differently from an unselected one | all four | selected `rgb(255, 248, 197)`, unselected `rgba(0, 0, 0, 0)` on `desktop-light` |
 | the exported page contacts no network host (#55) | all four | 3 requests on the wide layout, 2 on the narrow, all of them `file:`; 617 DOM nodes / 55 diff rows wide, 90 / 8 narrow |
-| the page does not scroll sideways (#74) | phone only | `document.scrollingElement` is 390 wide inside and out |
+
+The first three were pinned defects until the bundle that fixes them landed.
+Their annotations are gone and the numbers they were measured at are kept here,
+because that is what a future failure has to be read against.
 
 ## Proving a test can fail
 
@@ -115,10 +133,17 @@ web/dist` afterwards.
 |---|---|---|
 | `.file-item.active{background:none` | the selected-row guard fails | `Error: the selected row is painted like every other row / Expected: not "rgba(0, 0, 0, 0)"` in all four projects |
 | append `@font-face{...url(https://fonts.gstatic.com/...)}` and point `.file-path` at it | the export guard fails | `requests the exported page made off the local file / + "https://fonts.gstatic.com/s/roboto/v30/injected.woff2"` on the two desktop projects; the narrow layout does not paint `.file-path`, so it does not fetch the font and stays green |
-| `.file-item.active{background:#fff8c5` (i.e. fixing #79) | the #79 pin fails | `Expected to fail, but passed` |
+| `.file-item.active{background:#fff8c5` (i.e. fixing #79 in the bundle of the day) | the #79 pin fails | `Expected to fail, but passed` |
 | the same, with `test.fail` removed | #79 passes | `1 passed` |
 | put the defect back, `test.fail` still removed | #79 fails | `Error: hover background equals selected background / Expected: not "rgb(238, 241, 244)"` |
 | the same, with the `settled()` call commented out | **#79 passes** | `1 passed` - the false green the next section is about |
+
+Those four rows are a record of the day the pin was written, when the bundle
+painted both states `rgb(238, 241, 244)`. They no longer describe the bundle:
+`.file-item.active` is already `#fff8c5` and the pin holds anyway, for the
+reason given above. The point they make is about the method, not the colour -
+each row is an assertion watched failing on purpose, which is the only way to
+know it says anything.
 
 ## Reading a colour: wait for the transition
 
@@ -151,17 +176,19 @@ fix that is in `web/src` but not yet rebuilt into `web/dist` does not move
 these tests, and an annotation flips to "Expected to fail, but passed" when
 the rebuilt bundle lands rather than when the source change does.
 
-The committed bundle is a long way behind the source - `#79` is fixed in
-`web/src/styles.css`, which gives `.file-item:hover` `--surface-hover` and
-`.file-item.active` `--surface-selected`, while the bundle gives both
-`--bg-inset`. Building the harness against `web/src` instead is not
-possible today: a bundle rebuilt from the current source renders nothing at
-all for this fixture. `web/src/components/DiffStack.tsx` does `for (const
-hunk of file.hunks)` with no guard, and the server sends `"hunks": null`
-for a binary file, so the fixture's `assets/logo.png` throws `i.hunks is not
-iterable` and the page comes up with 9 DOM nodes and no `.diff-table`. That
-is its own defect and its own fix; until it lands, the bundle is what can be
-measured.
+The committed bundle is no longer behind the source. Verified by rebuilding it:
+
+```console
+$ cd web && pnpm install --frozen-lockfile --offline && pnpm run build
+$ git diff --stat HEAD -- web/dist      # no output
+```
+
+so `web/dist` is exactly what `web/src` builds today, and a source fix and a
+shipped fix are one rebuild apart rather than an unknown distance apart. The
+two things that made this paragraph read the other way are both closed: #326
+guarded the loop over `file.hunks`, which used to throw `i.hunks is not
+iterable` on the fixture's binary `assets/logo.png` and leave a page of 9 DOM
+nodes with no `.diff-table` at all, and #325 committed the rebuilt bundle.
 
 ## Viewports and colour schemes
 
