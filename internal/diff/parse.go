@@ -578,6 +578,15 @@ func finalize(f *model.File, index int) {
 	f.IsImage = IsImage(f.Path())
 	f.IsNotebook = IsNotebook(f.Path())
 	f.ID = fileID(f, index)
+	// A file the diff carries without any hunks -- a pure rename, a mode
+	// change, a binary blob -- would otherwise marshal a nil slice as
+	// "hunks": null, while every other file answers an array. #29 settled
+	// that this API does not change the shape of a field to record how the
+	// state came about, and a reader that has to tell null from [] is a
+	// reader that will one day forget to.
+	if f.Hunks == nil {
+		f.Hunks = []*model.Hunk{}
+	}
 }
 
 func fileID(f *model.File, index int) string {
