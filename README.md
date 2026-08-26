@@ -474,11 +474,17 @@ makes them useful and worth being deliberate about.
 ### Reading the comments back
 
 ```console
-$ sbnn comments                    # Markdown, ready to paste into an agent
-$ sbnn comments --format json      # machine readable
-$ sbnn comments -t api             # comments of the "api" group
-$ sbnn comments --clear            # start the next review round
+$ sbnn comments                              # Markdown, ready to paste into an agent
+$ sbnn comments --format json                # machine readable
+$ sbnn comments -t api                       # comments of the "api" group
+$ sbnn comments --clear --resolved-only      # start the next round, keeping what is open
+$ sbnn comments --clear                      # ... and drop the open ones as well
 ```
+
+`--clear` empties the group whether or not the comments were addressed, so a
+remark nobody has answered yet goes with it. `--resolved-only` is the one to
+reach for between rounds: it removes the comments marked as resolved and
+leaves the rest for the next pass.
 
 ### Approve, comment, or request changes
 
@@ -703,7 +709,7 @@ to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
 | --- | --- | --- |
 | `sbnn` | Read a diff on stdin and serve it | `--title`, `--label key=value`, `--open` / `--no-open`, `--foreground`, `--on-review`, `--on-review-url`, `--history-file`, `--json` |
 | `sbnn` on the running server | Act on the server instead of adding a diff | `--status`, `--restart`, `--shutdown`, `--clear`, `--clear --all` |
-| `sbnn comments` | Print the comments left in the browser | `--format` (`prompt`, `markdown`, `json`), `--json`, `--clear`, `--include-resolved`, `--exit-code`, `--quiet` (`-q`) |
+| `sbnn comments` | Print the comments left in the browser | `--format` (`prompt`, `markdown`, `json`), `--json`, `--clear`, `--clear --resolved-only`, `--include-resolved`, `--exit-code`, `--quiet` (`-q`) |
 | `sbnn comment path[:line[-line]]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--json` |
 | `sbnn submit` | End the round, as the Submit button does | `--note` (`-m`), `--verdict` (`approved`, `commented`, `changes-requested`), `--approve`, `--request-changes`, `--exit-code`, `--quiet` |
 | `sbnn wait` | Block until the review is submitted, then print it | `--timeout`, `--format`, `--json`, `--exit-code`, `--quiet` |
