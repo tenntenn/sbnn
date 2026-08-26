@@ -24,15 +24,15 @@ from reading the code.
 ```console
 $ task build     # pnpm build in web/, then go build ./...
 $ task test      # go test ./... and the review UI tests in web/test
-$ task lint      # go vet, a gofmt check, go fix -diff, and go mod tidy with no diff
+$ task lint      # go vet, sbnnvet, a gofmt check, go fix -diff, go mod tidy with no diff
 $ task dev       # sbnn in the foreground plus the Vite dev server
 ```
 
 **Run `task lint` and `task test` before you push, and treat that as your job
-rather than a checker's.** `task lint` is `go vet ./...`, a `gofmt -l` check
-that fails on any unformatted file, `go fix -diff ./...`, then `go mod tidy`
-followed by `git diff --exit-code go.mod go.sum` — so it also catches a
-dependency added without tidying. `go fix -diff` prints the rewrite the
+rather than a checker's.** `task lint` is `go vet ./...`, then `sbnnvet` (below),
+a `gofmt -l` check that fails on any unformatted file, `go fix -diff ./...`,
+then `go mod tidy` followed by `git diff --exit-code go.mod go.sum` — so it also
+catches a dependency added without tidying. `go fix -diff` prints the rewrite the
 standard library has since given a better spelling for rather than applying
 it, and exits non-zero when there is one; run `go fix ./...` to take the
 patch. Unformatted code that reaches review costs someone else a round trip.
@@ -49,6 +49,54 @@ Playwright harness that drives a real Chromium against the committed
 `web/dist`. It is separate on purpose — it measures the bundle rather than
 your source, and it pins defects that are still open with `test.fail()`, so it
 goes red when one of them is fixed. See [test/visual/README.md](test/visual/README.md).
+
+## The repository's own vet tool
+
+`go vet`'s default set is deliberately small, so the rules this repository
+cares about live in a vet tool of its own, `internal/analysis/sbnnvet`. It is a
+`tool` directive in `go.mod`, which means there is nothing to install: `go`
+builds it from this module, with the toolchain `go.mod` asks for. `task lint`
+runs it as
+
+```console
+$ go vet -vettool=$(go tool -n sbnnvet) ./...
+```
+
+and you can point it at one package, or run a single analyzer, while working:
+
+```console
+$ go vet -vettool=$(go tool -n sbnnvet) -nogit ./internal/...
+```
+
+It carries three analyzers.
+
+- **`nogit`** — this is sbnn's own rule, the one stated in `AGENTS.md`: sbnn
+  never runs git, because a diff only ever arrives on stdin. That is what lets
+  it review a diff no working tree can produce any more. The analyzer reports
+  `exec.Command`, `exec.CommandContext` or `exec.LookPath` given a constant
+  that names the git binary — `"git"`, `"/usr/bin/git"`, `"git.exe"` — so the
+  one line that would quietly undo the rule fails the build instead of the
+  review. Test files are exempt: a `_test.go` file is not compiled into sbnn,
+  so `version/release_test.go` may run `git ls-files` to prove no
+  `.tsbuildinfo` is tracked. Its source is `internal/analysis/nogit`, with the
+  cases it does and does not report spelled out in `testdata/src/a/a.go` and
+  `testdata/src/a/a_test.go`.
+- **`nilness`** and **`unusedwrite`** — two analyzers `golang.org/x/tools`
+  ships that `go vet` does not run by default. `nilness` reports a dereference
+  or a comparison that is nil on every path; `unusedwrite` reports a write to
+  a struct field or an array element that nothing reads back, which is what a
+  fix applied to a copy instead of the original looks like.
+
+`shadow` is deliberately **not** in the set. It reports 36 places in this tree
+and gets all 36 wrong. Thirty-five are the ordinary `if err := f(); err != nil`
+written inside a function that already has an `err` — the idiom, not a bug. The
+last is a test-local `port` shadowing the package-level `--port` flag variable,
+which the test never touches. A check that is wrong 36 times out of 36 teaches
+people to ignore it.
+
+To add a rule, put the analyzer in `internal/analysis/<name>/` with an
+`analysistest` case under `testdata/src/a/`, and register it in
+`internal/analysis/sbnnvet/main.go`.
 
 ## If you touch `web/src`, rebuild `web/dist`
 

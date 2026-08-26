@@ -28,4 +28,10 @@ $ git diff | sbnn export --target <topic> review.html   # a page that needs no s
 - Tools are managed with [aqua](https://aquaproj.github.io/); run `aqua install` to get `task`.
 - The built UI in `web/dist` is committed on purpose, so `go install` works
   without Node. Rebuild it whenever `web/src` changes.
-- sbnn must not shell out to git: diffs only ever come from stdin.
+- sbnn must not shell out to git: diffs only ever come from stdin. `task lint`
+  enforces this with the `nogit` analyzer in `internal/analysis/nogit`, so an
+  `exec.Command("git", ...)` fails the build rather than the review.
+- Lint: `task lint`. It runs the repository's own vet tool
+  (`internal/analysis/sbnnvet`) alongside `go vet`; add a machine-checkable
+  rule as an analyzer there rather than as a paragraph here. See
+  [`CONTRIBUTING.md`](CONTRIBUTING.md).

@@ -55,6 +55,14 @@ tasks:
   lint:
     cmds:
       - "{{.GO}} vet ./..."
+      # sbnnvet is this repository's own vet tool (internal/analysis/sbnnvet).
+      # It carries the one rule that is sbnn's alone -- nogit, the AGENTS.md
+      # rule that a diff only ever arrives on stdin -- plus nilness and
+      # unusedwrite, which x/tools ships but go vet does not run by default.
+      # The tool directive in go.mod builds it from this module with the
+      # toolchain go.mod asks for, so there is nothing to install and no vet
+      # tool built against an older Go than the code it reads.
+      - "{{.GO}} vet -vettool=$({{.GO}} tool -n sbnnvet) ./..."
       - "gofmt -l . | grep -v '^web/node_modules' && exit 1 || true"
       # go fix rewrites code the standard library has since given a better
       # spelling -- strings.Cut for an Index/slice pair, for range N, slices.Sort.
