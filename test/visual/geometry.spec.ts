@@ -157,9 +157,32 @@ test.describe('rendered geometry', () => {
   // #79. Hover is a pointer affordance, so this only means anything on the
   // desktop layout; the narrow layout paints no hover state at all, which
   // is correct rather than a defect.
+  //
+  // The annotation below no longer says what it used to, and the difference
+  // matters to whoever deletes it next. The colour half of #79 is fixed:
+  // web/src/styles.css paints :hover with --surface-hover (#eef1f4) and
+  // .active with --surface-selected (#fff8c5), and the shipped bundle agrees.
+  // What still fails is the click: in the shipped bundle, clicking
+  // .file-item[0] leaves .file-item.active on [1], so the two selectors below
+  // resolve to one element and getComputedStyle reads the same colour twice.
+  //
+  // That was measured, not inferred - clicking file 0 selected file 1, file 1
+  // selected file 2, and file 3 was correct, the same before and after a wait,
+  // so it is not the settling race it first looked like. The cause is in
+  // web/src/activeSection.ts, which is fixed in source: a jump now outranks
+  // the scroll rule while the file jumped to is still on screen. Driving a
+  // binary carrying a bundle built from that source gives activeIdx 0 /
+  // hoverIdx 1 and two different colours, i.e. this test passes.
+  //
+  // So the annotation comes out in the commit that rebuilds web/dist, and not
+  // before: until then the committed bundle still has the old behaviour and
+  // deleting it here would turn the suite red.
   test('hover and selected are different colours (#79)', async ({ page }) => {
     test.skip(onPhone(), 'hover is a pointer affordance; the narrow layout has no pointer')
-    test.fail(true, 'hover and selected are the same colour in the shipped bundle (#79)')
+    test.fail(
+      true,
+      'the shipped bundle selects the row below the one clicked, so hover and selected land on one element (#79)',
+    )
     await open(page)
     await showFiles(page)
     const items = page.locator('.file-item')
