@@ -461,6 +461,32 @@ input[type='checkbox'] {
   display: flex;
 }
 
+/* The phone shows one file plus the stepper that walks to the next. .content
+   lays its children out in a row, so the two of them would divide the screen
+   between them; this is the column they share instead. */
+.diff-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The stepper is a foot, not a pane: it takes the height it needs and leaves
+   the rest to the diff, with a step on either side of where the reader is.
+   A short file leaves the pane half empty, and the auto margin drops the
+   stepper to the bottom of that space rather than leaving it floating in the
+   middle of the screen; a file long enough to fill the pane pushes it back
+   below the last line, where scrolling reaches it. */
+.file-stepper {
+  flex: 0 0 auto;
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+}
+
 .split {
   display: flex;
   width: 100%;
@@ -974,6 +1000,19 @@ body.resizing iframe {
   font-size: var(--text-sm);
 }
 
+/* A comment about the file as a whole sits under the file header rather
+   than under a row, so it carries no gutter indent: there is no line for it
+   to line up with, and for a file the diff shows without any lines - a
+   rename, a mode change, a binary file - there are no rows at all. */
+.file-comments {
+  padding: 0 var(--space-lg);
+}
+
+.file-comments .thread,
+.file-comments .comment-form {
+  margin-left: 0;
+}
+
 .comment + .comment {
   border-top: var(--border-width-hairline) solid var(--border);
   margin-top: var(--space-md);
@@ -1440,6 +1479,31 @@ a {
   max-width: 100%;
 }
 
+/* What stands where a picture cannot be drawn: an image the review does not
+   carry, one too heavy to carry, one that pointed out of the tree. It names
+   the file and says why, because a broken-image icon says neither - and it
+   looks the same in a live page and an exported one. */
+.preview-asset-missing {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  max-width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  border: var(--border-width-hairline) dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+
+.preview-asset-name {
+  font-family: var(--font-mono);
+  color: var(--fg);
+}
+
 .markdown hr {
   border: none;
   border-top: var(--border-width-hairline) solid var(--border);
@@ -1474,6 +1538,56 @@ a {
   background-position:
     0 0,
     10px 10px;
+}
+
+/* ---------- source files ---------- */
+
+/* A source preview is the whole file, so it is the one preview that can be
+   wider than the pane. It scrolls sideways inside itself rather than making
+   the page do it, and the line numbers stay put while it does. */
+.source-preview {
+  /* Named because a blank row's height is computed from it below: an empty
+     line of the file has to take a line of the pane, and it must not do it
+     by holding a space that would then be in anything copied out. */
+  --source-line-height: 1.55;
+  padding: var(--space-md) 0 40px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--source-line-height);
+}
+
+.source-lines {
+  margin: 0;
+  padding: 0;
+  /* The numbers come from the list itself, so a file of ten thousand lines
+     costs ten thousand elements rather than twenty thousand. */
+  list-style: decimal;
+  /* Wide enough for five digits; a longer file simply indents further. */
+  padding-inline-start: 5ch;
+  min-width: max-content;
+}
+
+.source-lines li {
+  white-space: pre;
+  padding-inline-start: var(--space-md);
+  min-height: calc(1em * var(--source-line-height));
+}
+
+.source-lines li::marker {
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
+
+.source-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  border-top: var(--border-width-hairline) solid var(--border);
+  position: sticky;
+  left: 0;
 }
 
 /* ---------- rendered Jupyter notebooks ---------- */

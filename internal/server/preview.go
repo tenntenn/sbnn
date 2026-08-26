@@ -4,18 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/tenntenn/sbnn/internal/asset"
 	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/mo"
 	"github.com/tenntenn/sbnn/internal/model"
 	"github.com/tenntenn/sbnn/internal/source"
 )
 
-// errNotPreviewable is returned for files mo cannot show.
-var errNotPreviewable = errors.New("no Markdown preview for this file")
+// errNotPreviewable is returned for files there is no preview of.
+var errNotPreviewable = errors.New("no preview for this file")
 
 // errNoDeepLink is returned when mo ran without complaining but reported no
 // page for the file it was asked to open.
@@ -57,6 +59,13 @@ type FileContentResponse struct {
 	Source   PreviewSource `json:"source"`
 	Complete bool          `json:"complete"`
 	Content  string        `json:"content"`
+	// Assets is the sibling images the Markdown points at, keyed by the
+	// reference as the document wrote it. A relative src resolves against
+	// the server root, where there is no such file, so the page needs to be
+	// told where each one really is before it renders the Markdown - and it
+	// is told by internal/asset, which answers the same question for an
+	// exported page so that the two draw the same document alike.
+	Assets map[string]asset.Entry `json:"assets,omitempty"`
 }
 
 // content returns the text of a file without involving mo: the Markdown or
@@ -64,7 +73,7 @@ type FileContentResponse struct {
 // no room for mo's own chrome inside the preview pane, so the browser
 // renders Markdown there instead of using mo, and a notebook is never
 // something mo can show at all.
-func (p *previewer) content(d *model.Diff, f *model.File) (*FileContentResponse, error) {
+func (p *previewer) content(group string, d *model.Diff, f *model.File) (*FileContentResponse, error) {
 	if err := previewableText(f); err != nil {
 		return nil, err
 	}
@@ -76,12 +85,76 @@ func (p *previewer) content(d *model.Diff, f *model.File) (*FileContentResponse,
 	if got.Kind == source.FromWorktree {
 		kind = SourceWorktree
 	}
-	return &FileContentResponse{
+	res := &FileContentResponse{
 		Path:     got.Path,
 		Source:   kind,
 		Complete: got.Complete,
 		Content:  got.Content,
-	}, nil
+	}
+	if f.IsMarkdown {
+		res.Assets = assetEntries(group, d, f, got.Content)
+	}
+	return res, nil
+}
+
+// assetEntries points each image of a document at the endpoint that hands out
+// its bytes, and says of the rest why there is nothing to point at.
+//
+// The URL carries the path rather than an id of its own: the endpoint resolves
+// it through internal/asset again, against the same document, so the only
+// paths it will ever serve are the ones this document named and that were
+// found inside the directory the diff was sent from.
+func assetEntries(group string, d *model.Diff, f *model.File, content string) map[string]asset.Entry {
+	refs := asset.Refs(d.BaseDir, f.Path(), content)
+	if len(refs) == 0 {
+		return nil
+	}
+	base := "/_/api/groups/" + url.PathEscape(group) +
+		"/diffs/" + url.PathEscape(d.ID) +
+		"/files/" + url.PathEscape(f.ID) + "/asset?path="
+	out := make(map[string]asset.Entry, len(refs))
+	for _, r := range refs {
+		e := asset.Entry{Path: r.Label(), Status: r.Status, Size: r.Size}
+		if r.Status == asset.StatusOK {
+			e.URL = base + url.QueryEscape(r.Rel)
+		}
+		out[r.Src] = e
+	}
+	return out
+}
+
+// asset returns the bytes of one image a Markdown file points at, and the
+// content type to serve them as.
+//
+// rel is trusted for nothing: it is matched against the references of the
+// document itself, so a request for a path the document never mentioned -
+// or one that internal/asset refused, whether for leaving the tree or for
+// being too heavy to show - is a request for a file this endpoint does not
+// have.
+//
+// The gate is previewableMarkdown rather than previewableText because
+// resolving a relative image is a Markdown concern and nothing else: it is
+// what a document needs to be drawn, and /content lists assets for a
+// document only. previewableText now admits every text file - a .go, a .ts,
+// a config file - so sharing it here would have made any comment or string
+// literal anywhere in the tree that happens to spell out an image reference
+// into a way of asking the server for that file's bytes.
+func (p *previewer) asset(d *model.Diff, f *model.File, rel string) (data []byte, contentType string, err error) {
+	if err := previewableMarkdown(f); err != nil {
+		return nil, "", err
+	}
+	got := newSide(d, f)
+	for _, r := range asset.Refs(d.BaseDir, f.Path(), got.Content) {
+		if r.Rel != rel || r.Status != asset.StatusOK {
+			continue
+		}
+		b, err := os.ReadFile(r.Path)
+		if err != nil {
+			return nil, "", fmt.Errorf("%w: cannot read %s", errNotPreviewable, r.Rel)
+		}
+		return b, diff.ImageContentType(r.Rel), nil
+	}
+	return nil, "", fmt.Errorf("%w: %s points at no image %q that sbnn can show", errNotPreviewable, f.Path(), rel)
 }
 
 // image returns the raw bytes of an image file and the content type to serve
@@ -113,12 +186,17 @@ func previewableMarkdown(f *model.File) error {
 }
 
 // previewableText rejects the files sbnn's own renderer has no text preview
-// for: Markdown and notebook JSON, neither of which mo can show for a
-// notebook and both of which a narrow client renders itself.
+// for.
+//
+// What is left is every text file. Markdown and notebook JSON are rendered
+// by the client; anything else - a .go, a .ts, a config file, a script with
+// no extension at all - is shown as its own lines. All three want the same
+// thing from the server, which is the new side of the file as text, and the
+// server has no way to tell a language it has a renderer for from one it
+// does not: that is the client's question, and asking it here only meant
+// refusing to hand out a file that had already been read from disk.
 func previewableText(f *model.File) error {
 	switch {
-	case !f.IsMarkdown && !f.IsNotebook:
-		return fmt.Errorf("%w: %s has no preview", errNotPreviewable, f.Path())
 	case f.IsBinary:
 		return fmt.Errorf("%w: %s is binary", errNotPreviewable, f.Path())
 	case f.Status == model.StatusDeleted:

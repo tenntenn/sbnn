@@ -37,7 +37,7 @@ var (
 const DefaultAuthor = "agent"
 
 var commentCmd = &cobra.Command{
-	Use:   "comment [path:line[-line]]",
+	Use:   "comment [path[:line[-line]]]",
 	Short: "Leave a review comment from the command line",
 	Long: `Leave a review comment on a diff that was already sent to sbnn.
 
@@ -56,6 +56,16 @@ diff shows; --side old comments on a removed line instead. The file is looked
 up in the newest diff of the group that carries that path, unless --diff
 names one. sbnn fills in the reviewed code itself.
 
+A path on its own, with no line, comments on the file as a whole:
+
+  $ sbnn comment new.txt -m "this rename looks wrong"
+  $ sbnn comment exec.sh -m "why is this now executable?"
+
+That is the only thing to say about a file the diff carries without any
+lines - a pure rename, a mode change, a binary file - and it reads as a
+comment on the file for every other one too. A suggestion needs lines to
+replace, so it cannot go on a comment that names none.
+
 A suggestion is a fenced block inside the comment, the way GitHub writes one,
 so it can also be typed straight into -m.
 
@@ -64,9 +74,13 @@ Many at once, for a whole self review:
   $ sbnn comment --json <<'EOF'
   [
     {"path": "cmd/root.go", "line": "88", "body": "left over"},
-    {"path": "README.md", "line": "12-18", "body": "reworded", "suggestion": "..."}
+    {"path": "README.md", "line": "12-18", "body": "reworded", "suggestion": "..."},
+    {"path": "new.txt", "body": "this rename looks wrong"}
   ]
   EOF
+
+An entry that leaves "line" out is the same whole-file comment a bare path
+makes on the command line.
 
 Each entry carries its own text, so --message, --suggest and --suggest-file
 are refused next to --json: the array is already on stdin, and --suggest -
@@ -126,7 +140,7 @@ func runComment(cmd *cobra.Command, args []string) error {
 		requests, err = readBulkComments(os.Stdin)
 	} else {
 		if len(args) != 1 {
-			return fmt.Errorf("say which lines to comment on, as path:line or path:line-line")
+			return fmt.Errorf("say what to comment on, as path, path:line or path:line-line")
 		}
 		requests, err = singleComment(args[0])
 	}
@@ -196,18 +210,26 @@ func reportStored(out, errOut io.Writer, stored []*model.Comment, total int, cau
 	return cause
 }
 
+// requestLines and lineRangeOf name the lines a comment is on, and name
+// nothing at all for a comment on the file as a whole - "cmd/root.go:0" is
+// not a place, and the same rule is what server.lineRange follows when it
+// writes the prompt.
 func requestLines(req server.AddCommentRequest) string {
-	if req.EndLine > req.StartLine {
-		return fmt.Sprintf(":%d-%d", req.StartLine, req.EndLine)
-	}
-	return fmt.Sprintf(":%d", req.StartLine)
+	return lineSuffix(req.StartLine, req.EndLine)
 }
 
 func lineRangeOf(c *model.Comment) string {
-	if c.EndLine > c.StartLine {
-		return fmt.Sprintf(":%d-%d", c.StartLine, c.EndLine)
+	return lineSuffix(c.StartLine, c.EndLine)
+}
+
+func lineSuffix(start, end int) string {
+	if start <= 0 {
+		return ""
 	}
-	return fmt.Sprintf(":%d", c.StartLine)
+	if end > start {
+		return fmt.Sprintf(":%d-%d", start, end)
+	}
+	return fmt.Sprintf(":%d", start)
 }
 
 // singleComment builds the request for "path:line" or "path:line-line".
@@ -216,12 +238,18 @@ func singleComment(spec string) ([]server.AddCommentRequest, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("say what to comment on, as path, path:line or path:line-line")
+	}
 	suggestion, err := suggestionText()
 	if err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(commentBody) == "" && suggestion == "" {
 		return nil, fmt.Errorf("say something with -m, or propose something with --suggest")
+	}
+	if err := suggestionNeedsLines(path, start, commentBody, suggestion); err != nil {
+		return nil, err
 	}
 	side, err := normalizeSide(commentSide)
 	if err != nil {
@@ -350,14 +378,23 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 		if start == 0 {
 			start, end = e.StartLine, e.EndLine
 		}
-		if start <= 0 {
-			return nil, fmt.Errorf("comment %d (%s) has no line", i+1, e.Path)
+		// No line at all is a comment about the file itself, the same
+		// thing a bare path means on the command line. A negative one, and
+		// an end without a start, name no place and are still refused.
+		if start < 0 || end < 0 {
+			return nil, fmt.Errorf("comment %d (%s) has a line number below 1; leave the line out to comment on the whole file", i+1, e.Path)
 		}
-		if end < start {
+		if start == 0 && end != 0 {
+			return nil, fmt.Errorf("comment %d (%s) has an endLine but no line", i+1, e.Path)
+		}
+		if start > 0 && end < start {
 			end = start
 		}
 		if strings.TrimSpace(e.Body) == "" && strings.TrimSpace(e.Suggestion) == "" {
 			return nil, fmt.Errorf("comment %d (%s) says nothing", i+1, e.Path)
+		}
+		if err := suggestionNeedsLines(e.Path, start, e.Body, e.Suggestion); err != nil {
+			return nil, fmt.Errorf("comment %d: %w", i+1, err)
 		}
 		side, err := normalizeSide(e.Side)
 		if err != nil {
@@ -390,6 +427,24 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 	return requests, nil
 }
 
+// suggestionNeedsLines refuses a suggestion on a comment that names no
+// lines. A suggestion is a replacement for the lines the comment is on, and
+// a comment about the file as a whole is on none of them; the server refuses
+// it too, but the check is made here as well so a --json run stops before
+// storing the entries ahead of the offending one.
+func suggestionNeedsLines(path string, start int, body, suggestion string) error {
+	if start > 0 {
+		return nil
+	}
+	// The same reading the server does: --suggest is appended to the body
+	// as a fenced block, and a block typed straight into -m is a suggestion
+	// just as much.
+	if len(model.Suggestions(model.WithSuggestion(body, suggestion))) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s: a suggestion replaces the lines a comment names, so say which, as %s:line", path, path)
+}
+
 func normalizeSide(side string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(side)) {
 	case "", "new":
@@ -403,18 +458,29 @@ func normalizeSide(side string) (string, error) {
 
 var lineSpecPattern = regexp.MustCompile(`^(\d+)(?:-(\d+))?$`)
 
-// parseLineSpec splits "path:12" or "path:12-18". Paths may contain colons on
-// some systems, so the last colon wins.
+// parseLineSpec splits "path:12" and "path:12-18", and reads a bare "path"
+// as the file itself: start and end come back 0, which is how a comment says
+// it is about the whole file rather than about lines of it.
+//
+// Paths may contain colons, so what settles which of the two a spec is, is
+// the text after the last colon: it is read as a line spec when it begins
+// with a digit, and belongs to the path otherwise. That keeps "main.go:0"
+// and "main.go:4x" the errors they were - a line number is positive when one
+// is given - while leaving a path like "odd:name.txt" alone.
 func parseLineSpec(spec string) (path string, start, end int, err error) {
 	i := strings.LastIndex(spec, ":")
-	if i <= 0 || i == len(spec)-1 {
-		return "", 0, 0, fmt.Errorf("cannot read %q: say path:line or path:line-line", spec)
+	if i <= 0 || !startsWithDigit(spec[i+1:]) {
+		return spec, 0, 0, nil
 	}
 	start, end, err = parseLines(spec[i+1:])
 	if err != nil {
 		return "", 0, 0, fmt.Errorf("cannot read %q: %w", spec, err)
 	}
 	return spec[:i], start, end, nil
+}
+
+func startsWithDigit(s string) bool {
+	return s != "" && s[0] >= '0' && s[0] <= '9'
 }
 
 func parseLines(s string) (start, end int, err error) {

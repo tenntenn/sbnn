@@ -8,7 +8,8 @@ import {
   useState,
   type RefObject,
 } from 'react'
-import type { Comment, Diff, FileDiff, ViewMode } from '../types'
+import type { Comment, Diff, ViewMode } from '../types'
+import { estimatedHeight } from '../estimatedHeight'
 import { sectionKey } from '../sectionKey'
 import { DiffFileSection } from './DiffFileSection'
 import { Icon } from './Icon'
@@ -86,56 +87,46 @@ function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n))
 }
 
-// Measured in Chromium at the default font size, not guessed: one rendered
-// diff row is 19-20px tall and a file's sticky header is 45px. Both are
-// only used to estimate a section's height before it is rendered - see
-// estimatedHeight - so a different font size costs scroll accuracy, not
-// correctness.
-const ROW_HEIGHT = 19
-const SECTION_CHROME = 48
-// A one-line comment thread measured 94px; one carrying a snippet or a
-// suggestion is taller, so this is a deliberately coarse allowance.
-const COMMENT_HEIGHT = 120
-
 /**
- * estimatedHeight guesses how tall a file's section will be once rendered,
- * for `contain-intrinsic-size`.
+ * FileStepper is the way on to the next file when only one is on screen.
  *
- * Together with `content-visibility: auto` this lets the browser skip the
- * layout and paint of every section that is nowhere near the viewport,
- * while still reserving something close to the right space for it, so the
- * scrollbar means what it says. Being wrong costs scroll accuracy while a
- * section is still unrendered, nothing else - which is why this counts the
- * file's real rows rather than assuming a constant.
+ * The wide layout puts every file in one continuous scroll, so reaching the
+ * next one is just scrolling. A phone shows one file at a time, and a short
+ * file leaves most of the pane empty - which reads as the end of the review
+ * unless something says otherwise. This says otherwise: where the reader is
+ * in the list, and the two steps either side of it.
+ *
+ * It is a row of its own at the foot of the pane, so it has to be laid out
+ * by the stylesheet rather than beside the diff: `.content` puts its children
+ * in a row, and a stepper standing next to the diff takes a column of a
+ * phone's width away from it. `.diff-pane` is the column the two share.
  */
-function estimatedHeight(file: FileDiff, folded: boolean, comments: number, viewMode: ViewMode): number {
-  // A folded file renders its header and nothing else until it is opened.
-  if (folded) return SECTION_CHROME
-  let rows = 0
-  for (const hunk of file.hunks) {
-    // The hunk's own @@ header is a row too.
-    rows += 1
-    if (viewMode === 'split') {
-      // Side by side, a removed line and the line replacing it share a row.
-      let removed = 0
-      let added = 0
-      for (const line of hunk.lines) {
-        if (line.kind === 'delete') removed++
-        else if (line.kind === 'add') added++
-        else {
-          // A run of changed lines ends: it took as many rows as its
-          // longer side, and this context line takes one more.
-          rows += Math.max(removed, added) + 1
-          removed = 0
-          added = 0
-        }
-      }
-      rows += Math.max(removed, added)
-    } else {
-      rows += hunk.lines.length
-    }
-  }
-  return SECTION_CHROME + rows * ROW_HEIGHT + comments * COMMENT_HEIGHT
+export function FileStepper({
+  at,
+  total,
+  onStep,
+}: {
+  /** at is the zero-based position of the file on screen. */
+  at: number
+  total: number
+  onStep: (by: number) => void
+}) {
+  if (total < 2 || at < 0) return null
+  return (
+    <nav className="file-stepper" aria-label="Files in this review">
+      <button className="ghost" disabled={at === 0} onClick={() => onStep(-1)}>
+        <Icon name="chevron_left" small />
+        Previous file
+      </button>
+      <span className="hint">
+        {at + 1} of {total}
+      </span>
+      <button className="ghost" disabled={at === total - 1} onClick={() => onStep(1)}>
+        Next file
+        <Icon name="chevron_right" small />
+      </button>
+    </nav>
+  )
 }
 
 export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(

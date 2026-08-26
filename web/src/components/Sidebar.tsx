@@ -61,6 +61,13 @@ interface Props {
   query: string
   onQuery: (query: string) => void
   searchRef?: RefObject<HTMLInputElement | null>
+  /** readKeys holds the diffId:fileId pairs the reader is done with, and
+   * readCount is how many of them are still on the page - counted upstream,
+   * where the whole file list is, rather than recounted per render here. */
+  readKeys: Set<string>
+  readCount: number
+  onSetRead: (key: string, value: boolean) => void
+  onMarkAllUnread: () => void
 }
 
 export function Sidebar({
@@ -76,6 +83,10 @@ export function Sidebar({
   query,
   onQuery,
   searchRef,
+  readKeys,
+  readCount,
+  onSetRead,
+  onMarkAllUnread,
 }: Props) {
   const commentCount = (diffId: string, fileId: string) =>
     comments.filter((c) => c.diffId === diffId && c.fileId === fileId && !c.resolved).length
@@ -255,6 +266,28 @@ export function Sidebar({
         </div>
       )}
 
+      {/* Where the reader got to, for the review as a whole. It sits above
+          the rounds because that is the question it answers - "how much of
+          this is left" - which is not a question about any one round. */}
+      {total > 0 && (
+        <div className="file-search">
+          <Icon name="check" small />
+          <span className="hint" style={{ flex: 1 }}>
+            {readCount} of {total} read
+          </span>
+          {readCount > 0 && (
+            <button
+              className="ghost"
+              onClick={onMarkAllUnread}
+              title="Clear every read mark in this review"
+            >
+              <Icon name="refresh" small />
+              Mark all unread
+            </button>
+          )}
+        </div>
+      )}
+
       {layout === 'tabs' && diffs.length > 1 && (
         <div className="diff-tabs" role="tablist">
           {tabbed.map((diff) => (
@@ -362,14 +395,44 @@ export function Sidebar({
               // A folded file is still listed - the point is that it is out
               // of the way, not out of sight.
               const folded = Boolean(file.folded) && count === 0
+              const read = readKeys.has(key)
+              const toggleRead = () => onSetRead(key, !read)
               return (
                 <li key={file.id}>
                   <button
                     className={`file-item${active ? ' active' : ''}${folded ? ' folded' : ''}`}
                     onClick={() => jumpTo(diff.id, file.id)}
                   >
+                    {/* A span rather than a button: this sits inside the row's
+                        own button, and a button inside a button is not
+                        markup a browser will keep. The unread state is drawn
+                        faintly rather than left blank so that the target is
+                        there to aim at before it has been used. */}
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={read}
+                      aria-label={read ? `Mark ${filePath(file)} unread` : `Mark ${filePath(file)} read`}
+                      title={read ? 'Mark as unread' : 'Mark as read'}
+                      style={{ display: 'inline-flex', opacity: read ? 1 : 0.25 }}
+                      onClick={(ev) => {
+                        ev.stopPropagation()
+                        toggleRead()
+                      }}
+                      onKeyDown={(ev) => {
+                        if (ev.key !== 'Enter' && ev.key !== ' ') return
+                        ev.preventDefault()
+                        ev.stopPropagation()
+                        toggleRead()
+                      }}
+                    >
+                      <Icon name="check" small />
+                    </span>
                     <span className={`dot status-${file.status}`} title={file.status} />
-                    <span className="file-path" title={filePath(file)}>
+                    <span className="file-path"
+                      title={filePath(file)}
+                      style={read ? { opacity: 0.55 } : undefined}
+                    >
                       {/* The box clips from the left; the path inside it
                           reads in its own direction. See .file-path. */}
                       <bdi>{filePath(file)}</bdi>

@@ -266,6 +266,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /_/api/groups/{group}/diffs/{diff}/files/{file}/preview", s.handlePreview)
 	mux.HandleFunc("GET /_/api/groups/{group}/diffs/{diff}/files/{file}/content", s.handleFileContent)
 	mux.HandleFunc("GET /_/api/groups/{group}/diffs/{diff}/files/{file}/image", s.handleFileImage)
+	mux.HandleFunc("GET /_/api/groups/{group}/diffs/{diff}/files/{file}/asset", s.handleFileAsset)
 	mux.HandleFunc("GET /_/api/groups/{group}/comments", s.handleComments)
 	mux.HandleFunc("POST /_/api/groups/{group}/comments", s.handleAddComment)
 	mux.HandleFunc("PATCH /_/api/groups/{group}/comments/{id}", s.handleUpdateComment)
@@ -731,7 +732,7 @@ func (s *Server) handleFileContent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such file", http.StatusNotFound)
 		return
 	}
-	res, err := s.prev.content(d, f)
+	res, err := s.prev.content(name, d, f)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, errNotPreviewable) {
@@ -761,6 +762,39 @@ func (s *Server) handleFileImage(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusInternalServerError
 		if errors.Is(err, errNotPreviewable) {
 			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-store")
+	if _, err := w.Write(data); err != nil {
+		slog.Warn("failed to write response", "error", err)
+	}
+}
+
+// handleFileAsset hands out one image a previewed Markdown file points at.
+//
+// A relative src in a preview resolves against the server root, where sbnn
+// itself lives and the image does not, so the page rewrites it to point here
+// instead. The path is a query parameter and is believed about nothing: the
+// previewer matches it against the images the document actually names, and
+// hands back nothing for anything else.
+func (s *Server) handleFileAsset(w http.ResponseWriter, r *http.Request) {
+	name, ok := s.groupParam(w, r)
+	if !ok {
+		return
+	}
+	d, f, found := s.store.FileContext(name, r.PathValue("diff"), r.PathValue("file"))
+	if !found {
+		http.Error(w, "no such file", http.StatusNotFound)
+		return
+	}
+	data, contentType, err := s.prev.asset(d, f, r.URL.Query().Get("path"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, errNotPreviewable) {
+			status = http.StatusNotFound
 		}
 		writeJSON(w, status, map[string]string{"error": err.Error()})
 		return
@@ -838,19 +872,47 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a suggestion replaces lines of the new file, not of the old one", http.StatusBadRequest)
 		return
 	}
-	// Line numbers are 1-based; 0 means "not on this side" and is not a
-	// place a comment can point at. The CLI already refuses these, and a
-	// stored comment with a non-positive range anchors to nothing.
-	if req.StartLine < 1 {
-		http.Error(w, fmt.Sprintf("startLine must be 1 or more, got %d", req.StartLine), http.StatusBadRequest)
+	// Line numbers are 1-based when the comment points at lines. Naming
+	// none of them - startLine 0 - says the comment is about the file
+	// itself, which is the only thing there is to say about a file the
+	// diff carries without any lines: a pure rename, a mode change, a
+	// binary file. lineRange already renders such a comment as a bare
+	// path, and the page draws it under the file header.
+	//
+	// A negative line, and an endLine without a startLine, still anchor to
+	// nothing and are refused: the rule is that line numbers are positive
+	// when given, and that absent means the whole file.
+	switch {
+	case req.StartLine < 0:
+		http.Error(w, fmt.Sprintf("startLine must be 1 or more, or 0 for the whole file, got %d", req.StartLine),
+			http.StatusBadRequest)
+		return
+	case req.StartLine == 0 && req.EndLine != 0:
+		http.Error(w, fmt.Sprintf("endLine %d without a startLine: a comment on the whole file names no lines", req.EndLine),
+			http.StatusBadRequest)
 		return
 	}
-	if req.EndLine == 0 {
+	wholeFile := req.StartLine == 0
+	if wholeFile {
+		// Nothing is quoted when nothing is named. A snippet sent along
+		// anyway would be shown as the reviewed code under a comment that
+		// no range identifies, so it is dropped rather than kept.
+		req.Snippet = ""
+	}
+	if req.EndLine == 0 && !wholeFile {
 		// A client that comments on a single line may send startLine alone.
 		req.EndLine = req.StartLine
 	}
 	if req.EndLine < req.StartLine {
 		http.Error(w, fmt.Sprintf("endLine %d is before startLine %d", req.EndLine, req.StartLine), http.StatusBadRequest)
+		return
+	}
+	// A suggestion is a replacement for the lines the comment names, so a
+	// comment that names none has nothing for it to replace: the sentence
+	// the prompt writes under it - "the suggestion block above replaces
+	// <path>" - would be an instruction nobody can carry out.
+	if wholeFile && len(model.Suggestions(body)) > 0 {
+		http.Error(w, "a suggestion replaces the lines a comment names, so it needs a line range", http.StatusBadRequest)
 		return
 	}
 	// Which file the comment is on. Both shapes of the request end up
@@ -888,7 +950,10 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if f != nil {
+	// A comment about the file as a whole quotes no lines, so there is no
+	// snippet to build and nothing to clamp: the checks below are about
+	// where a range lands, and this one is not a range.
+	if f != nil && !wholeFile {
 		if req.Snippet == "" {
 			req.Snippet = diff.Snippet(f, req.Side, req.StartLine, req.EndLine)
 		}

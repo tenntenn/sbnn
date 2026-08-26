@@ -1,15 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { Comment, Diff, FileDiff, Hunk, Line, ViewMode } from '../types'
-import { filePath } from '../types'
+import { filePath, hunksOf } from '../types'
 import { client } from '../client'
 import { wordDiff } from '../wordDiff'
-import {
-  ensureHighlightStyles,
-  highlightLine,
-  languageOf,
-  tokenClass,
-  type LanguageId,
-} from '../highlight'
+import { ensureHighlightStyles, languageOf, type LanguageId } from '../highlight'
+import { Code } from './Code'
 import { CommentForm, CommentThread } from './CommentThread'
 import { Icon } from './Icon'
 import { foldLabel } from '../foldLabel'
@@ -39,6 +34,13 @@ interface Props {
 }
 
 type Side = 'new' | 'old'
+
+/** GUTTER_FOCUS is the ring a focused line number wears: the one the
+ * buttons wear, drawn inside the cell so the narrow gutter keeps it. */
+const GUTTER_FOCUS = {
+  outline: 'var(--border-width-marker) solid var(--accent-border)',
+  outlineOffset: 'calc(var(--border-width-marker) * -1)',
+}
 
 interface Selection {
   side: Side
@@ -128,13 +130,25 @@ export function DiffFileSection({
   // Which language to colour as follows from the extension and nothing else;
   // a file whose extension is not one of the twelve is left plain.
   const language = useMemo(() => languageOf(filePath(file)), [file])
+  // The server sends "hunks": null for a file that has none - a pure
+  // rename, a mode change, a binary blob - so this is read through hunksOf
+  // rather than off the file.
+  const hunks = hunksOf(file)
   useEffect(ensureHighlightStyles, [])
   const [selection, setSelection] = useState<Selection | null>(null)
   const mode: ViewMode = locked ? 'unified' : viewMode
 
+  // A comment that names no lines is about the file as a whole: it belongs
+  // under the file header rather than under a row, and there is no row it
+  // could go under anyway for a file the diff carries without any lines - a
+  // pure rename, a mode change, a binary file. Anchoring it by endLine would
+  // key it on "new:0", which no row matches, and it would be drawn nowhere.
+  const fileComments = useMemo(() => comments.filter((c) => c.startLine <= 0), [comments])
+
   const commentsByAnchor = useMemo(() => {
     const map = new Map<string, Comment[]>()
     for (const c of comments) {
+      if (c.startLine <= 0) continue
       const key = anchorKey(c.side, c.endLine)
       const list = map.get(key)
       if (list) list.push(c)
@@ -149,6 +163,9 @@ export function DiffFileSection({
   // inserting it mid-drag would push the rows under the pointer away.
   const dragging = useRef(false)
   const [drafting, setDrafting] = useState(true)
+  // The file-level draft is its own thing: it is opened from the header
+  // rather than from a line, and a file with no rows has no other way in.
+  const [draftingFile, setDraftingFile] = useState(false)
 
   useEffect(() => {
     const stop = () => {
@@ -210,6 +227,18 @@ export function DiffFileSection({
     pick(side, line, ev.shiftKey)
   }
 
+  // pickLine is the same thing reached from the keyboard. It skips the
+  // gesture check selectLine has to make, because a key press is never a
+  // drag and never the tail of a text selection - there is no pointer path
+  // to read, and no coordinates to read it from.
+  const pickLine = (side: Side, line: number, extend: boolean) => {
+    if (line <= 0) return
+    codeDown.current = null
+    dragging.current = false
+    setDrafting(true)
+    pick(side, line, extend)
+  }
+
   // Dragging across the gutter grows the range under the pointer.
   const dragOver = (side: Side, line: number) => {
     if (!dragging.current) return
@@ -230,6 +259,24 @@ export function DiffFileSection({
       snippet: snippetFor(file, selection),
     })
     setSelection(null)
+    onChanged()
+  }
+
+  const submitFileComment = async (body: string, question: boolean) => {
+    await client.addComment(group, {
+      diffId: diff.id,
+      fileId: file.id,
+      path: filePath(file),
+      side: 'new',
+      // No line: the server reads that as the whole file, and the prompt
+      // writes it as a bare path.
+      startLine: 0,
+      endLine: 0,
+      body,
+      question,
+      snippet: '',
+    })
+    setDraftingFile(false)
     onChanged()
   }
 
@@ -283,6 +330,17 @@ export function DiffFileSection({
           <span className="stat del">-{file.deletions}</span>
         </button>
         <div className="diff-tools">
+          <button
+            className="ghost"
+            onClick={() => {
+              setSelection(null)
+              setDraftingFile((open) => !open)
+            }}
+            aria-expanded={draftingFile}
+            title="Comment on this file as a whole, without pointing at a line"
+          >
+            comment on file
+          </button>
           {locked ? (
             <span
               className="hint"
@@ -317,6 +375,24 @@ export function DiffFileSection({
         </div>
       </div>
 
+      {!folded && (fileComments.length > 0 || draftingFile) && (
+        <div className="file-comments">
+          {fileComments.length > 0 && (
+            <CommentThread group={group} comments={fileComments} onChanged={onChanged} />
+          )}
+          {draftingFile && (
+            <CommentForm
+              label={filePath(file)}
+              seed=""
+              canSuggest={false}
+              hint="This one is about the file, not about a line of it"
+              onSubmit={submitFileComment}
+              onCancel={() => setDraftingFile(false)}
+            />
+          )}
+        </div>
+      )}
+
       {folded ? (
         <p className="empty">
           {foldLabel(foldedByReader === true, file.foldReason)} · {file.additions + file.deletions}{' '}
@@ -324,28 +400,30 @@ export function DiffFileSection({
         </p>
       ) : file.isBinary ? (
         <p className="empty">Binary file — no diff to show.</p>
-      ) : file.hunks.length === 0 ? (
+      ) : hunks.length === 0 ? (
         <p className="empty">
           No content change{file.oldMode && file.newMode ? ` (mode ${file.oldMode} → ${file.newMode})` : ''}.
         </p>
       ) : mode === 'unified' ? (
         <UnifiedTable
-          hunks={file.hunks}
+          hunks={hunks}
           language={language}
           selection={selection}
           onSelect={select}
           onSelectLine={selectLine}
+          onPickLine={pickLine}
           onCodePointerDown={codePointerDown}
           onDragOver={dragOver}
           renderExtras={renderExtras}
         />
       ) : (
         <SplitTable
-          hunks={file.hunks}
+          hunks={hunks}
           language={language}
           selection={selection}
           onSelect={select}
           onSelectLine={selectLine}
+          onPickLine={pickLine}
           onCodePointerDown={codePointerDown}
           onDragOver={dragOver}
           renderExtras={renderExtras}
@@ -356,7 +434,7 @@ export function DiffFileSection({
 }
 
 interface TableProps {
-  hunks: Hunk[]
+  hunks: readonly Hunk[]
   /** language is null for a file this cannot read, which is most of them. */
   language: LanguageId | null
   selection: Selection | null
@@ -365,6 +443,8 @@ interface TableProps {
   // event so it can tell the two apart.
   onSelect: (side: Side, line: number, extend: boolean) => void
   onSelectLine: (side: Side, line: number, ev: React.MouseEvent) => void
+  /** onPickLine is the keyboard way in, from a line number in the gutter. */
+  onPickLine: (side: Side, line: number, extend: boolean) => void
   onCodePointerDown: (ev: React.PointerEvent) => void
   onDragOver: (side: Side, line: number) => void
   renderExtras: (side: Side, line: number) => React.ReactNode
@@ -379,12 +459,73 @@ function isSelected(selection: Selection | null, side: Side, line: number): bool
   )
 }
 
+interface GutterProps {
+  side: Side
+  /** line is the number shown in the gutter. Zero or less means this side
+   * has no line on this row - a cell like that is inert, and stays out of
+   * the tab order. */
+  line: number
+  className: string
+  onSelect: (side: Side, line: number, extend: boolean) => void
+  onPickLine: (side: Side, line: number, extend: boolean) => void
+  onDragOver: (side: Side, line: number) => void
+}
+
+/**
+ * GutterCell is one line number, and the way into a comment on that line.
+ *
+ * The gutter is where a comment starts, so it has to answer to the keyboard
+ * as well as to the pointer: it takes a stop in the tab order, says what it
+ * is and which line it is on, and Enter or Space picks the line the way a
+ * click on it does. Shift held down extends the range instead of starting a
+ * new one, which is what shift-clicking already did.
+ *
+ * It stays a <td>. A <button> in its place would take the cell out of the
+ * row and the diff would lose its columns; the role and the key handling
+ * are what a button would have given it anyway.
+ *
+ * The focus ring is drawn from state rather than from a stylesheet rule so
+ * that it can live in this file - :focus-visible would need styles.css,
+ * which other work is sitting on. It follows focus, so it shows for a
+ * pointer press too; the ring is the same one the buttons use.
+ */
+function GutterCell({ side, line, className, onSelect, onPickLine, onDragOver }: GutterProps) {
+  const [focused, setFocused] = useState(false)
+  // This side has no line on this row, so there is nothing to comment on
+  // and nothing to stop at.
+  if (line <= 0) return <td className={className} />
+  return (
+    <td
+      className={className}
+      role="button"
+      tabIndex={0}
+      aria-label={`Comment on ${side} line ${line}`}
+      style={focused ? GUTTER_FOCUS : undefined}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      onPointerDown={(ev) => onSelect(side, line, ev.shiftKey)}
+      onPointerEnter={() => onDragOver(side, line)}
+      onKeyDown={(ev) => {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return
+        // Space scrolls the page unless something stops it, and a keyboard
+        // pick is never a drag, so this goes the way a click on the line
+        // goes: pick the line and open the draft straight away.
+        ev.preventDefault()
+        onPickLine(side, line, ev.shiftKey)
+      }}
+    >
+      {line}
+    </td>
+  )
+}
+
 function UnifiedTable({
   hunks,
   language,
   selection,
   onSelect,
   onSelectLine,
+  onPickLine,
   onCodePointerDown,
   onDragOver,
   renderExtras,
@@ -427,20 +568,22 @@ function UnifiedTable({
               return (
                 <Fragment key={li}>
                   <tr className={`line ${line.kind}${selected ? ' selected' : ''}`}>
-                    <td
+                    <GutterCell
+                      side="old"
+                      line={line.oldNumber}
                       className="num clickable"
-                      onPointerDown={(ev) => onSelect('old', line.oldNumber, ev.shiftKey)}
-                      onPointerEnter={() => onDragOver('old', line.oldNumber)}
-                    >
-                      {line.oldNumber > 0 ? line.oldNumber : ''}
-                    </td>
-                    <td
+                      onSelect={onSelect}
+                      onPickLine={onPickLine}
+                      onDragOver={onDragOver}
+                    />
+                    <GutterCell
+                      side="new"
+                      line={line.newNumber}
                       className="num clickable"
-                      onPointerDown={(ev) => onSelect('new', line.newNumber, ev.shiftKey)}
-                      onPointerEnter={() => onDragOver('new', line.newNumber)}
-                    >
-                      {line.newNumber > 0 ? line.newNumber : ''}
-                    </td>
+                      onSelect={onSelect}
+                      onPickLine={onPickLine}
+                      onDragOver={onDragOver}
+                    />
                     <td className="marker">{marker(line.kind)}</td>
                     <td
                       className="code"
@@ -506,6 +649,7 @@ function SplitTable({
   selection,
   onSelect,
   onSelectLine,
+  onPickLine,
   onCodePointerDown,
   onDragOver,
   renderExtras,
@@ -552,13 +696,14 @@ function SplitTable({
               return (
                 <Fragment key={ri}>
                   <tr className="line">
-                    <td
+                    <GutterCell
+                      side="old"
+                      line={row.left?.oldNumber ?? -1}
                       className={`num clickable${isSelected(selection, 'old', row.left?.oldNumber ?? -1) ? ' selected' : ''}`}
-                      onPointerDown={(ev) => row.left && onSelect('old', row.left.oldNumber, ev.shiftKey)}
-                      onPointerEnter={() => row.left && onDragOver('old', row.left.oldNumber)}
-                    >
-                      {row.left && row.left.oldNumber > 0 ? row.left.oldNumber : ''}
-                    </td>
+                      onSelect={onSelect}
+                      onPickLine={onPickLine}
+                      onDragOver={onDragOver}
+                    />
                     <td
                       className={`code side ${row.left ? row.left.kind : 'empty'}${
                         isSelected(selection, 'old', row.left?.oldNumber ?? -1) ? ' selected' : ''
@@ -568,13 +713,14 @@ function SplitTable({
                     >
                       {row.left ? renderSegments(row.left.content, oldSegments, language) : ''}
                     </td>
-                    <td
+                    <GutterCell
+                      side="new"
+                      line={row.right?.newNumber ?? -1}
                       className={`num clickable${isSelected(selection, 'new', row.right?.newNumber ?? -1) ? ' selected' : ''}`}
-                      onPointerDown={(ev) => row.right && onSelect('new', row.right.newNumber, ev.shiftKey)}
-                      onPointerEnter={() => row.right && onDragOver('new', row.right.newNumber)}
-                    >
-                      {row.right && row.right.newNumber > 0 ? row.right.newNumber : ''}
-                    </td>
+                      onSelect={onSelect}
+                      onPickLine={onPickLine}
+                      onDragOver={onDragOver}
+                    />
                     <td
                       className={`code side ${row.right ? row.right.kind : 'empty'}${
                         isSelected(selection, 'new', row.right?.newNumber ?? -1) ? ' selected' : ''
@@ -600,29 +746,6 @@ function SplitTable({
         ))}
       </tbody>
     </table>
-  )
-}
-
-/**
- * Code is one line of source, coloured if the file's extension is one this
- * knows. Tokens are spans - never a string of HTML - so nothing here can put
- * markup from a diff into the page.
- */
-function Code({ content, language }: { content: string; language: LanguageId | null }) {
-  const tokens = highlightLine(content, language)
-  if (tokens.length === 1 && tokens[0].kind === 'plain') return <>{content || ' '}</>
-  return (
-    <>
-      {tokens.map((token, i) =>
-        token.kind === 'plain' ? (
-          <Fragment key={i}>{token.text}</Fragment>
-        ) : (
-          <span key={i} className={tokenClass(token.kind)}>
-            {token.text}
-          </span>
-        ),
-      )}
-    </>
   )
 }
 
@@ -658,7 +781,7 @@ function renderSegments(
 /** selectedLines returns the lines of the selected range on its side. */
 function selectedLines(file: FileDiff, selection: Selection): Line[] {
   const out: Line[] = []
-  for (const hunk of file.hunks) {
+  for (const hunk of hunksOf(file)) {
     for (const line of hunk.lines) {
       const num = selection.side === 'old' ? line.oldNumber : line.newNumber
       if (num < selection.start || num > selection.end) continue

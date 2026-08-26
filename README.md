@@ -7,6 +7,8 @@ diff viewer and reviewer. The name reads "sabun" — 差分, Japanese for "diff"
 on the left, a Markdown preview on the right, and review comments you can read
 back from the command line.
 
+![The sbnn review page: the file list, a split diff carrying an open review comment and its suggested change, and the preview pane beside it](docs/screenshot.png)
+
 ## Contents
 
 - [Install](#install)
@@ -32,8 +34,6 @@ back from the command line.
 - [Files and ports](#files-and-ports)
 - [Development](#development)
 - [License](#license)
-
-![sbnn showing a diff on the left and its Markdown preview on the right](docs/screenshot.png)
 
 It is inspired by [difit](https://github.com/yoshiko-pg/difit), with a few
 deliberate differences:
@@ -194,19 +194,29 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   agent.
 - Split and unified views can be switched per file; new, deleted and binary
   files stay unified.
-- **Filter the file list by path.** Press `/` and type: every
-  whitespace-separated term has to appear somewhere in the path, so
-  `server go` and `internal/server` both find `internal/server/server.go`.
-  Enter opens the first path still standing, Escape clears. Nothing turns up
-  that does not contain what you typed — a list you are scanning is the wrong
-  place for clever matching.
+- **Search the file list by path and by what the diff says.** Press `/` and
+  type: every whitespace-separated term has to appear, case ignored, either
+  somewhere in the path or all together inside one diff line — so `server go`
+  and `internal/server` both find `internal/server/server.go` by its path,
+  and `handleHealthz` finds whatever file the diff mentions it in. The two
+  sides are not pooled: a term found in the path and a term found in a line
+  do not add up to a match, because neither side holds both. Each row says
+  where it was hit — `path`, `2 lines`, or `path + 3 lines` — and the box
+  counts `2 of 3`, with `, 2 lines` on the end once a line has matched too.
+  Every line the diff carries is read, added, removed and unchanged alike.
+  Enter opens the first file still standing, which may be one that only its
+  content matched, and takes you to the file rather than to the line; Escape
+  clears. Nothing turns up that does not contain what you typed — a list you
+  are scanning is the wrong place for clever matching. Past 200,000 lines the
+  content scan stops and says so, and the paths go on being searched in full.
 - Each round of a review — each diff sent to the group — gets its own
   heading in the file list. Click it to shut that round — the heading keeps
   saying how many files and how many open comments are inside — or switch
-  the list to **tabs** to see one round at a time. Filtering by path
-  searches the tabs too: a round with nothing matching drops out of the
-  strip, the rest say how many paths they hold, and the search never takes
-  you out of the layout you chose.
+  the list to **tabs** to see one round at a time. Searching goes through the
+  tabs too: a round with nothing matching drops out of the strip — one whose
+  only tie to what you typed is a line of its content stays — the rest say
+  how many of their files matched, and the search never takes you out of the
+  layout you chose.
 - Every pane is resizable and can be minimised away: drag the edge between
   two panes, double click it to reset (or to put the file list away), or use
   the **Files**, **Diff** and **Preview** switches in the header. Dragging an
@@ -223,6 +233,14 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   itself, as a rule and a line saying how many lines are not there. Nothing
   is written into a notebook that way: it is JSON, and sbnn's own sentence in
   the middle of it would be the reason it could not be shown at all.
+- Every other text file — a `.go`, a config file, a script with no extension
+  at all — gets a preview too: the whole file as its own numbered lines,
+  syntax coloured by the same rules that colour the diff. It is the same
+  working-tree-or-rebuilt content behind the same **tree** / **rebuilt** /
+  **partial** header, and the first 2,000 lines are drawn with a button for
+  the rest, so one generated file cannot fill the pane with a hundred
+  thousand rows. An exported page has no working tree to read, so it keeps
+  its previews of Markdown, notebooks and images only.
 - **Sync** makes the preview follow the diff as you scroll, by fraction
   rather than by line — the two documents do not agree on lines, and
   pretending they do lands you in the wrong place with more confidence.
@@ -231,7 +249,7 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   another origin, where a page may not touch its scrolling.
 - Press `?` for the keyboard shortcuts: `j`/`k` move between files, `n`/`p`
   between comments, `f` folds, `v` switches split and unified, `s` toggles
-  the scroll sync, `r` opens the review box, `/` filters the file list. None
+  the scroll sync, `r` opens the review box, `/` searches the file list. None
   of them fires while you are typing.
 - The header switch cycles **Auto / Light / Dark**: Auto follows the system
   (or whatever host an exported page is read in), and a choice is remembered
@@ -332,16 +350,36 @@ writes the comment says which it is, and `sbnn comments` tells the reader:
 
 The lines are the ones the diff shows (`--side old` for a removed line), the
 file is looked up in the newest diff carrying that path, and sbnn fills in the
-reviewed code itself. A whole self review can be posted at once:
+reviewed code itself.
+
+A path on its own, with no line, comments on the file as a whole:
+
+```console
+$ sbnn comment new.txt -m "this rename looks wrong"
+$ sbnn comment exec.sh -m "why is this now executable?"
+```
+
+That is the only thing there is to say about a file the diff carries without
+any lines — a pure rename, a mode change, a binary file — and it reads as a
+comment on the file for every other one too. It shows under the file header
+rather than under a row, and **comment on file** in the file's header does the
+same in the browser. A suggestion replaces the lines a comment names, so it
+needs a line range and cannot go on one of these.
+
+A whole self review can be posted at once:
 
 ```console
 $ sbnn comment --json --author claude <<'EOF'
 [
   {"path": "cmd/root.go", "line": "88", "body": "left over from the old flag"},
-  {"path": "README.md", "line": "12-18", "body": "reworded", "suggestion": "..."}
+  {"path": "README.md", "line": "12-18", "body": "reworded", "suggestion": "..."},
+  {"path": "new.txt", "body": "this rename looks wrong"}
 ]
 EOF
 ```
+
+An entry that leaves `"line"` out is the same whole-file comment a bare path
+makes.
 
 ### Finishing a review
 
@@ -469,7 +507,7 @@ $ sbnn reviews -t api --limit 5
 
 ```
 2026-08-16 03:26  default    2 comment(s), 1 suggestion(s)  3 file(s), +11 -1  waited 42m
-      だいたいOK
+      Mostly fine
 2026-08-16 11:02  api        1 comment(s)  3 file(s), +11 -1  waited 3h10m  branch=main
 ```
 
@@ -625,7 +663,7 @@ to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
 | `sbnn` | Read a diff on stdin and serve it | `--title`, `--label key=value`, `--open` / `--no-open`, `--foreground`, `--on-review`, `--on-review-url`, `--history-file`, `--json` |
 | `sbnn` on the running server | Act on the server instead of adding a diff | `--status`, `--restart`, `--shutdown`, `--clear`, `--clear --all` |
 | `sbnn comments` | Print the comments left in the browser | `--format` (`prompt`, `markdown`, `json`), `--json`, `--clear`, `--include-resolved`, `--exit-code`, `--quiet` (`-q`) |
-| `sbnn comment path:line[-line]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--json` |
+| `sbnn comment path[:line[-line]]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--json` |
 | `sbnn submit` | End the round, as the Submit button does | `--note` (`-m`), `--verdict` (`approved`, `commented`, `changes-requested`), `--approve`, `--request-changes`, `--exit-code`, `--quiet` |
 | `sbnn wait` | Block until the review is submitted, then print it | `--timeout`, `--format`, `--json`, `--exit-code`, `--quiet` |
 | `sbnn hook` | Run something when a review is submitted | `--on-review`, `--on-review-url`, `--clear`, `--json` |

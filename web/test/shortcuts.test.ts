@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { stepToComment, type CommentStop } from '../src/shortcuts'
+import { shortcuts, stepToComment, type CommentStop } from '../src/shortcuts'
 
 // The review of issue #61: three comments on file A, one on file B.
 const stops: CommentStop[] = [
@@ -28,6 +28,44 @@ function press(by: number, times: number, startKey: string | null = 'A'): string
   }
   return visited
 }
+
+/**
+ * The list is what the ? overlay draws, so a row that has gone stale is the
+ * product telling the reader something that stopped being true. #291 widened
+ * the / search from paths to paths and diff lines - the box says "Search
+ * paths and lines ( / )" - while this row went on saying "Filter the file
+ * list by path".
+ */
+describe('the shortcut list', () => {
+  const rowFor = (key: string) => shortcuts.find((s) => s.keys.includes(key))
+
+  it('describes the / search as reading the lines, not only the paths', () => {
+    const row = rowFor('/')
+    assert.ok(row, 'no row answers to /')
+    assert.match(
+      row.what,
+      /line/i,
+      `the / row says nothing about lines: ${JSON.stringify(row.what)}`,
+    )
+    assert.doesNotMatch(
+      row.what,
+      /by path/i,
+      `the / row still describes the filter #291 replaced: ${JSON.stringify(row.what)}`,
+    )
+  })
+
+  it('explains every key it answers to', () => {
+    for (const row of shortcuts) {
+      assert.ok(row.keys.length > 0, `a row has no keys: ${JSON.stringify(row)}`)
+      assert.ok(row.what.trim().length > 0, `${row.keys.join('/')} has no explanation`)
+    }
+  })
+
+  it('answers to each key once', () => {
+    const seen = shortcuts.flatMap((row) => row.keys)
+    assert.deepEqual([...new Set(seen)], seen, 'a key is listed twice')
+  })
+})
 
 describe('stepToComment', () => {
   // The bug: `at` was the index of the first comment in the active file, and
