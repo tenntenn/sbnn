@@ -30,7 +30,9 @@ jobs:
         with:
           aqua_version: v2.62.3
       - run: task lint
-      - run: task test
+      # test-go rather than test: `task test` runs the web suite too, which the
+      # web job below covers and this job has no Node for.
+      - run: task test-go
       - run: go build ./...
 
   web:
@@ -54,7 +56,21 @@ jobs:
       # type check as well; a separate `tsc --noEmit` step would be redundant.
       - run: pnpm run build
         working-directory: web
+      # web/test is the only automated check on the TypeScript no Go test can
+      # reach: the word-level diff, the suggestion parser, the search matcher,
+      # the shortcut table, the exported page's static client. Compiling is
+      # not running them.
+      - run: pnpm test
+        working-directory: web
 
 # The build output under web/dist is deliberately not compared against the
 # tree here: dist is regenerated in batches rather than committed per change,
 # so a sync check would fail on every pull request.
+#
+# test/visual (Playwright) is deliberately not run here either, for the same
+# reason and one more. It drives the committed web/dist, so on a pull request
+# that changes web/src it reports on how old the bundle is rather than on the
+# change; and it carries test.fail() annotations pinning defects that are open
+# (#73, #74, #79, #119), so it is built to go red on the pull request that
+# fixes one. That is the signal its README wants and the wrong semantics for a
+# check that blocks a merge. Run it yourself: see test/visual/README.md.

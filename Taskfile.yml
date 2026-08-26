@@ -26,8 +26,31 @@ tasks:
       - "{{.GO}} install ."
 
   test:
+    desc: Runs both suites, which together are what CI runs.
+    cmds:
+      - task: test-go
+      - task: test-web
+
+  test-go:
+    desc: Runs the Go tests. This is what the `go` CI job runs.
     cmds:
       - "{{.GO}} test ./..."
+
+  # web/test holds the tests for the TypeScript no Go test reaches. They are
+  # their own task rather than part of `test-go` so that the `go` CI job stays
+  # Go-only and needs no Node, while `task test` locally still means
+  # everything CI runs.
+  #
+  # test/visual is not here: it is a Playwright suite over the committed
+  # web/dist with its own lockfile and its own README, and it pins open
+  # defects with test.fail(), so it goes red when one is fixed. Run it from
+  # test/visual by hand.
+  test-web:
+    desc: Runs the review UI tests. This is what the `web` CI job runs.
+    dir: web
+    cmds:
+      - "{{.PNPM}} install --frozen-lockfile"
+      - "{{.PNPM}} test"
 
   lint:
     cmds:

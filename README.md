@@ -791,7 +791,7 @@ to get `task`.
 
 ```console
 $ task build     # pnpm build in web/, then go build
-$ task test      # go test ./...
+$ task test      # go test ./... and the review UI tests in web/test
 $ task lint      # go vet, a gofmt check, go fix -diff, and go mod tidy with no diff
 $ task dev       # sbnn in the foreground plus the Vite dev server
 ```
