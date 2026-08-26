@@ -7,12 +7,49 @@ export function groupFromLocation(): string {
   return name === '' ? 'default' : name
 }
 
+/**
+ * failure turns a refused response into the Error the page shows.
+ *
+ * Every endpoint under /_/api answers a failure with `{"error": "..."}` and a
+ * status, so the body is JSON that has to be read as JSON. Throwing the raw
+ * text put the wire format on the page - a reader of a deleted file's preview
+ * got `{ "error": "no preview for this file: doc.md was deleted" }`, braces,
+ * quoted key and all, where a sentence belongs (#327).
+ *
+ * The fallbacks are the point of doing this by hand rather than with a
+ * JSON.parse and a cast. A proxy, a crash before the handler ran, or an
+ * endpoint that answers plain text all produce a body that is not that shape,
+ * and the raw text is the best thing left to say. An empty body leaves only
+ * the status, and statusText is not it: HTTP/2 carries no reason phrase, so
+ * fetch reports it as the empty string and the reader would be shown nothing
+ * at all.
+ */
+async function failure(resp: Response): Promise<Error> {
+  const text = (await resp.text()).trim()
+  let message = ''
+  try {
+    const body: unknown = JSON.parse(text)
+    if (
+      body !== null &&
+      typeof body === 'object' &&
+      typeof (body as { error?: unknown }).error === 'string'
+    ) {
+      message = (body as { error: string }).error.trim()
+    }
+  } catch {
+    // Not JSON at all. The text is what there is.
+  }
+  const err = new Error(message || text || resp.statusText || `HTTP ${resp.status}`)
+  // The status is how a caller tells "this file has no preview" (400) from
+  // "mo is not installed" (424) from a server that fell over (500) without
+  // matching on the sentence.
+  ;(err as Error & { status?: number }).status = resp.status
+  return err
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(path, init)
-  if (!resp.ok) {
-    const text = (await resp.text()).trim()
-    throw new Error(text || resp.statusText)
-  }
+  if (!resp.ok) throw await failure(resp)
   return (await resp.json()) as T
 }
 
@@ -102,12 +139,12 @@ export async function deleteComment(group: string, id: string): Promise<void> {
     `/_/api/groups/${encodeURIComponent(group)}/comments/${encodeURIComponent(id)}`,
     { method: 'DELETE' },
   )
-  if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText)
+  if (!resp.ok) throw await failure(resp)
 }
 
 export async function deleteGroup(group: string): Promise<void> {
   const resp = await fetch(`/_/api/groups/${encodeURIComponent(group)}`, { method: 'DELETE' })
-  if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText)
+  if (!resp.ok) throw await failure(resp)
 }
 
 export async function deleteDiff(group: string, diffId: string): Promise<void> {
@@ -115,7 +152,7 @@ export async function deleteDiff(group: string, diffId: string): Promise<void> {
     `/_/api/groups/${encodeURIComponent(group)}/diffs/${encodeURIComponent(diffId)}`,
     { method: 'DELETE' },
   )
-  if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText)
+  if (!resp.ok) throw await failure(resp)
 }
 
 export function submitReview(group: string, note: string, verdict: Verdict): Promise<Group> {
@@ -128,7 +165,7 @@ export function submitReview(group: string, note: string, verdict: Verdict): Pro
 
 export async function getPrompt(group: string): Promise<string> {
   const resp = await fetch(`/_/api/groups/${encodeURIComponent(group)}/prompt`)
-  if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText)
+  if (!resp.ok) throw await failure(resp)
   return await resp.text()
 }
 
