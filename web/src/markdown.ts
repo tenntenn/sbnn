@@ -1,5 +1,6 @@
 import DOMPurify from 'dompurify'
-import { Marked, marked, type Tokens } from 'marked'
+import { Marked, type Tokens } from 'marked'
+import { renderBlocks } from './lineMarks'
 
 const MARKED_OPTIONS = { async: false, gfm: true, breaks: false } as const
 
@@ -213,33 +214,40 @@ function unescapeHTML(s: string): string {
 }
 
 /**
+ * LINE_MARK is the name the line marks inside a block are rendered under (see
+ * renderBlocks). sanitize refuses data attributes, and that refusal is what
+ * stops a diff from writing a data-ln of its own, so the marks cannot simply
+ * be data-ln: they are written under a name made up per page load, which the
+ * diff cannot know, kept through sanitizing as an allowed attribute, and
+ * renamed to data-ln afterwards. A page that guessed the name would still have
+ * to be one that was rendered before it was loaded.
+ */
+const LINE_MARK = `data-ln-${randomToken()}`
+
+function randomToken(): string {
+  const bytes = new Uint8Array(8)
+  globalThis.crypto.getRandomValues(bytes)
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
  * renderBody renders each top level block on its own, so the exact source
- * lines it consumed can be attached to it in data-ln before the blocks are
- * joined back into one string. startLine is the line body itself starts on.
+ * lines it consumed can be attached to it in data-ln, and marks inside the
+ * block the line each paragraph line, list item, table row and code line is
+ * on (see renderBlocks). startLine is the line body itself starts on.
  *
- * The wrapper goes on after the block has been sanitised rather than before:
- * sanitising still refuses data attributes, so a data-ln written by the diff
- * itself is stripped and cannot lie about which lines a block covers.
+ * Sanitizing runs per block with the marks let through, and the wrapper goes
+ * on after it, so a data-ln written by the diff itself is stripped and cannot
+ * lie about which lines a block covers.
  */
 function renderBody(body: string, startLine: number): string {
-  const parts: string[] = []
-  let line = startLine
-  for (const token of marked.lexer(body, MARKED_OPTIONS)) {
-    const raw = token.raw ?? ''
-    const newlines = countChar(raw, '\n')
-    const start = line
-    // A block whose raw text ends in a newline stops on the line before the
-    // one that newline opens.
-    const end = raw.endsWith('\n') ? start + newlines - 1 : start + newlines
-    line = start + newlines
-    const html = marked.parser([token], MARKED_OPTIONS)
-    const clean = sanitize(typeof html === 'string' ? html : '')
-    // Link definitions and the blank lines between blocks are tokens too,
-    // and they render to nothing worth wrapping.
-    if (clean.trim() === '') continue
-    parts.push(`<div data-ln="${start}-${Math.max(end, start)}">${clean}</div>`)
-  }
-  return parts.join('')
+  return renderBlocks(body, startLine, LINE_MARK, (html) =>
+    DOMPurify.sanitize(html, {
+      FORBID_TAGS,
+      ALLOW_DATA_ATTR: false,
+      ADD_ATTR: [LINE_MARK],
+    }).replaceAll(`${LINE_MARK}=`, 'data-ln='),
+  )
 }
 
 function countChar(s: string, ch: string): number {
