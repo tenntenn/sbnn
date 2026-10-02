@@ -93,47 +93,69 @@ function scrollClip(node: Node): HTMLElement | null {
   return null
 }
 
-function blockLines(block: HTMLElement): [number, number] | null {
-  const raw = block.dataset.ln
+/** markLines reads the lines a mark stands for: "5" is one line, "5-9" a
+ * block of them. */
+function markLines(mark: HTMLElement): [number, number] | null {
+  const raw = mark.dataset.ln
   if (!raw) return null
   const [start, end] = raw.split('-').map(Number)
   if (!Number.isFinite(start)) return null
   return [start, Number.isFinite(end) ? end : start]
 }
 
-/** textOf is the part of range that lies inside block. */
-function textOf(range: Range, block: HTMLElement): string {
-  const whole = document.createRange()
-  whole.selectNodeContents(block)
-  const clipped = range.cloneRange()
-  if (clipped.compareBoundaryPoints(Range.START_TO_START, whole) < 0) {
-    clipped.setStart(whole.startContainer, whole.startOffset)
+/** selectedText finds the first and the last text node range holds something
+ * other than whitespace of, which are where the reader's selection really
+ * begins and ends.
+ *
+ * Whatever lies beyond them does not count: dragging past the end of a
+ * paragraph leaves the range ending at offset 0 of the next one, which the
+ * reader never sees as selected and would not expect to be commenting on. */
+function selectedText(range: Range, root: HTMLElement): [Text, Text] | null {
+  let first: Text | null = null
+  let last: Text | null = null
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!range.intersectsNode(node)) continue
+    const text = node as Text
+    const from = text === range.startContainer ? range.startOffset : 0
+    const to = text === range.endContainer ? range.endOffset : text.data.length
+    if (text.data.slice(from, to).trim() === '') continue
+    first ??= text
+    last = text
   }
-  if (clipped.compareBoundaryPoints(Range.END_TO_END, whole) > 0) {
-    clipped.setEnd(whole.endContainer, whole.endOffset)
-  }
-  return clipped.toString()
+  return first && last ? [first, last] : null
 }
 
-/** selectedLines is the source line range the selection covers, taken from
- * the data-ln of every block it holds text of.
+/** markBefore is the last mark in document order that node is at or after:
+ * the one that says which line, or which block, the node is in. */
+function markBefore(node: Node, marks: HTMLElement[]): HTMLElement | null {
+  let found: HTMLElement | null = null
+  for (const mark of marks) {
+    if (mark.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) found = mark
+    else break
+  }
+  return found
+}
+
+/** selectedLines is the smallest source line range the selection touches.
  *
- * Blocks it merely touches do not count: dragging past the end of a paragraph
- * leaves the selection ending at offset 0 of the next one, which the reader
- * never sees as selected and would not expect to be commenting on.
+ * The preview marks the line of every paragraph line, list item, table row
+ * and line of code, and every block with the lines it spans (see
+ * lineMarks.ts), so each end of the selection is looked up as the last mark
+ * before it: the selection's first line is where its first selected text
+ * is, and its last line where its last selected text is. A block with no
+ * finer marks (a rule, raw HTML) stands for all of its lines.
  */
 function selectedLines(range: Range, root: HTMLElement): [number, number] | null {
-  let start = Infinity
-  let end = -Infinity
-  for (const block of root.querySelectorAll<HTMLElement>('[data-ln]')) {
-    if (!range.intersectsNode(block)) continue
-    if (textOf(range, block).trim() === '') continue
-    const lines = blockLines(block)
-    if (!lines) continue
-    start = Math.min(start, lines[0])
-    end = Math.max(end, lines[1])
-  }
-  return start <= end ? [start, end] : null
+  const ends = selectedText(range, root)
+  if (!ends) return null
+  const marks = Array.from(root.querySelectorAll<HTMLElement>('[data-ln]'))
+  const from = markBefore(ends[0], marks)
+  const to = markBefore(ends[1], marks)
+  const start = from && markLines(from)
+  const end = to && markLines(to)
+  if (!start || !end) return null
+  return [start[0], Math.max(start[0], end[1])]
 }
 
 /** rectsOf drops the empty rects a range collects at block boundaries, so
@@ -509,7 +531,7 @@ export function PreviewSelection({ group, onChanged }: Props) {
           label={label}
           seed={capture.text}
           canSuggest
-          hint="Selected in the preview; the comment covers whole blocks"
+          hint="Selected in the preview; the comment covers the lines it touches"
           onSubmit={submit}
           onCancel={clear}
         />
