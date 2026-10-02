@@ -486,6 +486,15 @@ remark nobody has answered yet goes with it. `--resolved-only` is the one to
 reach for between rounds: it removes the comments marked as resolved and
 leaves the rest for the next pass.
 
+Neither touches the diffs, so the diff of the round you just handled stays
+beside its fixed version. Send the next round with `--replace` to drop the
+diffs the group held before, together with the comments on them (hooks and
+comments on nothing else are kept):
+
+```console
+$ <diff> | sbnn --replace
+```
+
 ### Approve, comment, or request changes
 
 A review says two different things: what is wrong with particular lines, and
@@ -707,7 +716,7 @@ to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
 
 | Command | What it does | Flags worth knowing |
 | --- | --- | --- |
-| `sbnn` | Read a diff on stdin and serve it | `--title`, `--label key=value`, `--open` / `--no-open`, `--foreground`, `--on-review`, `--on-review-url`, `--history-file`, `--json` |
+| `sbnn` | Read a diff on stdin and serve it | `--title`, `--label key=value`, `--replace`, `--open` / `--no-open`, `--foreground`, `--on-review`, `--on-review-url`, `--history-file`, `--json` |
 | `sbnn` on the running server | Act on the server instead of adding a diff | `--status`, `--restart`, `--shutdown`, `--clear`, `--clear --all` |
 | `sbnn comments` | Print the comments left in the browser | `--format` (`prompt`, `markdown`, `json`), `--json`, `--clear`, `--clear --resolved-only`, `--include-resolved`, `--exit-code`, `--quiet` (`-q`) |
 | `sbnn comment path[:line[-line]]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--json` |

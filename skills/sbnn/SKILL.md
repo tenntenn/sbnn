@@ -61,7 +61,8 @@ sbnn --clear --target <topic>         # close it: diffs, comments and hooks
 Two exceptions, both of which mean "do not clear":
 
 - You are sending the **next round** of a review you already started. Then
-  the diffs belong together; clear the handled comments instead (step 7).
+  the group stays; clear the handled comments and send the new diff with
+  `--replace` instead (step 7).
 - The group holds **comments the human wrote that you have not addressed**.
   Say what is in there and ask before throwing it away.
 
@@ -309,13 +310,26 @@ one response that leaves the reviewer having to ask again.
 ### 7. Send the next round
 
 Clear the comments you handled and send the updated diff so the next round
-starts clean. This is the one case where the diffs stay: the rounds of one
-review belong together.
+starts clean. The group stays — its URL, hooks and still-open comments carry
+over — but the diff of the round you just handled should not: left in, it sits
+next to its own fixed version and the human reads the same change twice.
+`--replace` sends the new diff and then drops the diffs the group held before
+it, along with the comments left on them:
 
 ```
 sbnn comments --target <topic> --clear --resolved-only
-git diff | sbnn --target <topic>
+git diff | sbnn --target <topic> --replace
 ```
+
+Replace only when every comment on the previous diff is handled — fixed,
+answered, or resolved. `--replace` deletes the comments attached to the old
+diffs, so check `sbnn comments --target <topic>` first: if the human left
+comments you have not addressed, address them or ask before replacing, as in
+step 1. Do not use it for a diff that is a separate change rather than the
+next version of the last one (a different PR, a new task); send that to its
+own `--target`. Without `--replace`, the old diffs stay, which is right when
+the new diff shows something other than the old one again, such as the next
+commit of a series the human reads in order.
 
 `--clear` on its own empties the whole group at once — the comments you never
 got to along with the ones you handled — so reach for it only when you have

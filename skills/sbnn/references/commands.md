@@ -13,6 +13,7 @@ list.
 | `... \| sbnn --title "..."` | Name the diff, so a stack of them can be told apart |
 | `... \| sbnn --collapse '<glob>'` | Fold generated files away, repeatable |
 | `... \| sbnn --label <key>=<value>` | Keep a PR number or URL with the diff, repeatable |
+| `... \| sbnn --replace` | After adding the diff, drop the group's earlier diffs and their comments (next round) |
 | `sbnn --status [--json]` | Show the running server, its groups and comment counts |
 | `sbnn --clear [-t <name>]` | Close a review: its diffs, comments and hooks |
 | `sbnn wait [-t <name>]` | Block until the review is submitted, then print it |

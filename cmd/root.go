@@ -40,25 +40,26 @@ const maxDiffSize = 32 << 20
 const DefaultIdleTimeout = 30 * time.Minute
 
 var (
-	target      string
-	port        int
-	bind        string
-	title       string
-	openBrowser bool
-	noOpen      bool
-	foreground  bool
-	showStatus  bool
-	doShutdown  bool
-	doRestart   bool
-	doClear     bool
-	clearAll    bool
-	assumeYes   bool
-	jsonOutput  bool
-	moBin       string
-	moPort      int
-	moBind      string
-	allowRemote bool
-	idleTimeout time.Duration
+	target       string
+	port         int
+	bind         string
+	title        string
+	openBrowser  bool
+	noOpen       bool
+	foreground   bool
+	showStatus   bool
+	doShutdown   bool
+	doRestart    bool
+	doClear      bool
+	clearAll     bool
+	replaceDiffs bool
+	assumeYes    bool
+	jsonOutput   bool
+	moBin        string
+	moPort       int
+	moBind       string
+	allowRemote  bool
+	idleTimeout  time.Duration
 
 	onReviewCommand string
 	onReviewURL     string
@@ -111,6 +112,7 @@ Review comments:
   $ sbnn comments                   # comments as a prompt for an agent
   $ sbnn comments --format json     # comments as JSON
   $ sbnn comments --clear           # start the next review round
+  $ <diff> | sbnn --replace         # send the next round in place of the last diff
 
   They go the other way too: an agent can point at the lines it is unsure
   about, and the human sees it next to the diff.
@@ -193,6 +195,8 @@ func init() {
 	rootCmd.MarkFlagsMutuallyExclusive("shutdown", "restart")
 	f.BoolVar(&doClear, "clear", false, "Close the review: drop the diffs, comments and hooks of the group")
 	f.BoolVar(&clearAll, "all", false, "Close every review on the server; only meaningful with --clear, and refused without it")
+	f.BoolVar(&replaceDiffs, "replace", false,
+		"Once the new diff is added, drop the diffs the group already held (and the comments on them); hooks and the other comments stay")
 	f.BoolVar(&assumeYes, "yes", false, "Skip the confirmation of --clear")
 	f.BoolVar(&jsonOutput, "json", false, "Print structured JSON on stdout")
 	f.StringVar(&moBin, "mo-bin", "mo", "mo executable used for mo's Markdown preview")
@@ -278,9 +282,18 @@ func run(cmd *cobra.Command, _ []string) error {
 	}
 
 	c := client.New(addr(), uploadTimeout(len(content)))
-	_, started, err := ensureServer(ctx, c)
+	st, started, err := ensureServer(ctx, c)
 	if err != nil {
 		return err
+	}
+
+	// Taken before the new diff goes in, so that what is dropped afterwards
+	// is exactly what the group held before.
+	var previous []string
+	if replaceDiffs && content != "" {
+		if previous, err = diffIDs(ctx, c, st, group); err != nil {
+			return err
+		}
 	}
 
 	if err := registerHooks(ctx, c, group); err != nil {
@@ -301,6 +314,11 @@ func run(cmd *cobra.Command, _ []string) error {
 		}
 		out.URL = res.URL
 		out.Diff = summarize(res)
+		// Only after the new diff is in: a failed send must not leave the
+		// group empty.
+		if err := dropDiffs(ctx, c, group, previous); err != nil {
+			return err
+		}
 	}
 	// mo used to be what previewed Markdown, and its absence was worth a
 	// warning. sbnn renders the preview itself now, so nothing is missing:
@@ -310,6 +328,40 @@ func run(cmd *cobra.Command, _ []string) error {
 	out.print()
 	if shouldOpen(started) {
 		openURL(out.URL)
+	}
+	return nil
+}
+
+// diffIDs lists the diffs a group holds now, or nothing when the group does
+// not exist yet.
+func diffIDs(ctx context.Context, c *client.Client, st *server.Status, group string) ([]string, error) {
+	held := false
+	for _, g := range st.Groups {
+		if g.Name == group && g.Diffs > 0 {
+			held = true
+		}
+	}
+	if !held {
+		return nil, nil
+	}
+	g, err := c.Group(ctx, group)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(g.Diffs))
+	for _, d := range g.Diffs {
+		ids = append(ids, d.ID)
+	}
+	return ids, nil
+}
+
+// dropDiffs removes the given diffs from the group, with the comments that
+// were left on them.
+func dropDiffs(ctx context.Context, c *client.Client, group string, ids []string) error {
+	for _, id := range ids {
+		if err := c.DeleteDiff(ctx, group, id); err != nil {
+			return fmt.Errorf("drop the previous diff %s: %w", id, err)
+		}
 	}
 	return nil
 }
