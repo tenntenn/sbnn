@@ -14,6 +14,7 @@ import { Sidebar } from './components/Sidebar'
 import { clampRatio, SplitPane, SPLIT_DEFAULT } from './components/SplitPane'
 import { useNarrowLayout } from './useMediaQuery'
 import { plainKey, shortcuts, stepToComment, typingInto } from './shortcuts'
+import { announceNewDiffs, clearUnread, newDiffIds, requestNotifyPermission, storedNotify, storeNotify } from './notify'
 import { applyTheme, storedTheme, type Theme } from './theme'
 import { sectionKey } from './sectionKey'
 
@@ -127,6 +128,9 @@ export function App() {
   const [sidebarWidth, setSidebarWidth] = useState(storedSidebarWidth)
   const [theme, setTheme] = useState<Theme>(storedTheme)
   const [query, setQuery] = useState('')
+  const [notifyOn, setNotifyOn] = useState(() => !client.isStatic && storedNotify())
+  const notifyRef = useRef(notifyOn)
+  const seenDiffIds = useRef<Set<string> | null>(null)
   const [previewKind, setPreviewKind] = useState<PreviewKind>(storedPreviewKind)
   // readKeys is where the reader got to: the diffId:fileId pairs they have
   // said they are done with. Keying on the pair rather than the fileId is
@@ -161,6 +165,32 @@ export function App() {
     document.addEventListener('pointerdown', onPointerDown)
     return () => document.removeEventListener('pointerdown', onPointerDown)
   }, [settingsOpen])
+
+  useEffect(() => {
+    notifyRef.current = notifyOn
+    if (!client.isStatic) storeNotify(notifyOn)
+  }, [notifyOn])
+
+  // The unread marker belongs to a tab nobody was looking at; looking at it
+  // again is what clears it.
+  useEffect(() => {
+    const onVisible = () => {
+      if (!document.hidden) clearUnread()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
+
+  // Asking for permission happens here, from the click, and nowhere else.
+  const toggleNotify = async () => {
+    if (notifyOn) {
+      setNotifyOn(false)
+      clearUnread()
+      return
+    }
+    setNotifyOn(true)
+    await requestNotifyPermission()
+  }
 
   useEffect(() => {
     writeSetting(SIDEBAR_KEY, String(sidebarWidth))
@@ -204,6 +234,11 @@ export function App() {
   const reload = useCallback(async () => {
     try {
       const data = await client.load(group)
+      const ids = data.diffs.map((d) => d.id)
+      if (notifyRef.current && !client.isStatic) {
+        announceNewDiffs(group, newDiffIds(seenDiffIds.current, ids).length)
+      }
+      seenDiffIds.current = new Set(ids)
       setDiffs(data.diffs)
       setComments(data.comments)
       setReviewedAt(data.reviewedAt ?? null)
@@ -729,6 +764,21 @@ export function App() {
                   </button>
                 </div>
               </div>
+              {!client.isStatic && (
+                <div className="settings-row">
+                  <span className="settings-label">Notify on new diff</span>
+                  <div className="toggle sm">
+                    <button
+                      className={notifyOn ? 'active' : ''}
+                      aria-pressed={notifyOn}
+                      onClick={() => void toggleNotify()}
+                      title="When this tab is in the background, mark its title and show a notification as a new diff arrives"
+                    >
+                      {notifyOn ? 'On' : 'Off'}
+                    </button>
+                  </div>
+                </div>
+              )}
               {!client.isStatic && diffs.length > 0 && (
                 <>
                   <span className="settings-divider" />

@@ -283,6 +283,11 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   (or whatever host an exported page is read in), and a choice is remembered
   per browser. The Markdown preview keeps mo's own theme — mo has its own
   switch, in the toolbar inside the preview.
+- Settings → **Notify on new diff** (off by default, remembered per browser):
+  while the tab is in the background, a newly arrived diff puts `(n)` in the
+  tab title and raises a browser notification. The permission prompt appears
+  when you switch it on; if refused, only the title marker is used. Not
+  available on exported pages.
 - On a phone the page shows one pane at a time behind a **Files / Diff /
   Preview** tab bar, and the diff drops to unified. The preview is rendered by
   the page itself there — mo keeps its own sidebar inside the frame, which
