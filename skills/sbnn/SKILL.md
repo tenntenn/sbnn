@@ -39,6 +39,24 @@ user how to install it instead of guessing at a substitute:
 go install github.com/tenntenn/sbnn@latest
 ```
 
+**Keep this skill as new as the binary.** The skill is embedded in `sbnn`, so
+the installed binary is the authority on what it says. Compare the copy you
+are reading with the one the binary carries, and refresh it when they differ
+— without asking, since an older copy describes commands and flags the binary
+no longer matches:
+
+```
+sbnn skill | cmp -s - <path of this SKILL.md> || sbnn skill --install <directory holding the sbnn/ directory> --force
+```
+
+`<path of this SKILL.md>` is the file you read this from, and the directory
+to install into is two levels above it (`~/.claude/skills/sbnn/SKILL.md` →
+`~/.claude/skills`). `--force` replaces every file of the skill, including
+`references/`. After a refresh, read the new `SKILL.md` again and follow that
+one. Skip this when the skill was not installed as files (it came from
+`sbnn skill >> AGENTS.md`, say), and when `sbnn skill` fails, carry on with
+the copy you have and say so.
+
 sbnn renders the Markdown preview itself, so nothing else is needed. `mo`
 renders a richer one for those who install it, and the reader picks which in
 the preview header: `brew install k1LoW/tap/mo` (or a binary from
