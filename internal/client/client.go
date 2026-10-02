@@ -141,6 +141,11 @@ func (c *Client) ClearComments(ctx context.Context, group string, resolvedOnly b
 	return res.Removed, nil
 }
 
+// DeleteDiff drops one diff of a group, and the comments left on it.
+func (c *Client) DeleteDiff(ctx context.Context, group, diff string) error {
+	return c.do(ctx, http.MethodDelete, c.url("/_/api/groups/%s/diffs/%s", url.PathEscape(group), url.PathEscape(diff)), nil, nil)
+}
+
 // DeleteGroup drops a whole group, diffs and comments alike.
 func (c *Client) DeleteGroup(ctx context.Context, group string) error {
 	return c.do(ctx, http.MethodDelete, c.url("/_/api/groups/%s", url.PathEscape(group)), nil, nil)
