@@ -1,0 +1,141 @@
+$ sbnn skill --install /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/commands.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/notes.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/pipelines.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/review-history.md
+sbnn: installed the sbnn skill (5 file(s)) into /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills
+[exit=0]
+
+$ find /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills -type f | sort; sha256sum $(find /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills -type f | sort)
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/commands.md
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/notes.md
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/pipelines.md
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/review-history.md
+3944332a9001881955260328e54d4c890ef7435bad1989816515b757f5ae30ad  /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md
+27f0f9f788843bcc063e1470efd8f8e5950195ef236b5682915a2b9ceb98e6f6  /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/commands.md
+e4405bd9055a08e86595bdacbe4ee3c6edb7fc18d0a41b12989e74ebae92df93  /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/notes.md
+d2cc92eec7cadadb0f2a8a242a1a176e158d751407f7e3e4604524e4d7f5bbcb  /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/pipelines.md
+386ddca4d06103c2d8fa9dccc9a9a8927c5b68bb9f04e1e89340bf02835aa6c4  /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/review-history.md
+[exit=0]
+
+$ sbnn skill | cmp -s - /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md && echo MATCH
+MATCH
+[exit=0]
+
+REF=/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/commands.md
+$ echo 'STALE LINE from old version' >> /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md; echo STALE >> /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/commands.md; tail -n2 /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md; tail -n1 /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/commands.md
+  rarely decisive, when something surprises you.
+STALE LINE from old version
+STALE
+[exit=0]
+
+$ sbnn skill | cmp -s - /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md; echo cmp-exit=$?
+cmp-exit=1
+[exit=0]
+
+$ sbnn skill | cmp -s - /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md || sbnn skill --install /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills --force
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/commands.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/notes.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/pipelines.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/review-history.md
+sbnn: installed the sbnn skill (5 file(s)) into /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills
+[exit=0]
+
+$ grep -c STALE /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/commands.md; sbnn skill | cmp - /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md && echo SKILL_MATCH; sbnn skill --help 2>&1 | head -20
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md:0
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/commands.md:0
+SKILL_MATCH
+Print or install the agent skill bundled with sbnn.
+
+The skill is vendor neutral: it is a plain Markdown file with YAML front
+matter that describes the sbnn review workflow in terms of the sbnn command line,
+so any coding agent can use it. Install it where your agent looks for skills,
+or point at it from AGENTS.md.
+
+  $ sbnn skill                                   # print SKILL.md
+  $ sbnn skill --list                            # list the files of the skill
+  $ sbnn skill --install .claude/skills          # this project only
+  $ sbnn skill --install ~/.claude/skills        # all your projects
+  $ sbnn skill --install .agents/skills          # then link it from AGENTS.md
+  $ sbnn skill --install ~/.claude/skills --force  # replace an older copy
+
+--install writes the skill as a "sbnn" directory inside the directory you name
+(<dir>/sbnn/SKILL.md) and refuses to overwrite an existing file without --force.
+
+For an agent that reads AGENTS.md instead of a skills directory, install the
+file anywhere and point at it:
+
+[exit=0]
+
+$ sbnn skill | cmp -s - /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md || sbnn skill --install /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills --force; echo second-run-done; find /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills -type f -printf '%p %TT.%TN\n' | sort
+second-run-done
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md 20:15:01.6261204880.%N
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/commands.md 20:15:01.6261204880.%N
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/notes.md 20:15:01.6261204880.%N
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/pipelines.md 20:15:01.6261204880.%N
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/review-history.md 20:15:01.6261204880.%N
+[exit=0]
+
+$ dirname $(dirname /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md)
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills
+[exit=0]
+
+$ sbnn skill --install /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn --force; find /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368 -name SKILL.md | sort
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/sbnn/SKILL.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/sbnn/references/commands.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/sbnn/references/notes.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/sbnn/references/pipelines.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/sbnn/references/review-history.md
+sbnn: installed the sbnn skill (5 file(s)) into /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/sbnn/SKILL.md
+[exit=0]
+
+$ rm -rf /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/sbnn; sbnn skill --install /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills --force; find /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368 -name SKILL.md | sort; sbnn skill | cmp - /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md && echo MATCH
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/commands.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/notes.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/pipelines.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/review-history.md
+sbnn: installed the sbnn skill (5 file(s)) into /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills
+/tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md
+MATCH
+[exit=0]
+
+$ sbnn skill --install /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills; echo; sbnn skill | cmp - /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md
+sbnn: /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md already exists (pass --force to overwrite)
+
+cmp: EOF on - after byte 20611, line 456
+[exit=1]
+
+$ sbnn skill --install /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills --force
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/commands.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/notes.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/pipelines.md
+sbnn: wrote /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/references/review-history.md
+sbnn: installed the sbnn skill (5 file(s)) into /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills
+[exit=0]
+
+$ env PATH=/usr/bin:/bin bash -c 'command -v sbnn; sbnn skill | cmp -s - /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md || sbnn skill --install /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills --force; echo pipeline-exit=$?'
+bash: line 1: sbnn: command not found
+bash: line 1: sbnn: command not found
+pipeline-exit=127
+[exit=0]
+
+$ echo STALE >> /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md; env PATH=/usr/bin:/bin bash -c 'sbnn skill | cmp -s - /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md || sbnn skill --install /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills --force'; echo; tail -n1 /tmp/claude-1000/-home-tenntenn-repo-tenntenn-sbnn--git-wt-wt-1/5b9c51bd-a7fe-493d-8986-196a238b5224/scratchpad/t368/skills/sbnn/SKILL.md
+bash: line 1: sbnn: command not found
+bash: line 1: sbnn: command not found
+
+STALE
+[exit=0]
+
+$ sbnn skill >/dev/null; echo skill-exit=$?; sbnn skill --install /proc/nope/x --force; echo install-fail-exit=$?
+skill-exit=0
+sbnn: mkdir /proc/nope: no such file or directory
+install-fail-exit=1
+[exit=0]
+

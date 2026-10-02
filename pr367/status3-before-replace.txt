@@ -1,0 +1,4 @@
+      "diffs": 2,
+      "files": 2,
+      "comments": 1,
+      "hooks": 1

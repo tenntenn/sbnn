@@ -1,0 +1,34 @@
+[
+  {
+    "id": "c3",
+    "group": "t365",
+    "diffId": "d3",
+    "fileId": "f1-18b7cb09",
+    "path": "a.txt",
+    "author": "tester",
+    "side": "new",
+    "startLine": 2,
+    "endLine": 2,
+    "body": "comment on round3",
+    "snippet": "+ROUND3_TEXT",
+    "resolved": false,
+    "createdAt": "2026-10-02T20:15:43.905633926+09:00",
+    "updatedAt": "2026-10-02T20:15:43.905633926+09:00"
+  },
+  {
+    "id": "c4",
+    "group": "t365",
+    "diffId": "d3",
+    "fileId": "f1-18b7cb09",
+    "path": "a.txt",
+    "author": "tester",
+    "side": "new",
+    "startLine": 0,
+    "endLine": 0,
+    "body": "file comment",
+    "snippet": "",
+    "resolved": false,
+    "createdAt": "2026-10-02T20:15:43.912212352+09:00",
+    "updatedAt": "2026-10-02T20:15:43.912212352+09:00"
+  }
+]

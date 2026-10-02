@@ -1,0 +1,22 @@
+{
+  "app": "sbnn",
+  "version": "dev",
+  "revision": "df9233a9b42f1bcb2600c89af86ed2c0a4b9a00e",
+  "pid": 291849,
+  "url": "http://localhost:6392",
+  "moUrl": "http://localhost:6275",
+  "moProxyUrl": "http://127.0.0.1:39525",
+  "moAvailable": true,
+  "groups": [
+    {
+      "name": "t365",
+      "url": "http://localhost:6392/t365",
+      "diffs": 1,
+      "files": 1,
+      "comments": 1,
+      "unresolved": 1,
+      "reviewed": false,
+      "hooks": 0
+    }
+  ]
+}
