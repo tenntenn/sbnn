@@ -700,6 +700,87 @@ func TestBuildLeavesAnOversizedImageOutButNamesIt(t *testing.T) {
 	}
 }
 
+const twoImagesDiff = `diff --git a/img/ok.png b/img/ok.png
+new file mode 100644
+Binary files /dev/null and b/img/ok.png differ
+diff --git a/img/big.png b/img/big.png
+new file mode 100644
+Binary files /dev/null and b/img/big.png differ
+`
+
+// The payload is what the exported page reads, so its shape is the contract:
+// an image that was carried has an entry whose path is the one the diff
+// names, and one that was not has no entry at all - the placeholder is worded
+// from the file-level imageStatus and imageSize.
+func TestBuildImagePayloadShape(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "img", "ok.png"), 8)
+	writeFile(t, filepath.Join(dir, "img", "big.png"), asset.MaxBytes+1)
+
+	files := diff.Parse(twoImagesDiff)
+	g := &model.Group{
+		Name: "default",
+		Diffs: []*model.Diff{{
+			ID: "d1", Title: "first", BaseDir: dir, Raw: twoImagesDiff, Files: files,
+		}},
+	}
+	b, err := json.Marshal(export.Build(g, "test", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Diffs []struct {
+			Files []struct {
+				ID          string `json:"id"`
+				ImageStatus string `json:"imageStatus"`
+				ImageSize   int64  `json:"imageSize"`
+			} `json:"files"`
+		} `json:"diffs"`
+		Images map[string]map[string]any `json:"images"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name       string
+		file       int
+		wantEntry  bool
+		wantPath   string
+		wantStatus string
+		wantSize   int64
+	}{
+		{name: "ok", file: 0, wantEntry: true, wantPath: "img/ok.png", wantStatus: string(asset.StatusOK), wantSize: 8},
+		{name: "too-large", file: 1, wantEntry: false, wantStatus: string(asset.StatusTooLarge), wantSize: asset.MaxBytes + 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := got.Diffs[0].Files[tc.file]
+			if f.ImageStatus != tc.wantStatus || f.ImageSize != tc.wantSize {
+				t.Errorf("file carries %q, %d, want %q and %d", f.ImageStatus, f.ImageSize, tc.wantStatus, tc.wantSize)
+			}
+			entry, ok := got.Images["d1:"+f.ID]
+			if ok != tc.wantEntry {
+				t.Fatalf("has an images entry = %v (%v), want %v", ok, entry, tc.wantEntry)
+			}
+			if !ok {
+				return
+			}
+			if path, _ := entry["path"].(string); path != tc.wantPath {
+				t.Errorf("path = %q, want %q", path, tc.wantPath)
+			}
+			if raw, _ := json.Marshal(entry); strings.Contains(string(raw), dir) {
+				t.Errorf("entry %s names the directory %s", raw, dir)
+			}
+			for k := range entry {
+				if k != "dataUrl" && k != "path" {
+					t.Errorf("entry has an unexpected field %q", k)
+				}
+			}
+		})
+	}
+}
+
 func firstBytes(s string) string {
 	if len(s) > 40 {
 		return s[:40] + "..."
@@ -731,19 +812,11 @@ func TestBuildDoesNotFreezeAnImagePastTheCap(t *testing.T) {
 	p := export.Build(g, "test", time.Now())
 
 	img := files[1]
-	got, ok := p.Images["d1:"+img.ID]
-	if !ok {
-		t.Fatal("the image is missing from the page entirely; the reader should be told there was one")
+	if got, ok := p.Images["d1:"+img.ID]; ok {
+		t.Errorf("images has an entry %+v for a file past the %d cap, want none", got, asset.MaxBytes)
 	}
-	if got.DataURL != "" {
-		t.Errorf("dataUrl is %d bytes, want none: the file is %d bytes, past the %d cap",
-			len(got.DataURL), len(big), asset.MaxBytes)
-	}
-	if got.Status != string(asset.StatusTooLarge) || got.Size != int64(len(big)) {
-		t.Errorf("status = %q, size = %d, want %q and %d", got.Status, got.Size, asset.StatusTooLarge, len(big))
-	}
-	// The page decides what to draw off the file, before it looks in Images
-	// at all, so the verdict has to be on the frozen file too.
+	// The page decides what to draw off the file, and never looks in Images
+	// for it, so the verdict has to be on the frozen file.
 	frozen := p.Diffs[0].Files[1]
 	if frozen.ImageStatus != string(asset.StatusTooLarge) || frozen.ImageSize != int64(len(big)) {
 		t.Errorf("frozen file carries %q, %d, want %q and %d",
