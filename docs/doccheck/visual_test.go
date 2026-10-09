@@ -45,10 +45,21 @@ func issueRefs(s string) []string {
 }
 
 // testFail matches the arguments of a test.fail(...) call, across the line
-// breaks a formatter puts in. Only the call is read, not the comment above it:
-// a comment naturally cites the issues that were fixed and the ones that
-// explain the history, and none of those are what is pinned.
-var testFail = regexp.MustCompile(`(?s)test\.fail\((.*?)\)\n`)
+// breaks a formatter puts in. Only a call is read, not prose: the match is
+// anchored to a call at the start of a line, so a comment that mentions
+// test.fail() and cites the issues that were fixed (none of which are pinned)
+// is not one, and it ends at the close of the call, the first ")" that ends
+// its line.
+var testFail = regexp.MustCompile(`(?s)(?m:^)[ \t]*test\.fail\((.*?)\)[ \t]*;?[ \t]*(?m:$)`)
+
+// pinnedRefs collects the issues named by the test.fail() calls in a spec.
+func pinnedRefs(spec string) []string {
+	var out []string
+	for _, m := range testFail.FindAllStringSubmatch(spec, -1) {
+		out = append(out, issueRefs(m[1])...)
+	}
+	return out
+}
 
 // pinnedSection returns the body of the README's "Tests that are expected to
 // fail" section, which is where a pinned defect is written down.
@@ -89,10 +100,7 @@ func TestVisualReadmePinsMatchTheSpec(t *testing.T) {
 	spec := readVisualFile(t, "geometry.spec.ts")
 	pinned := pinnedSection(t, readVisualFile(t, "README.md"))
 
-	var annotated []string
-	for _, m := range testFail.FindAllStringSubmatch(spec, -1) {
-		annotated = append(annotated, issueRefs(m[1])...)
-	}
+	annotated := pinnedRefs(spec)
 
 	documented := issueRefs(pinned)
 
@@ -140,5 +148,43 @@ func TestVisualReadmeTablesDoNotOverlap(t *testing.T) {
 			t.Errorf("test/visual/README.md lists %s in both \"Tests that are expected to fail\" and \"Tests that guard\".\n"+
 				"A test is one or the other; carrying it in both is how the document came to say the defect was open and closed at once.", n)
 		}
+	}
+}
+
+// The check reads calls, not prose. The spec's own header comment mentions
+// test.fail() and cites issue numbers, and that must not count as a pin.
+func TestPinnedRefsReadsCallsNotProse(t *testing.T) {
+	cases := map[string]struct {
+		spec string
+		want []string
+	}{
+		"comment mentioning the call": {
+			spec: "// Nothing here is pinned with test.fail(), see #325 and #359.\ntest('a', async () => {});\n",
+			want: nil,
+		},
+		"commented out call": {
+			spec: "// was test.fail(true, 'defect #79')\n//   test.fail(true, 'defect #80')\n",
+			want: nil,
+		},
+		"call": {
+			spec: "test('a', async () => {\n  test.fail(true, 'defect #79');\n});\n",
+			want: []string{"#79"},
+		},
+		"call across lines": {
+			spec: "  test.fail(\n    true,\n    'defect #74 and #119',\n  );\n",
+			want: []string{"#119", "#74"},
+		},
+		"call after a comment": {
+			spec: "// fixed #325, no more test.fail()\ntest.fail(true, '#73')\n",
+			want: []string{"#73"},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := pinnedRefs(tc.spec)
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("pinnedRefs() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

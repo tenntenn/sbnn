@@ -50,23 +50,21 @@ type Preview struct {
 }
 
 // Image is one image file's content, frozen at export time as a data URL so
-// the exported page needs no server to show it - or, when it is too heavy to
-// carry, the reason there is no picture.
+// the exported page needs no server to show it.
 //
-// Which of the two it is comes from internal/asset, the same place the live
-// page's verdict comes from, so a diff image reads the same way on screen and
-// in the file that was mailed around (#323). Before that it was always the
-// data URL: one 32MiB PNG made a 45MB page.
+// There is an entry only for an image that was carried. One too heavy to carry
+// has none: the verdict and the size the placeholder is worded from are the
+// file-level imageStatus and imageSize, which internal/asset sets on the
+// frozen file, so a diff image reads the same way on screen and in the file
+// that was mailed around (#323). An entry would only repeat them where nothing
+// reads.
 type Image struct {
 	DataURL string `json:"dataUrl,omitempty"`
-	Path    string `json:"path,omitempty"`
-	// Status is why there is no data URL, when there is none. It is
-	// internal/asset.Status; the page words it the same way it words a
-	// sibling image that did not fit.
-	Status string `json:"status,omitempty"`
-	// Size is the file's size in bytes, so the placeholder can say how big
-	// the picture was.
-	Size int64 `json:"size,omitempty"`
+	// Path is the file as the diff names it, relative to the directory the
+	// diff was sent from. It is never absolute: the page is meant to be
+	// mailed around, and an absolute path would name a directory on the
+	// machine that ran sbnn export.
+	Path string `json:"path,omitempty"`
 }
 
 // Payload is the data the exported page reads out of window.__SBNN_DATA__.
@@ -171,15 +169,12 @@ func Build(g *model.Group, sbnnVersion string, now time.Time) *Payload {
 				}
 				p.Previews[key] = prev
 			case f.IsImage && f.Status != model.StatusDeleted:
-				status, size := asset.InDiff(d.BaseDir, f)
-				if status != asset.StatusOK {
+				if status, _ := asset.InDiff(d.BaseDir, f); status != asset.StatusOK {
 					// Nothing is read: the point of the cap is that the
-					// bytes never move. A status the page can word is
-					// still worth carrying, so the reader is told there
-					// was a picture rather than shown a gap.
-					if status == asset.StatusTooLarge {
-						p.Images[key] = Image{Path: f.Path(), Status: string(status), Size: size}
-					}
+					// bytes never move. The verdict is already on the
+					// frozen file (imageStatus, imageSize), which is what
+					// the page words the placeholder from, so there is no
+					// Images entry to write.
 					continue
 				}
 				got := source.NewSide(d.BaseDir, f)
@@ -189,7 +184,7 @@ func Build(g *model.Group, sbnnVersion string, now time.Time) *Payload {
 				p.Images[key] = Image{
 					DataURL: "data:" + diff.ImageContentType(f.Path()) + ";base64," +
 						base64.StdEncoding.EncodeToString([]byte(got.Content)),
-					Path: got.Path,
+					Path: f.Path(),
 				}
 			}
 		}

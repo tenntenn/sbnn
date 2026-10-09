@@ -68,9 +68,6 @@ jobs:
 # so a sync check would fail on every pull request.
 #
 # test/visual (Playwright) is deliberately not run here either, for the same
-# reason and one more. It drives the committed web/dist, so on a pull request
-# that changes web/src it reports on how old the bundle is rather than on the
-# change; and it carries test.fail() annotations pinning defects that are open
-# (#73, #74, #79, #119), so it is built to go red on the pull request that
-# fixes one. That is the signal its README wants and the wrong semantics for a
-# check that blocks a merge. Run it yourself: see test/visual/README.md.
+# reason. It drives the committed web/dist, so on a pull request that changes
+# web/src it reports on how old the bundle is rather than on the change. Run it
+# yourself; test/visual/README.md says what it pins and what it guards.
