@@ -106,6 +106,24 @@ const PreviewSlot = memo(function PreviewSlot({
   const ref = useCallback((el: HTMLDivElement | null) => register(key, el), [register, key])
   const onSettled = useCallback(() => settled(key), [settled, key])
   const onUserScroll = useCallback(() => onSync(false), [onSync])
+  // A section the reader has not been near yet has nothing to show but its
+  // place: no fetch, no body, only a line saying so. At 3000 files that line's
+  // header, buttons and placeholder were 3000 sections of about ten nodes each,
+  // and the browser walks every node on every event (#404). So until it is
+  // activated it is the bare shell the diff stack uses, as tall as that line
+  // was. Not while a body is wanted (the find hold mounts them all, so the
+  // paths are there to be found): then it is the section as before.
+  if (!active && !bodyMounted) {
+    return (
+      <div
+        id={key}
+        data-section-key={key}
+        className="file-section preview-shell"
+        ref={ref}
+        aria-hidden
+      />
+    )
+  }
   return (
     <div id={key} data-section-key={key} className="file-section" ref={ref}>
       <PreviewFileSection
