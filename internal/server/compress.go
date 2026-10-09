@@ -147,7 +147,7 @@ func compressible(status int, h http.Header) bool {
 func acceptsGzip(h http.Header) bool {
 	gzipQ, starQ := -1.0, -1.0
 	for _, field := range h.Values("Accept-Encoding") {
-		for _, part := range strings.Split(field, ",") {
+		for part := range strings.SplitSeq(field, ",") {
 			name, params, _ := strings.Cut(strings.TrimSpace(part), ";")
 			q := 1.0
 			if k, v, ok := strings.Cut(strings.TrimSpace(params), "="); ok && strings.EqualFold(strings.TrimSpace(k), "q") {
@@ -182,7 +182,7 @@ func bodyETag(body []byte) string {
 func etagMatches(h http.Header, etag string) bool {
 	want := strings.TrimPrefix(etag, "W/")
 	for _, field := range h.Values("If-None-Match") {
-		for _, part := range strings.Split(field, ",") {
+		for part := range strings.SplitSeq(field, ",") {
 			part = strings.TrimSpace(part)
 			if part == "*" || strings.TrimPrefix(part, "W/") == want {
 				return true
