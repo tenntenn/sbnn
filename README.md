@@ -684,6 +684,14 @@ re-running it after upgrading sbnn is a one-liner:
 $ sbnn skill --install ~/.claude/skills --force
 ```
 
+`--force` replaces the skill whatever it says. Each installed `SKILL.md` records
+the release of the sbnn that wrote it (`metadata.version`), and
+`sbnn skill --refresh <dir>` uses that: it reinstalls only when your sbnn is
+newer, and leaves a skill from a newer sbnn alone (saying that sbnn should be
+upgraded) instead of swapping it for older text. A source build (`dev`) records
+no release and never overwrites a released skill. The skill uses this command to
+keep itself current.
+
 Where `<dir>` should point depends on the agent. The common ones:
 
 | Agent | Command |
@@ -735,7 +743,7 @@ to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
 | `sbnn hook` | Run something when a review is submitted | `--on-review`, `--on-review-url`, `--clear`, `--json` |
 | `sbnn reviews` | Read the log of submitted reviews | `--since`, `--stats`, `--top`, `--limit`, `--comments`, `--all`, `--file`, `--history-file`, `--format` (`text`, `json`, `jsonl`) |
 | `sbnn export [file]` | Write the review as one self-contained HTML page | `--fragment`, `--page-title`, `--title` |
-| `sbnn skill` | Print or install the agent skill | `--list`, `--install`, `--force` |
+| `sbnn skill` | Print or install the agent skill | `--list`, `--install`, `--force`, `--refresh` |
 
 ## How the Markdown preview works
 
