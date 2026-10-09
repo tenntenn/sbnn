@@ -29,8 +29,32 @@ test.describe('lazily mounted sections', () => {
     expect(await page.locator('.diff-stack .file-section:has(table)').count()).toBeLessThan(MANY_FILES / 5)
   })
 
+  // 300 files are 300 rows of about nine nodes; the sidebar keeps the ones near
+  // its viewport (#404), and the list is as tall as all of them so the
+  // scrollbar still says how long the review is.
+  test('the sidebar holds only the rows near its viewport, and the list keeps its height', async ({ page }) => {
+    await open(page)
+    const rows = page.locator('.sidebar .file-item')
+    await expect(rows.first()).toBeVisible()
+    expect(await rows.count(), 'rows on the page').toBeLessThan(MANY_FILES / 2)
+    const tall = await page.locator('.sidebar').evaluate((el) => el.scrollHeight)
+    await page.locator('.sidebar').evaluate((el) => {
+      el.scrollTop = el.scrollHeight
+    })
+    await expect(rows.last()).toContainText(`file${MANY_FILES - 1}.go`)
+    expect(await rows.count(), 'rows on the page at the end').toBeLessThan(MANY_FILES / 2)
+    const after = await page.locator('.sidebar').evaluate((el) => el.scrollHeight)
+    expect(Math.abs(after - tall), 'the list is as tall at the end as at the start').toBeLessThan(tall * 0.05)
+  })
+
   test('a file far down is mounted once the sidebar jumps to it, and the first one is let go', async ({ page }) => {
     await open(page)
+    // The sidebar only holds the rows near its viewport (#404), so the last
+    // file's row is there once the reader has scrolled the list to the end.
+    await page.locator('.sidebar').evaluate((el) => {
+      el.scrollTop = el.scrollHeight
+    })
+    await expect(page.locator('.sidebar .file-item', { hasText: `file${MANY_FILES - 1}.go` })).toBeVisible()
     await page.locator('.sidebar .file-item').last().click()
     await expect(page.locator('.diff-stack .file-section').last().locator('table')).toBeVisible()
     await expect(page.locator('.diff-stack .file-section').first().locator('table')).toHaveCount(0)

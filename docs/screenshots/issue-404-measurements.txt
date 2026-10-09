@@ -1,0 +1,36 @@
+#404: DOM size against per-event cost, 3000 files / 1000 comments
+
+Setup
+  group t404 on a fresh server (port 6413), minified builds of origin/main bb97126 ("before")
+  and of this branch ("after"), Chrome via agent-browser, 1440x900, one tab.
+  Same load generator as #402 (docs/screenshots/pr402/method: 100 files per round,
+  2 Markdown files in each, 1 comment per 3 files). The same state directory served both
+  builds, after the "after" run had added 3 rounds and 5 comments (3006 -> 3012 files).
+
+Per-event frame cost
+  One style change on a small node, then the time to the macrotask after the next frame
+  (mutation -> requestAnimationFrame -> MessageChannel), 25 rounds, median / p90.
+  A 60 Hz frame is about 16 ms, so ~16-20 ms is the floor of this probe.
+
+                      before (3012 files)   after (3006 files)
+  DOM nodes           65843                 11297
+    sidebar           28377                 1126
+    preview stack     31656                 4379
+    diff stack        5766                  5748
+  frame, median       36.5 / 36.6 / 36.4    16.3 / 18.1 / 19.0   (three runs each)
+  frame, p90          38.2 / 37.7 / 52.6    20.3 / 20.5 / 21.1
+  heap after load     ~126 MB               ~27 MB (GC timing moves both)
+
+Long tasks (>= 50 ms), 5 comment events + 3 round events, one every 3 s
+  before: comment 1 task of 75 ms, round 1 task of 52 ms
+  after:  none
+
+Behaviour checked after the change (verify.py, 3000 files, same session as above)
+  sidebar rows on the page: 75 at the top, 150 at the middle, 81 at the end (of 3006)
+  sidebar scrollHeight: 88724 after, 88418 before (the same list height, +6 files)
+  read mark on file 0: kept after scrolling the sidebar to the middle and back,
+    "1 of 3006 read" throughout, cleared by "Mark all unread"
+  click a row in the middle (docs/r16/doc0.md): the diff pane scrolls to it, it is active
+  keyboard j, j, k from there: docs/r16/doc1.md, pkg2/r16_file2.go, docs/r16/doc1.md -
+    the active row is on the page each time
+  scrolling the diff pane to 90 % and back: the active file follows (r28, then r1)

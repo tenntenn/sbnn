@@ -1999,6 +1999,13 @@ a {
   min-width: 0;
 }
 
+/* A preview section nobody has been near yet (#404): an empty box as tall as
+   the header and the "not loaded" line it stands in for were, so the page does
+   not shift when the real section takes its place. */
+.preview-shell {
+  height: 121px;
+}
+
 /* The preview header carries more than it used to - the renderer choice and
    the sync switch on top of the rest - so the parts that can give way do.
    The path is the first to shrink, the controls keep their size. */

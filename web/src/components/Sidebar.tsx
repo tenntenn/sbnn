@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -15,6 +16,14 @@ import { client } from '../client'
 import { readEnumSetting, writeSetting } from '../storage'
 import { Icon } from './Icon'
 import { sectionKey } from '../sectionKey'
+import {
+  ROW_CHUNK,
+  chunkStarts,
+  createNear,
+  isWindowed,
+  placeholderHeight,
+  type Near,
+} from '../sidebarWindow'
 import {
   MAX_SCANNED_LINES,
   SEARCH_DEBOUNCE_MS,
@@ -117,6 +126,12 @@ export function Sidebar({
   // A shut round still says how much is waiting inside it.
   const roundComments = (diff: Diff): number => counts.totals.get(diff.id) ?? 0
 
+  // A long list keeps only the rows near the viewport on the page (#404). The
+  // rows are told by one observer rooted at this element, which scrolls.
+  const asideRef = useRef<HTMLElement>(null)
+  const near = useMemo(() => createNear(() => asideRef.current), [])
+  useEffect(() => () => near.dispose(), [near])
+
   // Rounds pile up: a review of four diffs is four headings and everything
   // under them. A round can be shut, and the whole list can be turned into
   // tabs, which shows one round at a time.
@@ -168,6 +183,7 @@ export function Sidebar({
   const found = results.active ? results.files : total
 
   const searching = results.active
+  const windowed = isWindowed(total)
 
   // A search is about the whole review, not about one round of it, so the
   // tabs are searched too: a round with nothing matching drops out of the
@@ -195,6 +211,9 @@ export function Sidebar({
   // round is a match nobody sees.
   const isShut = (diff: Diff): boolean =>
     layout === 'list' && !searching && shutRounds.has(diff.id)
+  // The first round on show has its first rows on the page before the
+  // observer has said anything, so the list is never empty on first paint.
+  const firstShown = diffs.find((d) => visible(d))?.id ?? null
 
   // The callbacks handed to SidebarRound and SidebarFile keep one identity for
   // as long as the group stays (#402): they read what changes through refs, so
@@ -254,6 +273,7 @@ export function Sidebar({
 
   return (
     <aside
+      ref={asideRef}
       className={`sidebar${width === 0 ? ' collapsed' : ''}${width === null ? ' fill' : ''}`}
       style={width === null ? undefined : { width }}
       aria-hidden={width === 0}
@@ -392,6 +412,8 @@ export function Sidebar({
             counts={counts.byRound.get(diff.id) ?? noCounts()}
             open={roundComments(diff)}
             hidden={!visible(diff)}
+            near={windowed ? near : null}
+            eager={diff.id === firstShown}
             tabs={layout === 'tabs'}
             shut={isShut(diff)}
             activeKey={diff.id === activeDiffId ? activeKey : null}
@@ -434,6 +456,11 @@ interface RoundProps {
   /** open is how many unresolved comments the whole round holds. */
   open: number
   hidden: boolean
+  /** near is the observer that windows the rows, or null for a list short
+   * enough to render whole. */
+  near: Near | null
+  /** eager is true for the round whose first rows are mounted at once. */
+  eager: boolean
   tabs: boolean
   shut: boolean
   /** activeKey is the active section when it is in this round, else null, so
@@ -461,6 +488,8 @@ const SidebarRound = memo(function SidebarRound({
   counts,
   open,
   hidden,
+  near,
+  eager,
   tabs,
   shut,
   activeKey,
@@ -503,13 +532,125 @@ const SidebarRound = memo(function SidebarRound({
           </button>
         )}
       </div>
-      <ul className="file-list" hidden={shut}>
-        {files.map((file) => {
-          const key = sectionKey(diff.id, file.id)
+      {(near ? chunkStarts(files.length) : [0]).map((start) => (
+        <FileChunk
+          key={start}
+          diffId={diff.id}
+          files={files}
+          start={start}
+          end={near ? Math.min(start + ROW_CHUNK, files.length) : files.length}
+          near={near}
+          eager={eager && start < 2 * ROW_CHUNK}
+          shut={shut}
+          counts={counts}
+          activeKey={activeKey}
+          hits={hits}
+          readKeys={readKeys}
+          onJump={onJump}
+          onSetRead={onSetRead}
+        />
+      ))}
+    </div>
+  )
+})
+
+interface ChunkProps {
+  diffId: string
+  files: FileDiff[]
+  /** start and end are the rows of `files` this list holds. */
+  start: number
+  end: number
+  near: Near | null
+  eager: boolean
+  shut: boolean
+  counts: FileCounts
+  activeKey: string | null
+  hits: ReadonlyMap<string, FileMatch>
+  readKeys: Set<string>
+  onJump: (diffId: string, fileId: string) => void
+  onSetRead: (key: string, value: boolean) => void
+}
+
+/**
+ * A run of consecutive rows of one round. Without `near` it is the whole round,
+ * as the list always was. With it, the run keeps its rows only while it is near
+ * the sidebar's viewport, and stands as an empty list of the same height
+ * otherwise (#404).
+ *
+ * It keeps its rows regardless when it holds the active file, so the row that
+ * says where the reader is always exists, and when focus is inside it, so a
+ * reader tabbing through the list is not dropped onto the page.
+ */
+const FileChunk = memo(function FileChunk({
+  diffId,
+  files,
+  start,
+  end,
+  near,
+  eager,
+  shut,
+  counts,
+  activeKey,
+  hits,
+  readKeys,
+  onJump,
+  onSetRead,
+}: ChunkProps) {
+  const ref = useRef<HTMLUListElement>(null)
+  const measured = useRef<number | undefined>(undefined)
+  const [isNear, setNear] = useState(
+    near === null || eager || typeof IntersectionObserver === 'undefined',
+  )
+  let holdsActive = false
+  if (near && activeKey !== null) {
+    for (let i = start; i < end; i++) {
+      if (sectionKey(diffId, files[i].id) === activeKey) {
+        holdsActive = true
+        break
+      }
+    }
+  }
+  const show = isNear || holdsActive
+
+  useEffect(() => {
+    const el = ref.current
+    if (!near || !el) return
+    return near.watch(el, (nowNear) => {
+      if (!nowNear && el.contains(document.activeElement)) return
+      setNear(nowNear)
+    })
+  }, [near])
+
+  // How tall the rows made the list, for when they are gone. A list that is
+  // hidden (a shut round, another tab) measures 0 and says nothing.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!near || !show || !el) return
+    const height = el.offsetHeight
+    if (height <= 0) return
+    measured.current = height
+    near.learn(height, end - start)
+  })
+
+  return (
+    <ul
+      ref={ref}
+      className="file-list"
+      hidden={shut}
+      aria-hidden={show ? undefined : true}
+      style={
+        show || !near
+          ? undefined
+          : { height: placeholderHeight(measured.current, end - start, near.rowHeight) }
+      }
+    >
+      {show &&
+        files.slice(start, end).map((file) => {
+          const key = sectionKey(diffId, file.id)
           return (
             <SidebarFile
               key={file.id}
-              diffId={diff.id}
+              diffId={diffId}
               file={file}
               active={activeKey === key}
               count={counts.get(file.id) ?? 0}
@@ -520,8 +661,7 @@ const SidebarRound = memo(function SidebarRound({
             />
           )
         })}
-      </ul>
-    </div>
+    </ul>
   )
 })
 
