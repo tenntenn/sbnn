@@ -249,7 +249,8 @@ export function App() {
           const data = await client.loadComments(group)
           if (!ticket.freshComments()) return
           setComments((prev) => shareComments(prev, data.comments))
-          setStatus(data.status)
+          // A page with no server behind it has no status to bring.
+          if (data.status) setStatus(data.status)
           setError(null)
           return
         }

@@ -1343,19 +1343,23 @@ func (s *Server) notify(group string) {
 //
 // The full event goes out beside the scoped one, for a subscriber that has
 // dropped an event (see broker.publishChange).
+//
+// A caller promises that the change left the diffs and the review alone: the
+// page keeps what it holds of both.
 func (s *Server) notifyComments(group string) {
 	s.notifyScoped(group, scopeComments)
 }
 
 func (s *Server) notifyScoped(group, scope string) {
-	full, err := json.Marshal(map[string]string{"type": "change", "group": group})
+	m := map[string]string{"type": "change", "group": group}
+	full, err := json.Marshal(m)
 	if err != nil {
 		return
 	}
 	var scoped []byte
 	if scope != "" {
-		scoped, err = json.Marshal(map[string]string{"type": "change", "group": group, "scope": scope})
-		if err != nil {
+		m["scope"] = scope
+		if scoped, err = json.Marshal(m); err != nil {
 			return
 		}
 	}
@@ -1572,8 +1576,12 @@ func (b *broker) publishChange(full, scoped []byte) {
 		if scoped != nil && !b.lagging[ch] {
 			msg = scoped
 		}
-		if deliver(ch, event{data: msg}) {
-			delete(b.lagging, ch)
+		if queued, _ := deliver(ch, event{data: msg}); queued {
+			// Whatever this one says, the subscriber is told about it now,
+			// and a full notice covers what it lost before.
+			if scoped == nil || b.lagging[ch] {
+				delete(b.lagging, ch)
+			}
 		} else {
 			b.lagging[ch] = true
 		}
@@ -1595,7 +1603,11 @@ func (b *broker) publishReview(group string, msg []byte) {
 // fanout queues ev for every subscriber. b.mu must be held.
 func (b *broker) fanout(ev event) {
 	for ch := range b.subs {
-		deliver(ch, ev)
+		// Making room for a review notice throws queued change notices away,
+		// and with them what they said changed.
+		if _, lost := deliver(ch, ev); lost {
+			b.lagging[ch] = true
+		}
 	}
 }
 
@@ -1609,15 +1621,16 @@ func (b *broker) fanout(ev event) {
 // forever on a review that already finished. So make room for it by discarding
 // queued change notices, keeping any review notices in order.
 //
-// It reports whether ev was queued.
-func deliver(ch chan event, ev event) bool {
+// It reports whether ev was queued, and whether a change notice was lost on the
+// way: ev itself, or one that was queued and discarded to make room.
+func deliver(ch chan event, ev event) (queued, lost bool) {
 	select {
 	case ch <- ev:
-		return true
+		return true, false
 	default:
 	}
 	if ev.id == 0 {
-		return false
+		return false, true
 	}
 	keep := make([]event, 0, cap(ch)+1)
 drain:
@@ -1626,6 +1639,8 @@ drain:
 		case old := <-ch:
 			if old.id != 0 {
 				keep = append(keep, old)
+			} else {
+				lost = true
 			}
 		default:
 			break drain
@@ -1639,5 +1654,5 @@ drain:
 			slog.Warn("dropped a review notice: the event queue is full", "id", q.id)
 		}
 	}
-	return true
+	return true, lost
 }

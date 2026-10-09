@@ -120,3 +120,29 @@ func TestLaggingSubscriberGetsTheFullNotice(t *testing.T) {
 		t.Fatalf("after catching up got %s, want the scoped one again", got)
 	}
 }
+
+// Making room for a review notice throws the queued change notices away, and
+// the page ignores a review of another group, so what they said changed is
+// lost as well: the next notice has to be the full one.
+func TestReviewDrainMarksTheSubscriberLagging(t *testing.T) {
+	b := newBroker()
+	ch, ok := b.subscribe()
+	if !ok {
+		t.Fatal("subscribe refused")
+	}
+	full := []byte(`{"type":"change","group":"g"}`)
+	scoped := []byte(`{"type":"change","group":"g","scope":"comments"}`)
+
+	for range cap(ch) {
+		b.publishChange(full, nil)
+	}
+	b.publishReview("other", []byte(`{"type":"review","group":"other"}`))
+	for len(ch) > 0 {
+		<-ch
+	}
+
+	b.publishChange(full, scoped)
+	if got := (<-ch).data; string(got) != string(full) {
+		t.Fatalf("after a drain got %s, want the full notice", got)
+	}
+}
