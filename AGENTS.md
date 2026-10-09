@@ -24,7 +24,9 @@ $ git diff | sbnn export --target <topic> review.html   # a page that needs no s
 ## Working on sbnn
 
 - Build: `task build` (runs `pnpm build` in `web/`, then `go build`).
-- Test: `task test`.
+- Test: `task test` (runs `go test ./...` and the review UI tests under
+  `web/test`; the web half needs pnpm, so on a machine without it run
+  `task test-go`).
 - Tools are managed with [aqua](https://aquaproj.github.io/); run `aqua install` to get `task`.
 - The built UI in `web/dist` is committed on purpose, so `go install` works
   without Node. Rebuild it whenever `web/src` changes.
