@@ -133,7 +133,7 @@ export interface StaticPayload {
       assets?: PreviewAssets
     }
   >
-  images: Record<string, { dataUrl?: string; path?: string; status?: string; size?: number }>
+  images: Record<string, { dataUrl?: string; path?: string }>
 }
 
 /**
