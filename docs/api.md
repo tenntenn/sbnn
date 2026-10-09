@@ -880,7 +880,7 @@ One file of a round. `internal/model`.
 | `isMarkdown` | bool | |
 | `isImage` | bool | |
 | `isNotebook` | bool | |
-| `imageStatus` | string | for an image, whether there is a picture to draw: `ok`, `too-large`, `missing`, `outside`. Omitted otherwise |
+| `imageStatus` | string | for an image, whether there is a picture to draw: `ok`, `too-large`, `missing`, `outside`, and, in an exported page only, `over-budget` (the page's 8 MiB of diff images was already spent). Omitted otherwise |
 | `imageSize` | number | that file's size in bytes. Omitted when there is none |
 | `hunks` | array | [`Hunk`](#hunk). Empty for a binary file |
 

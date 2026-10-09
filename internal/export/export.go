@@ -131,6 +131,10 @@ func Build(g *model.Group, sbnnVersion string, now time.Time) *Payload {
 	if p.Comments == nil {
 		p.Comments = []*model.Comment{}
 	}
+	// spent is what the images of the diffs so far have cost the page, in
+	// bytes. It runs across every diff of the group, in the order they are
+	// frozen, because the bound is on the page and not on a file.
+	var spent int64
 	for _, d := range g.Diffs {
 		// The raw diff text is already represented by the parsed files;
 		// dropping it keeps the page roughly half the size.
@@ -144,13 +148,14 @@ func Build(g *model.Group, sbnnVersion string, now time.Time) *Payload {
 			cp := *f
 			cp.ImageStatus, cp.ImageSize = "", 0
 			if status, size := asset.InDiff(d.BaseDir, f); status != "" {
+				status = asset.Spend(status, size, &spent)
 				cp.ImageStatus, cp.ImageSize = string(status), size
 			}
 			frozen.Files = append(frozen.Files, &cp)
 		}
 		p.Diffs = append(p.Diffs, &frozen)
 
-		for _, f := range d.Files {
+		for i, f := range d.Files {
 			key := d.ID + ":" + f.ID
 			switch {
 			case (f.IsMarkdown || f.IsNotebook) && !f.IsBinary && f.Status != model.StatusDeleted:
@@ -169,9 +174,10 @@ func Build(g *model.Group, sbnnVersion string, now time.Time) *Payload {
 				}
 				p.Previews[key] = prev
 			case f.IsImage && f.Status != model.StatusDeleted:
-				if status, _ := asset.InDiff(d.BaseDir, f); status != asset.StatusOK {
+				if frozen.Files[i].ImageStatus != string(asset.StatusOK) {
 					// Nothing is read: the point of the cap is that the
-					// bytes never move. The verdict is already on the
+					// bytes never move, past the per-file cap or past the page
+					// budget alike (#356). The verdict is already on the
 					// frozen file (imageStatus, imageSize), which is what
 					// the page words the placeholder from, so there is no
 					// Images entry to write.
