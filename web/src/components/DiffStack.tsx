@@ -14,7 +14,7 @@ import type { Comment, Diff, ViewMode } from '../types'
 import { estimatedHeight } from '../estimatedHeight'
 import { sectionKey } from '../sectionKey'
 import { nextActive } from '../activeSection'
-import { shareGroups } from '../share'
+import { sameElements } from '../share'
 import { DiffFileSection } from './DiffFileSection'
 import { Icon } from './Icon'
 
@@ -157,6 +157,19 @@ interface StackFileProps {
  * it takes is either a primitive or an object that keeps its identity while it
  * does not change (see ../share), so only the file that changed renders.
  */
+// The comment list of a file is built again on every render of the stack, so
+// it is compared by its elements (which keep their identity, see ../share)
+// rather than by reference. The narrow layout in App.tsx still passes inline
+// closures to its single DiffFileSection; it renders one file, so that is
+// not worth a memo.
+function stackFilePropsEqual(a: StackFileProps, b: StackFileProps): boolean {
+  for (const k of Object.keys(a) as (keyof StackFileProps)[]) {
+    if (k === 'comments') continue
+    if (a[k] !== b[k]) return false
+  }
+  return sameElements(a.comments, b.comments)
+}
+
 const StackFile = memo(function StackFile({
   sectionKey: key,
   group,
@@ -203,7 +216,7 @@ const StackFile = memo(function StackFile({
       />
     </div>
   )
-})
+}, stackFilePropsEqual)
 
 export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
   {
@@ -249,9 +262,6 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
     [diffs],
   )
 
-  // A file whose comments did not change keeps the list it had, which is what
-  // lets its memoised section below skip rendering (#376).
-  const previousByKey = useRef(new Map<string, Comment[]>())
   const commentsByKey = useMemo(() => {
     const map = new Map<string, Comment[]>()
     for (const c of comments) {
@@ -260,11 +270,8 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
       if (list) list.push(c)
       else map.set(key, [c])
     }
-    return shareGroups(previousByKey.current, map)
+    return map
   }, [comments])
-  useEffect(() => {
-    previousByKey.current = commentsByKey
-  }, [commentsByKey])
 
   const registerSection = useCallback((key: string, el: HTMLDivElement | null) => {
     if (el) sectionEls.current.set(key, el)
