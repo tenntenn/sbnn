@@ -500,6 +500,11 @@ comments on nothing else are kept):
 $ <diff> | sbnn --replace
 ```
 
+An empty diff replaces nothing, so the diffs the group held stay. sbnn says so
+on stderr (`sbnn: the diff is empty, so nothing was replaced; ...`) and still
+exits 0, since the review page is there to open; read stderr, not the URL, to
+tell it from a successful replace.
+
 ### Approve, comment, or request changes
 
 A review says two different things: what is wrong with particular lines, and

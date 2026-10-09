@@ -113,6 +113,7 @@ Review comments:
   $ sbnn comments --format json     # comments as JSON
   $ sbnn comments --clear           # start the next review round
   $ <diff> | sbnn --replace         # send the next round in place of the last diff
+                                    # (an empty diff replaces nothing; says so on stderr, exit 0)
 
   They go the other way too: an agent can point at the lines it is unsure
   about, and the human sees it next to the diff.
@@ -196,7 +197,7 @@ func init() {
 	f.BoolVar(&doClear, "clear", false, "Close the review: drop the diffs, comments and hooks of the group")
 	f.BoolVar(&clearAll, "all", false, "Close every review on the server; only meaningful with --clear, and refused without it")
 	f.BoolVar(&replaceDiffs, "replace", false,
-		"Once the new diff is added, drop the diffs the group already held (and the comments on them); hooks and the other comments stay")
+		"Once the new diff is added, drop the diffs the group already held (and the comments on them); hooks and the other comments stay. An empty diff replaces nothing: sbnn says so on stderr and still exits 0")
 	f.BoolVar(&assumeYes, "yes", false, "Skip the confirmation of --clear")
 	f.BoolVar(&jsonOutput, "json", false, "Print structured JSON on stdout")
 	f.StringVar(&moBin, "mo-bin", "mo", "mo executable used for mo's Markdown preview")
@@ -289,11 +290,9 @@ func run(cmd *cobra.Command, _ []string) error {
 
 	// Taken before the new diff goes in, so that what is dropped afterwards
 	// is exactly what the group held before.
-	var previous []string
-	if replaceDiffs && content != "" {
-		if previous, err = diffIDs(ctx, c, st, group); err != nil {
-			return err
-		}
+	previous, err := previousDiffs(ctx, c, st, group, replaceDiffs, content, os.Stderr)
+	if err != nil {
+		return err
 	}
 
 	if err := registerHooks(ctx, c, group); err != nil {
@@ -330,6 +329,21 @@ func run(cmd *cobra.Command, _ []string) error {
 		openURL(out.URL)
 	}
 	return nil
+}
+
+// previousDiffs returns the diffs --replace is going to drop once the new one
+// is in. With an empty diff nothing is dropped, which is the safe thing, but
+// it would look just like a successful replace, so say so on w. The exit
+// status stays 0: the review page is still there to open.
+func previousDiffs(ctx context.Context, c *client.Client, st *server.Status, group string, replace bool, content string, w io.Writer) ([]string, error) {
+	if !replace {
+		return nil, nil
+	}
+	if content == "" {
+		fmt.Fprintln(w, "sbnn: the diff is empty, so nothing was replaced; the diffs the group held are still there")
+		return nil, nil
+	}
+	return diffIDs(ctx, c, st, group)
 }
 
 // diffIDs lists the diffs a group holds now, or nothing when the group does
