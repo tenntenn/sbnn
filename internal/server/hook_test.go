@@ -411,14 +411,57 @@ func TestRunHookRecordsTheOutcome(t *testing.T) {
 // The outcome is written to the session file every round, so a command that
 // fails with a wall of output must not grow it by a wall of output a round.
 func TestHookRunDetailIsOneShortLine(t *testing.T) {
-	run := hookRun(false, "exit status 1: "+strings.Repeat("noise ", 500)+"\nand more\n")
-	if len(run.Detail) > maxHookDetail+len(" ...") {
-		t.Errorf("detail is %d bytes, want at most %d", len(run.Detail), maxHookDetail+len(" ..."))
+	cases := map[string]struct {
+		detail string
+		prefix string
+		folded bool // whether a following line was dropped, so " ..." is expected
+		capped bool // whether the byte cap applies
+	}{
+		"long first line": {
+			detail: "exit status 1: " + strings.Repeat("noise ", 500) + "\nand more\n",
+			prefix: "exit status 1",
+			folded: true,
+			capped: true,
+		},
+		"newline inside": {
+			detail: "exit status 1: boom\nsecond line\nthird line",
+			prefix: "exit status 1: boom",
+			folded: true,
+		},
+		"crlf inside": {
+			detail: "exit status 1: boom\r\nsecond line\r\nthird line",
+			prefix: "exit status 1: boom",
+			folded: true,
+		},
+		"bare cr inside": {
+			detail: "exit status 1: boom\rsecond line\rthird line",
+			prefix: "exit status 1: boom",
+			folded: true,
+		},
+		"trailing newline": {
+			detail: "exit status 1: boom\n",
+			prefix: "exit status 1: boom",
+		},
+		"trailing crlf": {
+			detail: "exit status 1: boom\r\n",
+			prefix: "exit status 1: boom",
+		},
 	}
-	if strings.ContainsAny(run.Detail, "\r\n") {
-		t.Errorf("detail spans lines: %q", run.Detail)
-	}
-	if !strings.HasPrefix(run.Detail, "exit status 1") {
-		t.Errorf("detail = %q, want it to start with the reason", run.Detail)
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			run := hookRun(false, c.detail)
+			if c.capped && len(run.Detail) > maxHookDetail+len(" ...") {
+				t.Errorf("detail is %d bytes, want at most %d", len(run.Detail), maxHookDetail+len(" ..."))
+			}
+			if strings.ContainsAny(run.Detail, "\r\n") {
+				t.Errorf("detail spans lines: %q", run.Detail)
+			}
+			if !strings.HasPrefix(run.Detail, c.prefix) {
+				t.Errorf("detail = %q, want it to start with %q", run.Detail, c.prefix)
+			}
+			if got := strings.HasSuffix(run.Detail, " ..."); got != c.folded {
+				t.Errorf("detail = %q, ends with \" ...\" is %v, want %v", run.Detail, got, c.folded)
+			}
+		})
 	}
 }
