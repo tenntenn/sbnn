@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -59,12 +58,23 @@ type Store struct {
 	// write over them - not even the write() that reports through
 	// persistErr, because a sealed store must not touch the file at all.
 	sealed bool
+	// snapBytes is the size of the snapshot at the head of the session file
+	// and logBytes what has been appended after it. The snapshot is
+	// rewritten once the log has outgrown it, so a mutation costs a small
+	// append and the rewrite is paid for by the many appends before it.
+	snapBytes, logBytes int
+	// dirty means the file cannot be appended to - it is missing, was
+	// written by an older sbnn, or ends in a half-written record - and the
+	// next mutation has to write a whole snapshot instead.
+	dirty bool
+	// compactMin is the log size below which the snapshot is left alone.
+	compactMin int
 }
 
 // NewStore returns a store persisting to path. An empty path disables
 // persistence, which is convenient in tests.
 func NewStore(path string) *Store {
-	return &Store{path: path}
+	return &Store{path: path, compactMin: defaultCompactMin}
 }
 
 type persisted struct {
@@ -80,7 +90,7 @@ type persisted struct {
 	Rounds map[string]int `json:"rounds,omitempty"`
 }
 
-const persistVersion = 1
+const persistVersion = 2
 
 // The id prefixes. Every kind of object counts on its own, so the first diff
 // of a session is d1 even when a hook was registered before it - which is
@@ -107,8 +117,8 @@ func (s *Store) Load() error {
 		}
 		return err
 	}
-	var p persisted
-	if err := json.Unmarshal(b, &p); err != nil {
+	sess, err := parseSession(b)
+	if err != nil {
 		// Starting empty on top of the old file means the next diff,
 		// comment or hook renames a fresh session over it. A truncated
 		// write from a killed server is exactly the case where the old
@@ -124,6 +134,7 @@ func (s *Store) Load() error {
 	// about. Loading it as far as the JSON tags happen to line up would turn
 	// a format change into silently missing diffs and comments, so refuse it
 	// and say which version wrote it.
+	p := sess.snap
 	if p.Version > persistVersion {
 		// Refusing the file is only half the job: the server logs the error
 		// and keeps running, so the very first diff would otherwise persist
@@ -152,7 +163,16 @@ func (s *Store) Load() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.snapBytes, s.logBytes = sess.snapBytes, sess.logBytes
+	// A snapshot with no newline after it is the file an older sbnn wrote, and
+	// a log tail that was cut short is a write the server never answered. Both
+	// leave the file unfit to append to, so the next mutation rewrites it.
+	s.dirty = sess.dirty
 	s.groups = validGroups(s.path, p.Groups)
+	if len(s.groups) != len(p.Groups) {
+		// The dropped groups are still in the snapshot on disk.
+		s.dirty = true
+	}
 	s.seq = p.Seqs
 	if s.seq == nil {
 		// A file written before the counters were split apart carries one
@@ -171,6 +191,11 @@ func (s *Store) Load() error {
 		s.rounds = make(map[string]int, len(s.groups))
 		for _, g := range s.groups {
 			s.rounds[g.Name] = roundsSoFar(g)
+		}
+	}
+	for _, rec := range sess.records {
+		if err := s.apply(rec); err != nil {
+			return fmt.Errorf("session file %s: %w", s.path, err)
 		}
 	}
 	return nil
@@ -216,74 +241,6 @@ func (s *Store) setAside() (string, error) {
 		return "", err
 	}
 	return kept, nil
-}
-
-// persist writes the session to disk. The caller must hold the lock.
-//
-// A failure is not fatal - the server keeps serving the session it holds in
-// memory - but it must not pass unnoticed either, because everything written
-// after it is lost on the next restart. So the reason is logged and kept for
-// PersistError, which the status API reports.
-func (s *Store) persist() {
-	if s.path == "" || s.sealed {
-		return
-	}
-	err := s.write()
-	if err != nil {
-		// A full disk or a removed state directory keeps failing on every
-		// comment, so only the first failure of a streak is logged; the
-		// current reason is always available from PersistError.
-		if s.persistErr == nil {
-			slog.Warn("the session is not being saved", "file", s.path, "error", err)
-		}
-		s.persistErr = err
-		return
-	}
-	if s.persistErr != nil {
-		slog.Info("the session is being saved again", "file", s.path)
-		s.persistErr = nil
-	}
-}
-
-// write replaces the session file with the current session. The caller must
-// hold the lock.
-func (s *Store) write() (err error) {
-	b, err := json.Marshal(persisted{Version: persistVersion, Seq: s.sharedSeq(), Seqs: s.seq, Groups: s.groups, Rounds: s.rounds})
-	if err != nil {
-		return fmt.Errorf("encoding the session: %w", err)
-	}
-	dir := filepath.Dir(s.path)
-	tmp, err := os.CreateTemp(dir, ".session-*")
-	if err != nil {
-		return fmt.Errorf("creating a temporary file in %s: %w", dir, err)
-	}
-	name := tmp.Name()
-	defer func() {
-		if err != nil {
-			os.Remove(name)
-		}
-	}()
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return fmt.Errorf("writing %s: %w", name, err)
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return fmt.Errorf("setting the mode of %s: %w", name, err)
-	}
-	// Flush before the rename: a crash right after an unsynced rename leaves
-	// the session file in place but empty, which is worse than the old one.
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("flushing %s: %w", name, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing %s: %w", name, err)
-	}
-	if err := os.Rename(name, s.path); err != nil {
-		return fmt.Errorf("renaming %s to %s: %w", name, s.path, err)
-	}
-	return nil
 }
 
 // PersistError reports why the session was last not written to disk, or nil
@@ -475,7 +432,7 @@ func (s *Store) AddDiff(group string, d *model.Diff) *model.Diff {
 		d.Title = fmt.Sprintf("diff %d", round)
 	}
 	g.Diffs = append(g.Diffs, d)
-	s.persist()
+	s.persist(&logRecord{Op: opDiff, Group: group, Diff: d})
 	return clone(d)
 }
 
@@ -507,7 +464,7 @@ func (s *Store) DeleteDiff(group, id string) bool {
 		}
 	}
 	g.Comments = comments
-	s.persist()
+	s.persist(&logRecord{Op: opDelDiff, Group: group, IDs: []string{id}})
 	return true
 }
 
@@ -528,7 +485,7 @@ func (s *Store) DeleteGroup(name string) bool {
 	if found {
 		// A group that comes back is a new review, and starts at round 1.
 		delete(s.rounds, name)
-		s.persist()
+		s.persist(&logRecord{Op: opDelGroup, Group: name})
 	}
 	return found
 }
@@ -564,7 +521,7 @@ func (s *Store) SubmitReview(group, note string, verdict model.Verdict) (*model.
 	g.ReviewedAt = time.Now()
 	g.ReviewNote = note
 	g.ReviewVerdict = verdict
-	s.persist()
+	s.persist(metaRecord(g))
 	return clone(g), true
 }
 
@@ -596,7 +553,7 @@ func (s *Store) AddHook(group string, h *model.Hook) (*model.Hook, error) {
 	h.ID = s.nextID(hookPrefix)
 	h.CreatedAt = time.Now()
 	g.Hooks = append(g.Hooks, h)
-	s.persist()
+	s.persist(metaRecord(g))
 	return clone(h), nil
 }
 
@@ -623,7 +580,7 @@ func (s *Store) setHookRun(group, id string, set func(*model.Hook)) {
 	for _, h := range g.Hooks {
 		if h.ID == id {
 			set(h)
-			s.persist()
+			s.persist(metaRecord(g))
 			return
 		}
 	}
@@ -664,7 +621,7 @@ func (s *Store) DeleteHooks(group, id string) int {
 	}
 	g.Hooks = kept
 	if removed > 0 {
-		s.persist()
+		s.persist(metaRecord(g))
 	}
 	return removed
 }
@@ -677,7 +634,7 @@ func (s *Store) DeleteAllGroups() int {
 	s.groups = nil
 	s.rounds = nil
 	if n > 0 {
-		s.persist()
+		s.persist(&logRecord{Op: opDelAll})
 	}
 	return n
 }
@@ -720,7 +677,7 @@ func (s *Store) AddComment(c *model.Comment) (*model.Comment, error) {
 	c.ID = s.nextID(commentPrefix)
 	c.CreatedAt, c.UpdatedAt = now, now
 	g.Comments = append(g.Comments, c)
-	s.persist()
+	s.persist(&logRecord{Op: opComment, Group: c.Group, Comment: c})
 	return clone(c), nil
 }
 
@@ -754,7 +711,7 @@ func (s *Store) UpdateComment(group, id string, patch CommentPatch) (*model.Comm
 			c.Question = *patch.Question
 		}
 		c.UpdatedAt = time.Now()
-		s.persist()
+		s.persist(&logRecord{Op: opComment, Group: group, Comment: c})
 		return clone(c), true
 	}
 	return nil, false
@@ -779,7 +736,7 @@ func (s *Store) DeleteComment(group, id string) bool {
 	}
 	g.Comments = comments
 	if found {
-		s.persist()
+		s.persist(&logRecord{Op: opDelComments, Group: group, IDs: []string{id}})
 	}
 	return found
 }
@@ -793,18 +750,19 @@ func (s *Store) ClearComments(group string, resolvedOnly bool) int {
 	if g == nil {
 		return 0
 	}
-	removed := 0
+	var gone []string
 	comments := g.Comments[:0]
 	for _, c := range g.Comments {
 		if !resolvedOnly || c.Resolved {
-			removed++
+			gone = append(gone, c.ID)
 			continue
 		}
 		comments = append(comments, c)
 	}
 	g.Comments = comments
+	removed := len(gone)
 	if removed > 0 {
-		s.persist()
+		s.persist(&logRecord{Op: opDelComments, Group: group, IDs: gone})
 	}
 	return removed
 }
