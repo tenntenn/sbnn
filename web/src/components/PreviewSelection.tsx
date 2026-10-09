@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { setHeldPreviewRange } from '../previewHold'
 import { client } from '../client'
 import { isMac, isSelectingPress } from '../selectionPress'
 import { CommentForm } from './CommentThread'
@@ -284,6 +285,13 @@ export function PreviewSelection({ group, onChanged }: Props) {
   // created in.
   const current = useRef<Capture | null>(null)
   current.current = capture
+
+  // The stacks unmount the body of a section that has scrolled far away; the
+  // section a selection is in must not be one of them (#390).
+  useEffect(() => {
+    setHeldPreviewRange(capture?.range ?? null)
+    return () => setHeldPreviewRange(null)
+  }, [capture])
 
   /** clear puts the selection away, the browser's along with sbnn's. Leaving
    * the native one behind would leave the preview looking selected after the

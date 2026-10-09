@@ -1,0 +1,43 @@
+#390 measurements. Same fixture as #376: 20 rounds x 20 files (400 files, 40 of
+them 300-line Markdown), 300 comments, sbnn on --port 6399 --target t390.
+Headless Chrome via agent-browser (session pr-390), viewport 1400x900.
+Method: method/ (gen.py, setup.sh seed the group; init.js is the init script
+with the longtask / paint observers, probe.js reads them 6 s after load;
+scroll.js, draft.js, preview.js are the scroll-through and state checks).
+Before = origin/main (817b001), after = this branch.
+
+Initial mount (page loaded fresh, 3 runs each)
+                         before                 after
+  DOM nodes              281,901 - 282,488      12,555
+  long tasks, total      3.5 - 3.8 s            0.27 - 0.29 s
+  longest long task      2.7 - 2.9 s            0.21 s
+  JS heap                156 - 165 MB           34 - 35 MB
+  first diff table in DOM 0.94 - 1.05 s         0.39 - 0.42 s
+  first contentful paint ~0.1 s                 ~0.1 s
+  diff tables mounted    400 of 400             1 of 400 (the first file is 300 lines tall)
+  .file-section shells   400                    400
+
+Scroll through the whole review (scroll.js; scrollHeight 569,627 px)
+  Fast scroll, top to bottom, 2500 px per frame (~150,000 px/s):
+                         before                 after
+    frames until the end 301 (30.8 s)           301 (14.6 s)
+    sections mounted     400 (all, always)      at most 8
+    DOM nodes at the end 394,271                12,924
+    frames with a blank
+    section on screen    0                      4 of 301 (a streak of 1 frame)
+    blank 1 s later      0                      0
+    active file right    yes                    yes
+  Sidebar jumps to files 150, 399, 10, 250, 0, 399, 123 (each waited 0.5 s):
+    before and after identical: the clicked file is the active one every time,
+    its top lands at the same offset (0 px, 27 px for the last file, which the
+    end of the scroller clamps), no blank section on screen 50 ms - 2 s later.
+  8 random scrollTop positions, 0.7 s each: no blank section, active file right.
+
+State that has to survive (draft.js, preview.js)
+  A comment form with text typed in file 150, then scrolled to the top and
+  waited 1.5 s: the section is still mounted, the textarea still holds the
+  text ("half typed draft"); only 2 sections were mounted at the time.
+  A Markdown preview with two comments (docs/r10/doc1.md): scrolled away,
+  its body is unmounted and the section keeps its 9918 px height; scrolled
+  back, the body and both comment threads are there again (the portal slots
+  are rebuilt) and the height is the same to the pixel.

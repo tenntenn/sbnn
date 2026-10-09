@@ -15,6 +15,8 @@ import { estimatedHeight } from '../estimatedHeight'
 import { sectionKey } from '../sectionKey'
 import { nextActive } from '../activeSection'
 import { sameElements } from '../share'
+import { placeholderHeight } from '../lazySections'
+import { useLazyMount } from '../useLazyMount'
 import { DiffFileSection } from './DiffFileSection'
 import { Icon } from './Icon'
 
@@ -144,6 +146,14 @@ interface StackFileProps {
   folded: boolean
   foldedByReader: boolean
   viewMode: ViewMode
+  /** mounted says whether the body is on the page; a section far from the
+   * viewport is only its shell, standing as tall as it last measured. */
+  mounted: boolean
+  /** heights is what each section measured while its body was mounted, shared
+   * by the whole stack and written by the sections themselves. `shape` is what
+   * the height depends on besides the file (fold, view mode, comment count),
+   * so a measurement taken in another shape is not mistaken for this one's. */
+  heights: Map<string, { height: number; shape: string }>
   onChanged: () => void
   onSetFolded: (key: string, value: boolean) => void
   onSetViewMode: (key: string, mode: ViewMode) => void
@@ -179,11 +189,43 @@ const StackFile = memo(function StackFile({
   folded,
   foldedByReader,
   viewMode,
+  mounted,
+  heights,
   onChanged,
   onSetFolded,
   onSetViewMode,
   register,
 }: StackFileProps) {
+  const shell = useRef<HTMLDivElement | null>(null)
+  const estimate = estimatedHeight(file, folded, comments.length, viewMode)
+  const shape = `${folded}|${viewMode}|${comments.length}`
+  // Remember how tall the body made this section, so that taking the body off
+  // the page leaves the scroll position where it was (#390).
+  useEffect(() => {
+    const el = shell.current
+    if (!mounted || !el) return
+    const measure = () => heights.set(key, { height: el.offsetHeight, shape })
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [mounted, heights, key, shape])
+  if (!mounted) {
+    const measured = heights.get(key)
+    return (
+      <div
+        id={key}
+        data-section-key={key}
+        className="file-section"
+        style={{ height: placeholderHeight(measured?.shape === shape ? measured.height : undefined, estimate) }}
+        ref={(el) => {
+          shell.current = el
+          register(key, el)
+        }}
+      />
+    )
+  }
   return (
     <div
       id={key}
@@ -198,9 +240,12 @@ const StackFile = memo(function StackFile({
       // because the size has to be per-file to be worth anything.
       style={{
         contentVisibility: 'auto',
-        containIntrinsicSize: `auto ${estimatedHeight(file, folded, comments.length, viewMode)}px`,
+        containIntrinsicSize: `auto ${estimate}px`,
       }}
-      ref={(el) => register(key, el)}
+      ref={(el) => {
+        shell.current = el
+        register(key, el)
+      }}
     >
       <DiffFileSection
         group={group}
@@ -273,10 +318,18 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
     return map
   }, [comments])
 
+  const heights = useRef(new Map<string, { height: number; shape: string }>()).current
+
   const registerSection = useCallback((key: string, el: HTMLDivElement | null) => {
     if (el) sectionEls.current.set(key, el)
     else sectionEls.current.delete(key)
   }, [])
+
+  const { mounted, ensure } = useLazyMount(
+    containerRef,
+    order,
+    useCallback((key: string) => sectionEls.current.get(key), []),
+  )
 
   // A ref mirror of the latest callbacks, read from inside the observer and
   // scroll listener below: those are only rebuilt when `order` changes, so a
@@ -306,6 +359,7 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
       // scroll produces already know the reader asked for this file.
       jumpedToRef.current = key
       activeKeyRef.current = key
+      ensure(key)
       const root = containerRef.current
       if (!root) {
         el.scrollIntoView({ block: 'start' })
@@ -439,6 +493,8 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
                 folded={folded}
                 foldedByReader={foldOverrides.get(key) === true}
                 viewMode={viewMode}
+                mounted={mounted.has(key)}
+                heights={heights}
                 onChanged={onChanged}
                 onSetFolded={onSetFolded}
                 onSetViewMode={onSetViewMode}

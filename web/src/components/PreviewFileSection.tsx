@@ -25,6 +25,10 @@ interface Props {
    * to ask the server (or, worse, mo) to render it yet. Once true it stays
    * true, so scrolling back to an already-loaded file never refetches it. */
   active: boolean
+  /** bodyMounted says whether the rendered preview is on the page. A section
+   * far from the viewport keeps what it fetched but drops the DOM, and stands
+   * as tall as the preview last was (#390). Absent means mounted. */
+  bodyMounted?: boolean
   /** onUserScroll fires when the reader scrolls this section themselves,
    * which is what turns following the diff off. */
   onUserScroll?: () => void
@@ -173,6 +177,7 @@ export function PreviewFileSection({
   status,
   kind,
   active,
+  bodyMounted = true,
   linkTargets,
   onUserScroll,
   comments,
@@ -188,6 +193,10 @@ export function PreviewFileSection({
   // attaching to it - and letting go of it again - is an effect.
   const [frame, setFrame] = useState<HTMLIFrameElement | null>(null)
   const [frameHeight, setFrameHeight] = useState<number | null>(null)
+  // How tall the preview body was the last time it was on the page, and the
+  // element that is measured for it.
+  const [bodyBox, setBodyBox] = useState<HTMLDivElement | null>(null)
+  const [bodyHeight, setBodyHeight] = useState(0)
 
   const format = formatOf(file)
   const previewable = format !== null
@@ -417,6 +426,20 @@ export function PreviewFileSection({
     }
   }, [frame, frameUrl, estimatedHeight])
 
+  useEffect(() => {
+    if (!bodyBox) return
+    const measure = () => setBodyHeight(bodyBox.offsetHeight)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(bodyBox)
+    return () => observer.disconnect()
+  }, [bodyBox])
+
+  // Only a preview that is actually on the page is worth taking off it: a
+  // section that has not rendered anything yet is one line of text.
+  const unloaded = !bodyMounted && bodyHeight > 0 && preview !== null
+
   const openInMo = async () => {
     if (format !== 'markdown') return
     setOpeningMo(true)
@@ -486,105 +509,111 @@ export function PreviewFileSection({
           ))}
       </div>
 
-      {!previewable ? (
-        <p className="empty">{filePath(file)} has no preview.</p>
-      ) : format === 'image' ? (
-        !active ? (
-          <p className="empty">Not loaded yet…</p>
-        ) : imageTrouble !== null ? (
-          <span className="preview-asset-missing" role="img" aria-label={`${filePath(file)} - ${imageTrouble}`}
-            title={`${filePath(file)} - ${imageTrouble}`}>
-            <span className="preview-asset-name">{filePath(file)}</span>
-            <span className="preview-asset-why">{imageTrouble}</span>
-          </span>
-        ) : imageSrc ? (
-          <div className="preview-image-wrap" onWheel={onUserScroll} onTouchMove={onUserScroll}>
-            <img
-              key={imageSrc}
-              className="preview-image"
-              src={imageSrc}
-              alt={filePath(file)}
-              onError={() => setImageFailed(true)}
-            />
-            {imageFailed && <p className="error">The image could not be loaded.</p>}
-          </div>
-        ) : (
-          <p className="empty">
-            {filePath(file)} is not in the working tree (it may have been deleted), so there is nothing to
-            preview.
-          </p>
-        )
-      ) : !active || loading ? (
-        <p className="empty">
-          {format === 'markdown' && !renderHere ? 'Asking mo for a preview…' : 'Rendering…'}
-        </p>
-      ) : error ? (
-        <div className="preview-error">
-          <p className="error">{error}</p>
-          {format === 'markdown' && status && !status.moAvailable && (
-            <p className="hint">
-              mo renders a richer preview than sbnn's own, and it is not installed here. Install it
-              with <code>brew install k1LoW/tap/mo</code> or grab a binary from{' '}
-              <a href="https://github.com/k1LoW/mo/releases" target="_blank" rel="noreferrer">
-                the releases page
-              </a>
-              , then reload — or switch back to <strong>preview</strong>, which needs nothing.
+      {unloaded ? (
+        <div className="preview-body-unloaded" style={{ height: bodyHeight }} aria-hidden />
+      ) : (
+        <div className="preview-body" ref={setBodyBox}>
+          {!previewable ? (
+            <p className="empty">{filePath(file)} has no preview.</p>
+          ) : format === 'image' ? (
+            !active ? (
+              <p className="empty">Not loaded yet…</p>
+            ) : imageTrouble !== null ? (
+              <span className="preview-asset-missing" role="img" aria-label={`${filePath(file)} - ${imageTrouble}`}
+                title={`${filePath(file)} - ${imageTrouble}`}>
+                <span className="preview-asset-name">{filePath(file)}</span>
+                <span className="preview-asset-why">{imageTrouble}</span>
+              </span>
+            ) : imageSrc ? (
+              <div className="preview-image-wrap" onWheel={onUserScroll} onTouchMove={onUserScroll}>
+                <img
+                  key={imageSrc}
+                  className="preview-image"
+                  src={imageSrc}
+                  alt={filePath(file)}
+                  onError={() => setImageFailed(true)}
+                />
+                {imageFailed && <p className="error">The image could not be loaded.</p>}
+              </div>
+            ) : (
+              <p className="empty">
+                {filePath(file)} is not in the working tree (it may have been deleted), so there is nothing to
+                preview.
+              </p>
+            )
+          ) : !active || loading ? (
+            <p className="empty">
+              {format === 'markdown' && !renderHere ? 'Asking mo for a preview…' : 'Rendering…'}
             </p>
+          ) : error ? (
+            <div className="preview-error">
+              <p className="error">{error}</p>
+              {format === 'markdown' && status && !status.moAvailable && (
+                <p className="hint">
+                  mo renders a richer preview than sbnn's own, and it is not installed here. Install it
+                  with <code>brew install k1LoW/tap/mo</code> or grab a binary from{' '}
+                  <a href="https://github.com/k1LoW/mo/releases" target="_blank" rel="noreferrer">
+                    the releases page
+                  </a>
+                  , then reload — or switch back to <strong>preview</strong>, which needs nothing.
+                </p>
+              )}
+            </div>
+          ) : preview?.kind === 'source' ? (
+            <SourceView path={filePath(file)} content={preview.content} onUserScroll={onUserScroll} />
+          ) : preview?.kind === 'html' ? (
+            <div
+              className={format === 'notebook' ? 'notebook' : 'markdown'}
+              // What a selection in here would be a comment on. data-line-anchored
+              // is what PreviewSelection looks for: renderMarkdown marked every
+              // block with the lines it came from, and a whole preview still
+              // numbers them the way the file does - a partial one marks the gaps
+              // it skipped instead, so nothing in it can be anchored to a line. A
+              // notebook's cells never carry this: its rendered content does not
+              // correspond to the raw .ipynb JSON's line numbers at all.
+              data-diff-id={diffId}
+              data-file-id={file.id}
+              data-path={filePath(file)}
+              data-line-anchored={format === 'markdown' && preview.complete ? 'true' : undefined}
+              onWheel={onUserScroll}
+              onTouchMove={onUserScroll}
+              ref={setBody}
+              dangerouslySetInnerHTML={innerHTML}
+            />
+          ) : preview?.kind === 'frame' && preview.url ? (
+            <iframe
+              className="preview-frame"
+              src={preview.url}
+              title="Markdown preview"
+              ref={setFrame}
+              style={frameHeight !== null ? { height: `${frameHeight}px` } : undefined}
+            />
+          ) : preview?.kind === 'frame' && preview.moUrl ? (
+            <div className="preview-error">
+              <p className="error">The preview cannot be embedded here.</p>
+              <p className="hint">
+                <a href={preview.moUrl} target="_blank" rel="noreferrer">
+                  Open it in mo
+                </a>{' '}
+                instead.
+              </p>
+            </div>
+          ) : (
+            <p className="empty">No preview.</p>
+          )}
+          {Array.from(slots).map(([key, slot]) =>
+            createPortal(
+              <CommentThread
+                group={group}
+                comments={grouped.get(key) ?? []}
+                onChanged={onChanged ?? noop}
+                idPrefix={PREVIEW_COMMENT_ID_PREFIX}
+              />,
+              slot,
+              `${key}`,
+            ),
           )}
         </div>
-      ) : preview?.kind === 'source' ? (
-        <SourceView path={filePath(file)} content={preview.content} onUserScroll={onUserScroll} />
-      ) : preview?.kind === 'html' ? (
-        <div
-          className={format === 'notebook' ? 'notebook' : 'markdown'}
-          // What a selection in here would be a comment on. data-line-anchored
-          // is what PreviewSelection looks for: renderMarkdown marked every
-          // block with the lines it came from, and a whole preview still
-          // numbers them the way the file does - a partial one marks the gaps
-          // it skipped instead, so nothing in it can be anchored to a line. A
-          // notebook's cells never carry this: its rendered content does not
-          // correspond to the raw .ipynb JSON's line numbers at all.
-          data-diff-id={diffId}
-          data-file-id={file.id}
-          data-path={filePath(file)}
-          data-line-anchored={format === 'markdown' && preview.complete ? 'true' : undefined}
-          onWheel={onUserScroll}
-          onTouchMove={onUserScroll}
-          ref={setBody}
-          dangerouslySetInnerHTML={innerHTML}
-        />
-      ) : preview?.kind === 'frame' && preview.url ? (
-        <iframe
-          className="preview-frame"
-          src={preview.url}
-          title="Markdown preview"
-          ref={setFrame}
-          style={frameHeight !== null ? { height: `${frameHeight}px` } : undefined}
-        />
-      ) : preview?.kind === 'frame' && preview.moUrl ? (
-        <div className="preview-error">
-          <p className="error">The preview cannot be embedded here.</p>
-          <p className="hint">
-            <a href={preview.moUrl} target="_blank" rel="noreferrer">
-              Open it in mo
-            </a>{' '}
-            instead.
-          </p>
-        </div>
-      ) : (
-        <p className="empty">No preview.</p>
-      )}
-      {Array.from(slots).map(([key, slot]) =>
-        createPortal(
-          <CommentThread
-            group={group}
-            comments={grouped.get(key) ?? []}
-            onChanged={onChanged ?? noop}
-            idPrefix={PREVIEW_COMMENT_ID_PREFIX}
-          />,
-          slot,
-          `${key}`,
-        ),
       )}
     </section>
   )
