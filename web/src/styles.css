@@ -1431,6 +1431,22 @@ a {
   line-height: 1.5;
 }
 
+/* Inside a code block the slot is an inline element laid out as a block, and
+   has to leave the block's monospace, pre-formatted text behind. */
+.markdown pre .preview-comments {
+  display: block;
+  white-space: normal;
+  font: var(--text-md) / 1.5 var(--font-sans);
+  text-align: left;
+}
+
+/* A thread under a table row is a row of its own, spanning the table. */
+.markdown .preview-comments-row > td {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
 .markdown .preview-comments .thread {
   margin-left: 0;
 }
