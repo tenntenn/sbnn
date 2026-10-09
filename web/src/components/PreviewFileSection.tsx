@@ -29,6 +29,12 @@ interface Props {
    * far from the viewport keeps what it fetched but drops the DOM, and stands
    * as tall as the preview last was (#390). Absent means mounted. */
   bodyMounted?: boolean
+  /** frameMounted is bodyMounted for a preview that is an iframe (mo). The
+   * rest of the page mounts every body while the reader uses the browser's
+   * find (#398), but a frame is a whole document that would be fetched and
+   * rendered by the server for each of them, so it follows the lazy rule
+   * alone. Absent means the same as bodyMounted. */
+  frameMounted?: boolean
   /** onUserScroll fires when the reader scrolls this section themselves,
    * which is what turns following the diff off. */
   onUserScroll?: () => void
@@ -178,6 +184,7 @@ export function PreviewFileSection({
   kind,
   active,
   bodyMounted = true,
+  frameMounted = bodyMounted,
   linkTargets,
   onUserScroll,
   comments,
@@ -438,7 +445,8 @@ export function PreviewFileSection({
 
   // Only a preview that is actually on the page is worth taking off it: a
   // section that has not rendered anything yet is one line of text.
-  const unloaded = !bodyMounted && bodyHeight > 0 && preview !== null
+  const unloaded =
+    !(preview?.kind === 'frame' ? frameMounted : bodyMounted) && bodyHeight > 0 && preview !== null
 
   const openInMo = async () => {
     if (format !== 'markdown') return

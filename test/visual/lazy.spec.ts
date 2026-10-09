@@ -36,4 +36,21 @@ test.describe('lazily mounted sections', () => {
     await expect(page.locator('.diff-stack .file-section').first().locator('table')).toHaveCount(0)
     expect(await elements(page)).toBeLessThan(MAX_ELEMENTS)
   })
+
+  // The browser's find bar only searches what is on the page, and it sends the
+  // page nothing but the key that opens it (#398). Headless Chromium has no
+  // find bar, so window.find stands in for it.
+  test('Ctrl+F mounts every body in batches so find can see a far file, and Escape lets go', async ({ page }) => {
+    await open(page)
+    const far = '39 * 299'
+    const find = () => page.evaluate((t) => window.find(t, true, false, true), far)
+    expect(await find(), 'the last file is not searchable before the key').toBe(false)
+    await page.keyboard.press('Control+f')
+    await expect(page.locator('.diff-stack .file-section:has(table)')).toHaveCount(MANY_FILES, { timeout: 60_000 })
+    expect(await find(), 'the last file is searchable once everything is mounted').toBe(true)
+    await page.evaluate(() => window.getSelection()?.removeAllRanges())
+    await page.keyboard.press('Escape')
+    await expect.poll(() => page.locator('.diff-stack .file-section:has(table)').count()).toBeLessThan(MANY_FILES / 5)
+    expect(await elements(page)).toBeLessThan(MAX_ELEMENTS)
+  })
 })

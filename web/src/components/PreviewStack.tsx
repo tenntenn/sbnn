@@ -146,7 +146,7 @@ export function PreviewStack({
 
   // Which sections carry their body on the page. The rest are a shell that
   // stands as tall as the body last was (#390).
-  const { mounted } = useLazyMount(
+  const { mounted, lazy } = useLazyMount(
     containerRef,
     order,
     useCallback((key: string) => sectionEls.current.get(key), []),
@@ -250,6 +250,7 @@ export function PreviewStack({
                   kind={kind}
                   active={activated.has(key)}
                   bodyMounted={mounted.has(key)}
+                  frameMounted={lazy.has(key)}
                   onUserScroll={() => onSync(false)}
                   comments={comments}
                   onChanged={onChanged}

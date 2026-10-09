@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import {
+  endsFind,
+  findExpired,
+  mountedWithFind,
+  nextFindBatch,
+  startsFind,
+  FIND_QUIET_MS,
+} from './findHold'
 import {
   KEEP_MARGIN,
   NEAR_MARGIN,
@@ -20,8 +28,13 @@ function sectionHoldsState(el: HTMLElement): boolean {
 }
 
 export interface LazyMount {
-  /** mounted holds the keys of the sections whose body is on the page. */
+  /** mounted holds the keys of the sections whose body is on the page,
+   * including those mounted for the browser's find-in-page (#398). */
   mounted: ReadonlySet<string>
+  /** lazy is mounted without the find hold: the sections that are mounted
+   * because they are near the reader. Content that is too heavy to mount for
+   * a search (a preview iframe) follows this one. */
+  lazy: ReadonlySet<string>
   /** ensure mounts a section's body ahead of the observers, for a jump that
    * is about to land on it. */
   ensure: (key: string) => void
@@ -39,7 +52,7 @@ export function useLazyMount(
   order: readonly string[],
   getEl: (key: string) => HTMLElement | undefined,
 ): LazyMount {
-  const [mounted, setMounted] = useState<ReadonlySet<string>>(() => initialMounted(order))
+  const [lazy, setMounted] = useState<ReadonlySet<string>>(() => initialMounted(order))
   const near = useRef(new Set<string>())
   const keepBand = useRef(new Set<string>())
   const orderRef = useRef(order)
@@ -124,6 +137,100 @@ export function useLazyMount(
     return () => document.removeEventListener('focusout', again)
   }, [reconcile])
 
+  // Find-in-page (#398). The browser's find bar only searches what is on the
+  // page, and it sends the page nothing but the key that opened it, so that key
+  // mounts the rest in batches and holds them until the reader goes quiet.
+  const [found, setFound] = useState<ReadonlySet<string>>(() => new Set())
+  const foundRef = useRef(found)
+  foundRef.current = found
+
+  useEffect(() => {
+    let active = false
+    let last = 0
+    let timer: number | undefined
+    let job: number | undefined
+    let jobIsIdle = false
+
+    const cancelJob = () => {
+      if (job === undefined) return
+      if (jobIsIdle) window.cancelIdleCallback(job)
+      else window.clearTimeout(job)
+      job = undefined
+    }
+    const batch = () => {
+      job = undefined
+      if (!active) return
+      const anchor = orderRef.current.findIndex((key) => near.current.has(key))
+      const keys = nextFindBatch(orderRef.current, foundRef.current, anchor < 0 ? 0 : anchor)
+      if (keys.length === 0) return
+      const next = new Set(foundRef.current)
+      for (const key of keys) next.add(key)
+      foundRef.current = next
+      setFound(next)
+      schedule()
+    }
+    const schedule = () => {
+      if (typeof window.requestIdleCallback === 'function') {
+        jobIsIdle = true
+        job = window.requestIdleCallback(batch, { timeout: 250 })
+      } else {
+        jobIsIdle = false
+        job = window.setTimeout(batch, 16)
+      }
+    }
+    const touch = () => {
+      last = Date.now()
+    }
+    const watchQuiet = () => {
+      timer = window.setTimeout(() => {
+        if (findExpired(Date.now(), last)) end()
+        else watchQuiet()
+      }, Math.max(1000, FIND_QUIET_MS - (Date.now() - last)))
+    }
+    const events = ['keydown', 'wheel', 'mousedown', 'mousemove', 'touchstart', 'scroll'] as const
+    const end = () => {
+      if (!active) return
+      active = false
+      cancelJob()
+      window.clearTimeout(timer)
+      for (const type of events) document.removeEventListener(type, touch, true)
+      // What the reader did while everything was mounted must not vanish with
+      // the hold: a section that holds state joins the lazy set.
+      const keep = [...foundRef.current].filter((key) => {
+        const el = getElRef.current(key)
+        return el !== undefined && sectionHoldsState(el)
+      })
+      if (keep.length > 0) {
+        setMounted((previous) => {
+          const next = new Set(previous)
+          for (const key of keep) next.add(key)
+          return next
+        })
+      }
+      foundRef.current = new Set()
+      setFound(foundRef.current)
+    }
+    const begin = () => {
+      touch()
+      if (active) return
+      active = true
+      for (const type of events) document.addEventListener(type, touch, { capture: true, passive: true })
+      watchQuiet()
+      schedule()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (startsFind(e)) begin()
+      else if (active && endsFind(e)) end()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      window.removeEventListener('keydown', onKey, true)
+      end()
+    }
+  }, [])
+
+  const mounted = useMemo(() => mountedWithFind(lazy, found), [lazy, found])
+
   const ensure = useCallback((key: string) => {
     pinned.current = key
     window.setTimeout(() => {
@@ -132,5 +239,5 @@ export function useLazyMount(
     setMounted((previous) => (previous.has(key) ? previous : new Set(previous).add(key)))
   }, [])
 
-  return { mounted, ensure }
+  return { mounted, lazy, ensure }
 }

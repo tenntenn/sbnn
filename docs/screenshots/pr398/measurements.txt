@@ -1,0 +1,43 @@
+#398 measurements. Same fixture as #390 (docs/screenshots/pr390/method): 20 rounds x
+20 files (400 files, 40 of them 300-line Markdown), 300 comments, sbnn on
+--port 6401 --target t398. gen.py here also plants two needles that appear in
+one file only: "zzfarneedle398" in the last Go file (r20 file 19) and
+"zzmdneedle398" in docs/r20/doc1.md. Headless Chrome via agent-browser (session
+pr-398), viewport 1400x900, page loaded fresh, scrolled to the top.
+Headless Chrome has no find bar: window.find() stands in for it, and the key is
+sent as a synthetic keydown (Control+f / Escape) on window.
+
+Ctrl+F, find.js, 3 runs
+  before the key (the lazy default, unchanged by this change):
+    DOM nodes 12,555; 1 of 400 bodies mounted; window.find("zzfarneedle398") false
+  from the keydown until all 400 bodies are mounted:
+    time                     3.55 / 3.63 / 3.87 s
+    DOM nodes at the end     282,291
+    long tasks               0 / 1 (57 ms) / 0
+    longest frame gap        38 / 58 / 46 ms  (p95 23 / 24 / 26 ms; ~60 fps throughout)
+    setInterval(10) lag      max 46 / 66 / 49 ms (p95 19 / 22 / 22 ms)
+    JS heap                  188 MB
+    scrollTop / first section top: unchanged (0, 121 px)
+  window.find("zzfarneedle398")  true, selection inside the last file's section
+  Escape: DOM nodes back to 12,555, 1 of 400 mounted, find false again.
+  For comparison, #390's eager initial mount of the same review: 282k nodes,
+  3.5-3.8 s of long tasks, one task of 2.7-2.9 s.
+
+Quiet period (quiet.js; FIND_QUIET_MS = 60 s)
+  ctrl+f at t=0: 400 mounted at t=6 s; mousemove at t=40 s; still 400 at t=75 s
+  (35 s after the mousemove); back to 1 mounted / 12,555 nodes at t=105 s
+  (65 s after the mousemove).
+
+State kept (draftfind.js)
+  During the hold, a comment form with "half typed draft" opened in file 300;
+  Escape released the hold: 4 sections mounted afterwards, file 300 among them,
+  the textarea still holds the text.
+
+Preview pane (shot.js)
+  The preview stack mounts the bodies it has fetched; a section far from the
+  viewport has not asked the server for its preview yet (that gate is
+  unchanged), so a rendered preview of a far file is not searched. Its text is
+  in the diff pane, which is. No iframe (mo) is mounted by the hold.
+
+Not measured: a real find bar (none in headless Chrome); mo frames (the
+frame is deliberately not mounted by the hold).
