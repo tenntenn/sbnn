@@ -16,6 +16,7 @@ import { sectionKey } from '../sectionKey'
 import { nextActive } from '../activeSection'
 import { sameElements } from '../share'
 import { placeholderHeight } from '../lazySections'
+import { syncObserved } from '../observed'
 import { useLazyMount } from '../useLazyMount'
 import { DiffFileSection } from './DiffFileSection'
 import { Icon } from './Icon'
@@ -386,12 +387,22 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // The observer lives as long as the pane does; the effect below keeps it
+  // pointed at the sections that exist (#402). Rebuilding it for every round
+  // meant observing all of the files again for the sake of a few new ones.
+  const activeObserver = useRef<IntersectionObserver | null>(null)
+  const orderRef = useRef(order)
+  orderRef.current = order
+  const watchedSections = useRef(new Map<string, HTMLDivElement>())
+  // An unobserved section reports nothing, so the active file is judged again
+  // by hand when one goes (the rebuilt observer used to do it by reporting).
+  const recomputeActiveRef = useRef<(() => void) | null>(null)
   useEffect(() => {
     const root = containerRef.current
     if (!root) return
     const recomputeActive = () => {
       const { key: found, jumpedTo } = nextActive(
-        order,
+        orderRef.current,
         intersecting.current,
         jumpedToRef.current,
       )
@@ -413,12 +424,26 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
       },
       { root, rootMargin: `0px 0px -${Math.round(ACTIVE_BAND * 100)}% 0px`, threshold: 0 },
     )
-    for (const key of order) {
-      const el = sectionEls.current.get(key)
-      if (el) observer.observe(el)
+    activeObserver.current = observer
+    recomputeActiveRef.current = recomputeActive
+    return () => {
+      observer.disconnect()
+      activeObserver.current = null
+      recomputeActiveRef.current = null
+      watchedSections.current.clear()
     }
-    return () => observer.disconnect()
-  }, [containerRef, order])
+  }, [containerRef])
+
+  // Effects run in the order they are written, so the observer above exists.
+  useEffect(() => {
+    const observer = activeObserver.current
+    if (!observer) return
+    const gone = syncObserved(observer, watchedSections.current, order, (key) =>
+      sectionEls.current.get(key),
+    )
+    for (const key of gone) intersecting.current.delete(key)
+    if (gone.length > 0) recomputeActiveRef.current?.()
+  }, [order])
 
   useEffect(() => {
     const root = containerRef.current

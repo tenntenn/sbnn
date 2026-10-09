@@ -1,11 +1,27 @@
-import { useEffect, useMemo, useState, type CSSProperties, type RefObject } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from 'react'
+import { noCounts, openCounts, type FileCounts, type OpenCounts } from '../openCounts'
 import type { Comment, Diff, FileDiff, Status } from '../types'
 import { filePath } from '../types'
 import { client } from '../client'
 import { readEnumSetting, writeSetting } from '../storage'
 import { Icon } from './Icon'
 import { sectionKey } from '../sectionKey'
-import { MAX_SCANNED_LINES, SEARCH_DEBOUNCE_MS, matchSummary, searchDiffs } from '../search'
+import {
+  MAX_SCANNED_LINES,
+  SEARCH_DEBOUNCE_MS,
+  matchSummary,
+  searchDiffs,
+  type FileMatch,
+} from '../search'
 
 /** Layout is how the rounds are shown: stacked, or one tab at a time. */
 type Layout = 'list' | 'tabs'
@@ -88,12 +104,18 @@ export function Sidebar({
   onSetRead,
   onMarkAllUnread,
 }: Props) {
-  const commentCount = (diffId: string, fileId: string) =>
-    comments.filter((c) => c.diffId === diffId && c.fileId === fileId && !c.resolved).length
+  // What is waiting, per file and per round, counted once per change of the
+  // comments rather than once per file (#402). The rounds whose counts did not
+  // change keep their object, which is what lets SidebarRound stay put.
+  const countsRef = useRef<OpenCounts | undefined>(undefined)
+  const counts = useMemo(() => {
+    const next = openCounts(comments, countsRef.current)
+    countsRef.current = next
+    return next
+  }, [comments])
 
   // A shut round still says how much is waiting inside it.
-  const roundComments = (diff: Diff): number =>
-    comments.filter((c) => c.diffId === diff.id && !c.resolved).length
+  const roundComments = (diff: Diff): number => counts.totals.get(diff.id) ?? 0
 
   // Rounds pile up: a review of four diffs is four headings and everything
   // under them. A round can be shut, and the whole list can be turned into
@@ -174,26 +196,44 @@ export function Sidebar({
   const isShut = (diff: Diff): boolean =>
     layout === 'list' && !searching && shutRounds.has(diff.id)
 
-  const toggleRound = (id: string) =>
-    setShutRounds((current) => {
-      const next = new Set(current)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  // The callbacks handed to SidebarRound and SidebarFile keep one identity for
+  // as long as the group stays (#402): they read what changes through refs, so
+  // a round that did not change is not rendered again for their sake.
+  const toggleRound = useCallback(
+    (id: string) =>
+      setShutRounds((current) => {
+        const next = new Set(current)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return next
+      }),
+    [],
+  )
+
+  const latest = useRef({ comments, onSelect, onChanged })
+  latest.current = { comments, onSelect, onChanged }
+
+  const removeRound = useCallback(
+    (diff: Diff) => {
+      const { comments: all, onChanged: changed } = latest.current
+      if (!window.confirm(removeRoundQuestion(diff.title, roundSize(all, diff.id)))) return
+      void client.deleteDiff(group, diff.id).then(changed, reportRemoveFailure(diff.title))
+    },
+    [group],
+  )
 
   // Going to a file is the parent's business - it owns which pane is up and
   // where the stack is scrolled. The scrollIntoView afterwards is for the
   // section the parent just mounted: on a match found in the content the
   // reader asked to be taken to a specific file, and the node may not have
   // existed when the click was handled.
-  const jumpTo = (diffId: string, fileId: string) => {
-    onSelect(diffId, fileId)
+  const jumpTo = useCallback((diffId: string, fileId: string) => {
+    latest.current.onSelect(diffId, fileId)
     const key = sectionKey(diffId, fileId)
     window.setTimeout(() => {
       document.getElementById(key)?.scrollIntoView({ block: 'start' })
     }, 50)
-  }
+  }, [])
 
   // Enter takes you to the first file still standing, which is the whole
   // point of typing into a list. It answers what is in the box now, not what
@@ -323,10 +363,7 @@ export function Sidebar({
                   style={TAB_REMOVE}
                   aria-label="Remove this round"
                   title="Remove this round"
-                  onClick={() => {
-                    if (!window.confirm(removeRoundQuestion(diff.title, roundSize(comments, diff.id)))) return
-                    void client.deleteDiff(group, diff.id).then(onChanged, reportRemoveFailure(diff.title))
-                  }}
+                  onClick={() => removeRound(diff)}
                 >
                   <Icon name="close" small />
                 </button>
@@ -345,125 +382,28 @@ export function Sidebar({
 
       {searching && found === 0 && <p className="empty">Nothing matches that.</p>}
 
-      {diffs.map((diff) => (
-        <div className="diff-round" key={diff.id} hidden={!visible(diff)}>
-          <div className="diff-round-header" hidden={layout === 'tabs'}>
-            {layout === 'list' ? (
-              <button
-                className="diff-round-title as-button"
-                title={new Date(diff.createdAt).toLocaleString()}
-                aria-expanded={!isShut(diff)}
-                onClick={() => toggleRound(diff.id)}
-              >
-                <span className="disclosure">
-                  <Icon name={isShut(diff) ? 'chevron_right' : 'expand_more'} small />
-                </span>
-                {diff.title}
-                <span className="hint">{shown(diff).length}</span>
-                {roundComments(diff) > 0 && (
-                  <span className="badge sm warn">{roundComments(diff)}</span>
-                )}
-              </button>
-            ) : (
-              <span className="diff-round-title" title={new Date(diff.createdAt).toLocaleString()}>
-                {diff.title}
-              </span>
-            )}
-            {!client.isStatic && (
-              <button
-                className="ghost danger"
-                title="Remove this round"
-                onClick={() => {
-                  if (!window.confirm(removeRoundQuestion(diff.title, roundSize(comments, diff.id)))) return
-                  void client.deleteDiff(group, diff.id).then(onChanged, reportRemoveFailure(diff.title))
-                }}
-              >
-                <Icon name="close" small />
-              </button>
-            )}
-          </div>
-          <ul className="file-list" hidden={isShut(diff)}>
-            {shown(diff).map((file) => {
-              const key = sectionKey(diff.id, file.id)
-              const active = activeKey === key
-              const count = commentCount(diff.id, file.id)
-              // Where the file was hit. A file found only by its content
-              // would otherwise look like a path that matched, and the
-              // reader would go looking in the name for a word that is in
-              // the code.
-              const hit = results.matches.get(key)
-              // A folded file is still listed - the point is that it is out
-              // of the way, not out of sight.
-              const folded = Boolean(file.folded) && count === 0
-              const read = readKeys.has(key)
-              const toggleRead = () => onSetRead(key, !read)
-              return (
-                <li key={file.id}>
-                  <button
-                    className={`file-item${active ? ' active' : ''}${folded ? ' folded' : ''}`}
-                    onClick={() => jumpTo(diff.id, file.id)}
-                  >
-                    {/* A span rather than a button: this sits inside the row's
-                        own button, and a button inside a button is not
-                        markup a browser will keep. The unread state is drawn
-                        faintly rather than left blank so that the target is
-                        there to aim at before it has been used. */}
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      aria-pressed={read}
-                      aria-label={read ? `Mark ${filePath(file)} unread` : `Mark ${filePath(file)} read`}
-                      title={read ? 'Mark as unread' : 'Mark as read'}
-                      style={{ display: 'inline-flex', opacity: read ? 1 : 0.25 }}
-                      onClick={(ev) => {
-                        ev.stopPropagation()
-                        toggleRead()
-                      }}
-                      onKeyDown={(ev) => {
-                        if (ev.key !== 'Enter' && ev.key !== ' ') return
-                        ev.preventDefault()
-                        ev.stopPropagation()
-                        toggleRead()
-                      }}
-                    >
-                      <Icon name="check" small />
-                    </span>
-                    <span className={`dot status-${file.status}`} title={file.status} />
-                    <span className="file-path"
-                      title={filePath(file)}
-                      style={read ? { opacity: 0.55 } : undefined}
-                    >
-                      {/* The box clips from the left; the path inside it
-                          reads in its own direction. See .file-path. */}
-                      <bdi>{filePath(file)}</bdi>
-                    </span>
-                    {hit && (
-                      <span className="hint" title="Go to this file">
-                        {'\u2014'} {matchSummary(hit)}
-                      </span>
-                    )}
-                    {folded && (
-                      <span className="badge sm" title={file.foldReason}>
-                        folded
-                      </span>
-                    )}
-                    {file.isMarkdown && <span className="badge sm" title="Previewable with mo">md</span>}
-                    {file.isImage && <span className="badge sm" title="Previewable as an image">img</span>}
-                    {file.isNotebook && (
-                      <span className="badge sm" title="Previewable as a Jupyter notebook">
-                        ipynb
-                      </span>
-                    )}
-                    {count > 0 && <span className="badge sm warn">{count}</span>}
-                    <span className="stat add">+{file.additions}</span>
-                    <span className="stat del">-{file.deletions}</span>
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
-        </div>
-      ))}
+      {diffs.map((diff) => {
+        const files = shown(diff)
+        return (
+          <SidebarRound
+            key={diff.id}
+            diff={diff}
+            files={files}
+            counts={counts.byRound.get(diff.id) ?? noCounts()}
+            open={roundComments(diff)}
+            hidden={!visible(diff)}
+            tabs={layout === 'tabs'}
+            shut={isShut(diff)}
+            activeKey={diff.id === activeDiffId ? activeKey : null}
+            hits={results.matches}
+            readKeys={readKeys}
+            onToggle={toggleRound}
+            onRemove={removeRound}
+            onJump={jumpTo}
+            onSetRead={onSetRead}
+          />
+        )
+      })}
 
       {status && status.groups.some((g) => g.name !== group) && (
         <div className="groups">
@@ -485,6 +425,198 @@ export function Sidebar({
     </aside>
   )
 }
+
+interface RoundProps {
+  diff: Diff
+  /** files are the ones to list: every file of the round, or the matches. */
+  files: FileDiff[]
+  counts: FileCounts
+  /** open is how many unresolved comments the whole round holds. */
+  open: number
+  hidden: boolean
+  tabs: boolean
+  shut: boolean
+  /** activeKey is the active section when it is in this round, else null, so
+   * that scrolling re-renders the round holding the old and the new one and no
+   * other. */
+  activeKey: string | null
+  hits: ReadonlyMap<string, FileMatch>
+  readKeys: Set<string>
+  onToggle: (id: string) => void
+  onRemove: (diff: Diff) => void
+  onJump: (diffId: string, fileId: string) => void
+  onSetRead: (key: string, value: boolean) => void
+}
+
+/**
+ * One round of the sidebar: its heading and the list of its files. It is
+ * memoised because the sidebar used to render every row of every round on
+ * each event and on each step of the scroll, which at 3000 files was a third
+ * of the page's work per event (#402). Everything it takes is a primitive or
+ * keeps its identity while it does not change.
+ */
+const SidebarRound = memo(function SidebarRound({
+  diff,
+  files,
+  counts,
+  open,
+  hidden,
+  tabs,
+  shut,
+  activeKey,
+  hits,
+  readKeys,
+  onToggle,
+  onRemove,
+  onJump,
+  onSetRead,
+}: RoundProps) {
+  return (
+    <div className="diff-round" hidden={hidden}>
+      <div className="diff-round-header" hidden={tabs}>
+        {!tabs ? (
+          <button
+            className="diff-round-title as-button"
+            title={new Date(diff.createdAt).toLocaleString()}
+            aria-expanded={!shut}
+            onClick={() => onToggle(diff.id)}
+          >
+            <span className="disclosure">
+              <Icon name={shut ? 'chevron_right' : 'expand_more'} small />
+            </span>
+            {diff.title}
+            <span className="hint">{files.length}</span>
+            {open > 0 && <span className="badge sm warn">{open}</span>}
+          </button>
+        ) : (
+          <span className="diff-round-title" title={new Date(diff.createdAt).toLocaleString()}>
+            {diff.title}
+          </span>
+        )}
+        {!client.isStatic && (
+          <button
+            className="ghost danger"
+            title="Remove this round"
+            onClick={() => onRemove(diff)}
+          >
+            <Icon name="close" small />
+          </button>
+        )}
+      </div>
+      <ul className="file-list" hidden={shut}>
+        {files.map((file) => {
+          const key = sectionKey(diff.id, file.id)
+          return (
+            <SidebarFile
+              key={file.id}
+              diffId={diff.id}
+              file={file}
+              active={activeKey === key}
+              count={counts.get(file.id) ?? 0}
+              hit={hits.get(key)}
+              read={readKeys.has(key)}
+              onJump={onJump}
+              onSetRead={onSetRead}
+            />
+          )
+        })}
+      </ul>
+    </div>
+  )
+})
+
+interface FileProps {
+  diffId: string
+  file: FileDiff
+  active: boolean
+  count: number
+  hit: FileMatch | undefined
+  read: boolean
+  onJump: (diffId: string, fileId: string) => void
+  onSetRead: (key: string, value: boolean) => void
+}
+
+/** One file row. Memoised for the same reason as SidebarRound: a comment on
+ * one file changes one row. */
+const SidebarFile = memo(function SidebarFile({
+  diffId,
+  file,
+  active,
+  count,
+  hit,
+  read,
+  onJump,
+  onSetRead,
+}: FileProps) {
+  const key = sectionKey(diffId, file.id)
+  // A folded file is still listed - the point is that it is out
+  // of the way, not out of sight.
+  const folded = Boolean(file.folded) && count === 0
+  const toggleRead = () => onSetRead(key, !read)
+  return (
+    <li>
+      <button
+        className={`file-item${active ? ' active' : ''}${folded ? ' folded' : ''}`}
+        onClick={() => onJump(diffId, file.id)}
+      >
+        {/* A span rather than a button: this sits inside the row's
+            own button, and a button inside a button is not
+            markup a browser will keep. The unread state is drawn
+            faintly rather than left blank so that the target is
+            there to aim at before it has been used. */}
+        <span
+          role="button"
+          tabIndex={0}
+          aria-pressed={read}
+          aria-label={read ? `Mark ${filePath(file)} unread` : `Mark ${filePath(file)} read`}
+          title={read ? 'Mark as unread' : 'Mark as read'}
+          style={{ display: 'inline-flex', opacity: read ? 1 : 0.25 }}
+          onClick={(ev) => {
+            ev.stopPropagation()
+            toggleRead()
+          }}
+          onKeyDown={(ev) => {
+            if (ev.key !== 'Enter' && ev.key !== ' ') return
+            ev.preventDefault()
+            ev.stopPropagation()
+            toggleRead()
+          }}
+        >
+          <Icon name="check" small />
+        </span>
+        <span className={`dot status-${file.status}`} title={file.status} />
+        <span className="file-path"
+          title={filePath(file)}
+          style={read ? { opacity: 0.55 } : undefined}
+        >
+          {/* The box clips from the left; the path inside it
+              reads in its own direction. See .file-path. */}
+          <bdi>{filePath(file)}</bdi>
+        </span>
+        {hit && (
+          <span className="hint" title="Go to this file">
+            {'—'} {matchSummary(hit)}
+          </span>
+        )}
+        {folded && (
+          <span className="badge sm" title={file.foldReason}>
+            folded
+          </span>
+        )}
+        {file.isMarkdown && <span className="badge sm" title="Previewable with mo">md</span>}
+        {file.isImage && <span className="badge sm" title="Previewable as an image">img</span>}
+        {file.isNotebook && (
+          <span className="badge sm" title="Previewable as a Jupyter notebook">
+            ipynb
+          </span>
+        )}
+        {count > 0 && <span className="badge sm warn">{count}</span>}
+        <span className="stat add">+{file.additions}</span>
+        <span className="stat del">-{file.deletions}</span>
+      </button>
+    </li>
+  )
+})
 
 /** roundSize counts what a round takes with it: every comment on it, the
  * resolved ones included, since the store deletes them all. */

@@ -646,7 +646,7 @@ export function App() {
         kind={resolvedPreviewKind}
         active
         comments={comments}
-        onChanged={() => void reload()}
+        onChanged={onChanged}
       />
     ) : (
       <p className="empty">Select a file.</p>
@@ -664,7 +664,7 @@ export function App() {
       forced={previewForced}
       onSetKind={setPreviewKind}
       comments={comments}
-      onChanged={() => void reload()}
+      onChanged={onChanged}
     />
   )
 

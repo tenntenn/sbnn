@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { Comment, Diff, FileDiff, PreviewKind, Status } from '../types'
 import { filePath, isPreviewable, previewFormatOf } from '../types'
 import { prefetchesForFind } from '../findHold'
@@ -11,6 +11,8 @@ import { MoIcon } from './MoIcon'
 import type { ScrollFraction } from './DiffStack'
 import { client } from '../client'
 import { useLazyMount, type FindPrefetch } from '../useLazyMount'
+import { sameElements } from '../share'
+import { syncObserved } from '../observed'
 
 // How far ahead of the visible area a section is fetched: generous enough
 // that the render is usually ready by the time the reader arrives, small
@@ -37,6 +39,93 @@ interface Props {
   comments: Comment[]
   onChanged: () => void
 }
+
+const NO_COMMENTS: Comment[] = []
+
+// What a file gets in place of the link targets when it renders no HTML of its
+// own: a source file or an image never reads them, and handing every one of
+// them the targets made each new round render every section again (#402).
+const NO_TARGETS: PreviewLinkTargets = {}
+
+interface SlotProps {
+  sectionKey: string
+  group: string
+  linkTargets: PreviewLinkTargets
+  diffId: string
+  file: FileDiff
+  status: Status | null
+  kind: PreviewKind
+  active: boolean
+  bodyMounted: boolean
+  frameMounted: boolean
+  comments: Comment[]
+  register: (key: string, el: HTMLDivElement | null) => void
+  settled: (key: string) => void
+  onSync: (on: boolean) => void
+  onChanged: () => void
+}
+
+// A section takes the status only to say whether mo is installed, and the
+// status is a new object on every event, so it is compared by that answer. The
+// comment list of a file is built again on every render of the stack and is
+// compared by its elements, which keep their identity (see ../share).
+function slotPropsEqual(a: SlotProps, b: SlotProps): boolean {
+  for (const k of Object.keys(a) as (keyof SlotProps)[]) {
+    if (k === 'comments' || k === 'status') continue
+    if (a[k] !== b[k]) return false
+  }
+  return (
+    (a.status === null) === (b.status === null) &&
+    a.status?.moAvailable === b.status?.moAvailable &&
+    sameElements(a.comments, b.comments)
+  )
+}
+
+/**
+ * One previewed file of the stack, memoised like DiffStack's StackFile: an
+ * event used to render every PreviewFileSection again because the status,
+ * the comment list and the closures handed to it were new each time (#402).
+ */
+const PreviewSlot = memo(function PreviewSlot({
+  sectionKey: key,
+  group,
+  linkTargets,
+  diffId,
+  file,
+  status,
+  kind,
+  active,
+  bodyMounted,
+  frameMounted,
+  comments,
+  register,
+  settled,
+  onSync,
+  onChanged,
+}: SlotProps) {
+  const ref = useCallback((el: HTMLDivElement | null) => register(key, el), [register, key])
+  const onSettled = useCallback(() => settled(key), [settled, key])
+  const onUserScroll = useCallback(() => onSync(false), [onSync])
+  return (
+    <div id={key} data-section-key={key} className="file-section" ref={ref}>
+      <PreviewFileSection
+        group={group}
+        linkTargets={linkTargets}
+        diffId={diffId}
+        file={file}
+        status={status}
+        kind={kind}
+        active={active}
+        onSettled={onSettled}
+        bodyMounted={bodyMounted}
+        frameMounted={frameMounted}
+        onUserScroll={onUserScroll}
+        comments={comments}
+        onChanged={onChanged}
+      />
+    </div>
+  )
+}, slotPropsEqual)
 
 export function PreviewStack({
   group,
@@ -114,9 +203,27 @@ export function PreviewStack({
 
   const nothingToPreview = diffs.length > 0 && rounds.length === 0
 
+  const commentsByKey = useMemo(() => {
+    const map = new Map<string, Comment[]>()
+    for (const c of comments) {
+      const key = sectionKey(c.diffId, c.fileId)
+      const list = map.get(key)
+      if (list) list.push(c)
+      else map.set(key, [c])
+    }
+    return map
+  }, [comments])
+
+  const registerSection = useCallback((key: string, el: HTMLDivElement | null) => {
+    if (el) sectionEls.current.set(key, el)
+    else sectionEls.current.delete(key)
+  }, [])
+
   // Lazy activation: a section starts fetching (and, for mo, mounting its
   // iframe) once it is near the viewport, and stays activated - scrolling
   // back past it must not re-fetch or reload it.
+  const activation = useRef<IntersectionObserver | null>(null)
+  const activationEls = useRef(new Map<string, HTMLDivElement>())
   useEffect(() => {
     const root = containerRef.current
     if (!root) return
@@ -138,12 +245,23 @@ export function PreviewStack({
       },
       { root, rootMargin: PREFETCH_MARGIN, threshold: 0 },
     )
-    for (const key of order) {
-      const el = sectionEls.current.get(key)
-      if (el) observer.observe(el)
+    activation.current = observer
+    return () => {
+      observer.disconnect()
+      activation.current = null
+      activationEls.current.clear()
     }
-    return () => observer.disconnect()
-  }, [containerRef, order])
+  }, [containerRef])
+
+  // The observer is kept across rounds and pointed at the sections that exist,
+  // rather than rebuilt and given every one of them again (#402).
+  useEffect(() => {
+    if (activation.current) {
+      syncObserved(activation.current, activationEls.current, order, (key) =>
+        sectionEls.current.get(key),
+      )
+    }
+  }, [order])
 
   // Which sections carry their body on the page. The rest are a shell that
   // stands as tall as the body last was (#390).
@@ -265,32 +383,24 @@ export function PreviewStack({
           {files.map((file) => {
             const key = sectionKey(d.id, file.id)
             return (
-              <div
+              <PreviewSlot
                 key={file.id}
-                id={key}
-                data-section-key={key}
-                className="file-section"
-                ref={(el) => {
-                  if (el) sectionEls.current.set(key, el)
-                  else sectionEls.current.delete(key)
-                }}
-              >
-                <PreviewFileSection
-                  group={group}
-                  linkTargets={linkTargets}
-                  diffId={d.id}
-                  file={file}
-                  status={status}
-                  kind={kind}
-                  active={activated.has(key)}
-                  onSettled={() => settled(key)}
-                  bodyMounted={mounted.has(key)}
-                  frameMounted={lazy.has(key)}
-                  onUserScroll={() => onSync(false)}
-                  comments={comments}
-                  onChanged={onChanged}
-                />
-              </div>
+                sectionKey={key}
+                group={group}
+                linkTargets={file.isMarkdown || file.isNotebook ? linkTargets : NO_TARGETS}
+                diffId={d.id}
+                file={file}
+                status={status}
+                kind={kind}
+                active={activated.has(key)}
+                bodyMounted={mounted.has(key)}
+                frameMounted={lazy.has(key)}
+                comments={commentsByKey.get(key) ?? NO_COMMENTS}
+                register={registerSection}
+                settled={settled}
+                onSync={onSync}
+                onChanged={onChanged}
+              />
             )
           })}
         </div>
