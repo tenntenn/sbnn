@@ -1,0 +1,31 @@
+(async () => {
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const st = document.querySelector('.diff-stack');
+  const secs = () => [...st.querySelectorAll('.file-section')];
+  const mountedN = () => secs().filter(s => s.children.length > 0).length;
+  await sleep(2000);
+  const out = { previewStack: !!document.querySelector('.preview-stack'), mdBefore: document.querySelectorAll('.preview-stack .markdown').length };
+  window.getSelection().removeAllRanges();
+  out.mdFindBefore = window.find('zzmdneedle398', true, false, true);
+  window.getSelection().removeAllRanges();
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true }));
+  const t0 = performance.now();
+  while (mountedN() < secs().length && performance.now() - t0 < 30000) await sleep(100);
+  await sleep(1500);
+  out.mdAfter = document.querySelectorAll('.preview-stack .markdown').length;
+  out.iframes = document.querySelectorAll('.preview-stack iframe').length;
+  window.getSelection().removeAllRanges();
+  out.diffFind = window.find('zzfarneedle398', true, false, true);
+  const sel = window.getSelection();
+  if (sel.rangeCount) sel.getRangeAt(0).startContainer.parentElement.scrollIntoView({ block: 'center' });
+  await sleep(500);
+  out.mdFindAfter = (() => { window.getSelection().removeAllRanges(); const r = window.find('zzmdneedle398', true, false, true); return r })();
+  const s2 = window.getSelection();
+  out.mdFoundIn = s2.rangeCount ? (s2.getRangeAt(0).startContainer.parentElement.closest('.preview-stack') ? 'preview' : 'other') : null;
+  window.getSelection().removeAllRanges();
+  window.find('zzfarneedle398', true, false, true);
+  const s3 = window.getSelection();
+  if (s3.rangeCount) s3.getRangeAt(0).startContainer.parentElement.scrollIntoView({ block: 'center' });
+  await sleep(300);
+  return JSON.stringify(out, null, 1);
+})()
