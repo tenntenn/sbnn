@@ -283,7 +283,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /_/events", s.handleEvents)
 	mux.Handle("GET /", s.spaHandler())
 
-	return s.withRequestLog(s.withSecurityHeaders(mux))
+	return s.withRequestLog(s.withSecurityHeaders(withGzip(mux)))
 }
 
 // withRequestLog logs one line per request: method, path, status, duration.
@@ -577,7 +577,30 @@ func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request) {
 	if g.Comments == nil {
 		g.Comments = []*model.Comment{}
 	}
-	writeJSON(w, http.StatusOK, withoutRawDiffs(g))
+	body, err := encodeJSON(withoutRawDiffs(g))
+	if err != nil {
+		http.Error(w, "cannot encode the group", http.StatusInternalServerError)
+		return
+	}
+	// A reload with nothing changed answers 304 and sends no body (#391).
+	// The validator is a hash of the body rather than a counter kept beside
+	// the data: every mutation would have to remember to bump a counter, and
+	// one that forgot would serve a stale page from a 304 for good. A hash
+	// cannot go stale. The marshal is still paid; the transfer is not.
+	etag := bodyETag(body)
+	h := w.Header()
+	h.Set("ETag", etag)
+	// no-cache lets a browser keep the body but makes it ask first.
+	h.Set("Cache-Control", "no-cache")
+	if etagMatches(r.Header, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(body); err != nil {
+		slog.Warn("failed to write response", "error", err)
+	}
 }
 
 // withoutRawDiffs drops the original diff text from a group about to be sent
@@ -1387,9 +1410,7 @@ func (s *Server) groupParam(w http.ResponseWriter, r *http.Request) (string, boo
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(v); err != nil {
+	if err := newJSONEncoder(w).Encode(v); err != nil {
 		slog.Warn("failed to write response", "error", err)
 	}
 }

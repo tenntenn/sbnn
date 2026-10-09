@@ -1,0 +1,26 @@
+#391 measurements. Same fixture as #376: 20 rounds x 20 files (400 files, 40 of
+them 300-line Markdown), 300 comments, sent to `--port 6398 --target t391
+--no-open`. Session file 4.7 MB. Client is curl on the same machine; the page
+sends Accept-Encoding: gzip on its own, so "gzip reload" is what it downloads.
+Method: send the 20 rounds with `sbnn --target`, add the 300 comments with
+`sbnn comment`, then GET /_/api/groups/t391 with curl (size_download and
+time_total) after each of 20 further comments.
+
+                                   before (main)         after (this PR)
+GET group, Accept-Encoding: gzip   6,378,001 B  44 ms    205,054 B  58 ms    (-96.8% bytes)
+GET group, no Accept-Encoding      6,378,001 B  41 ms    6,378,013 B 43 ms
+GET group, If-None-Match: <etag>   (no ETag)             0 B (304)  41 ms
+per event (comment + reload), mean of 20:
+  bytes the page downloads         6,382,639 B           205,257 B
+  time of that download            42.7 ms               56.6 ms   (localhost: +14 ms of compression
+                                                                    CPU; on a real link 6.2 MB less
+                                                                    to move is far more than 14 ms)
+
+Cost of rewriting the session file, store.persist() on that 4.7 MB session
+(marshal + temp file + fsync + rename, under the store lock), mean of 20:
+  14.9 ms per mutation.
+The whole `sbnn comment` call, process start included, takes 19-22 ms, so the
+rewrite is most of what the server spends on a comment. It is not changed here
+(see the PR description).
+
+Raw runs: before.txt, after.txt.
