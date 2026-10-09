@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { blockRanges, drawable, placeComments } from '../src/previewComments'
+import { blockRanges, blockSlotKey, drawable, finestMark, placeComments } from '../src/previewComments'
 import { renderBlocks } from '../src/lineMarks'
 import type { Comment } from '../src/types'
 
@@ -90,4 +90,40 @@ test('blockRanges ignores a data-ln a code block spells out', () => {
   assert.deepEqual(blockRanges(html), [
     { start: 1, end: 3 },
   ])
+})
+
+/** marksIn are the lines of the marks inside the first block of md, in
+ * order, and the lines that block covers. */
+function marksIn(md: string): { marks: number[]; block: { start: number; end: number } } {
+  const html = renderBlocks(md, 1, 'm', (h) => h)
+  const marks = Array.from(html.matchAll(/<span m="(\d+)"><\/span>/g), (m) => Number(m[1]))
+  return { marks, block: blockRanges(html)[0] }
+}
+
+const list = '- one\n- two\n  - nested\n- three\n'
+const table = '| a | b |\n| - | - |\n| 1 | 2 |\n| 3 | 4 |\n'
+const code = '```go\nfunc a()\nfunc b()\n```\n'
+
+const markCases = [
+  { name: 'the item a comment ends in', md: list, endLine: 4, want: 4 },
+  { name: 'the first item', md: list, endLine: 1, want: 1 },
+  { name: 'the innermost item of a nested list', md: list, endLine: 3, want: 3 },
+  { name: 'the table header', md: table, endLine: 1, want: 1 },
+  { name: 'the delimiter row stays with the header', md: table, endLine: 2, want: 1 },
+  { name: 'a body row', md: table, endLine: 4, want: 4 },
+  { name: 'a code line', md: code, endLine: 3, want: 3 },
+  { name: 'the opening fence has no line of its own', md: code, endLine: 1, want: null },
+  { name: 'a line past the block is left to the block', md: list, endLine: 9, want: null },
+]
+
+for (const c of markCases) {
+  test(`finestMark: ${c.name}`, () => {
+    const { marks, block } = marksIn(c.md)
+    assert.equal(finestMark(marks, c.endLine, block), c.want)
+  })
+}
+
+test('blockSlotKey never meets a line', () => {
+  assert.equal(blockSlotKey(0) < 0, true)
+  assert.notEqual(blockSlotKey(3), blockSlotKey(4))
 })

@@ -78,6 +78,33 @@ export function placeComments(blocks: BlockRange[], comments: Comment[]): Map<nu
   return placed
 }
 
+/**
+ * finestMark picks the line mark a comment is drawn under inside its block:
+ * the last mark at or before the comment's end line, which is the start of the
+ * list item, table row or code line the comment ends in. Marks are the lines
+ * lineMarks.ts put at the start of each line, in document order.
+ *
+ * It answers null - draw under the whole block - when the end line is not
+ * inside the block (the fallback for a line in a gap, see placeComments) or
+ * when no mark comes before it.
+ */
+export function finestMark(marks: number[], endLine: number, block: BlockRange): number | null {
+  if (endLine < block.start || endLine > block.end) return null
+  let found: number | null = null
+  for (const m of marks) {
+    if (m <= endLine) found = m
+    else break
+  }
+  return found
+}
+
+/** blockSlotKey is the key of the slot under a whole block. A slot under a
+ * finer element is keyed by its mark's (positive) line, so the two cannot
+ * meet. */
+export function blockSlotKey(index: number): number {
+  return -(index + 1)
+}
+
 /** SLOT_CLASS is the class of the element a file's comments are drawn into.
  * Everything inside such an element is a comment, never the document. */
 export const SLOT_CLASS = 'preview-comments'
