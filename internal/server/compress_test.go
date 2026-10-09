@@ -145,6 +145,7 @@ func TestOnlyTextOfTheAPIIsCompressed(t *testing.T) {
 		"html api":    {"/_/api/groups/g/diffs/d1/files/f1/preview", "text/html; charset=utf-8", true},
 		"plain error": {"/_/api/groups/g", "text/plain; charset=utf-8", true},
 		"image api":   {"/_/api/groups/g/diffs/d1/files/f1/image", "image/png", false},
+		"svg api":     {"/_/api/groups/g/diffs/d1/files/f1/image", "image/svg+xml", true},
 		"stream":      {"/_/api/events", "text/event-stream", false},
 		"page":        {"/index.html", "text/html; charset=utf-8", false},
 		"script":      {"/assets/app.js", "text/javascript", false},
@@ -279,6 +280,31 @@ func TestFlushReachesTheClientThroughGzip(t *testing.T) {
 	rest, err := io.ReadAll(zr)
 	if err != nil || string(rest) != "second" {
 		t.Errorf("rest = %q, %v", rest, err)
+	}
+}
+
+// A flush before the first write sends the header, so the response has to be
+// settled as compressed or not at that point.
+func TestFlushBeforeAnyWriteStillCompresses(t *testing.T) {
+	h := withGzip(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.(http.Flusher).Flush()
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, body := rawGet(t, srv.URL+"/_/api/x", map[string]string{"Accept-Encoding": "gzip"})
+	if got := resp.Header.Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", got)
+	}
+	zr, err := gzip.NewReader(strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(zr)
+	if err != nil || string(got) != `{"ok":true}` {
+		t.Errorf("body = %q, %v", got, err)
 	}
 }
 

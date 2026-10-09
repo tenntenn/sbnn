@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"mime"
 	"net/http"
 	"strconv"
@@ -97,6 +98,8 @@ func (g *gzipResponseWriter) Write(b []byte) (int, error) {
 // swallowed it would turn a stream into a buffered response that never
 // arrives, so it reaches the compressor and then the connection.
 func (g *gzipResponseWriter) Flush() {
+	// Flushing sends the header, so the decision cannot wait for a write.
+	g.decide(http.StatusOK)
 	if g.gz != nil {
 		g.gz.Flush()
 	}
@@ -135,7 +138,8 @@ func compressible(status int, h http.Header) bool {
 	switch {
 	case strings.HasPrefix(mt, "text/"):
 		return mt != "text/event-stream"
-	case mt == "application/json", strings.HasSuffix(mt, "+json"):
+	case mt == "application/json", mt == "application/xml",
+		strings.HasSuffix(mt, "+json"), strings.HasSuffix(mt, "+xml"):
 		return true
 	}
 	return false
@@ -195,10 +199,16 @@ func etagMatches(h http.Header, etag string) bool {
 // encodeJSON renders v the way writeJSON does.
 func encodeJSON(v any) ([]byte, error) {
 	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(v); err != nil {
+	if err := newJSONEncoder(&buf).Encode(v); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// newJSONEncoder is the one place the API's JSON formatting is decided, for
+// writeJSON and for the bodies that are hashed before they are sent.
+func newJSONEncoder(w io.Writer) *json.Encoder {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc
 }

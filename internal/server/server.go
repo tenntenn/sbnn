@@ -1410,9 +1410,7 @@ func (s *Server) groupParam(w http.ResponseWriter, r *http.Request) (string, boo
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(v); err != nil {
+	if err := newJSONEncoder(w).Encode(v); err != nil {
 		slog.Warn("failed to write response", "error", err)
 	}
 }
