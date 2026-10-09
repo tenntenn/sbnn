@@ -54,13 +54,20 @@ import (
 // contribution to the page under 11MB, which still leaves room to mail the
 // result - and a page past that is not one anybody opens twice.
 //
-// Both caps are properties of a single document, deliberately: a budget for
-// the whole page could only be spent at export time, and the live preview,
-// which renders one file at a time and knows nothing of the others, would
-// then decide differently from the exported page for the same file.
+// Both caps are properties of a single document, deliberately: the live
+// preview renders one file at a time and knows nothing of the others, so it
+// cannot spend a budget across files. MaxPageBytes is the one cap that is
+// spent across files, and so only the exporter spends it - see Spend.
 const (
 	MaxBytes      = 2 << 20 // 2MiB
 	MaxTotalBytes = 8 << 20 // 8MiB
+
+	// MaxPageBytes bounds the images of the diffs themselves in one exported
+	// page, all of them together (#356). Without it ten images that each fit
+	// under MaxBytes made a 28MB page. It equals MaxTotalBytes so that the
+	// diff images and one document's siblings are each held to the same
+	// ceiling, about 11MB of base64.
+	MaxPageBytes = 8 << 20 // 8MiB
 )
 
 // Status says what became of one image reference. Every reference gets one,
@@ -379,13 +386,10 @@ func fenceOf(line string) string {
 // - the live page, which draws the picture from an endpoint, and the exported
 // page, which carries the bytes - reach one answer for one file.
 //
-// It is deliberately per file and not per page. A budget spent across the
-// page can only be spent at export time: the live preview draws one file at a
-// time and knows nothing of the others, so the same file would be shown on
-// screen and left out of the export, which is exactly the divergence #305
-// exists to prevent. MaxTotalBytes is a property of one document for the same
-// reason. So the page total stays unbounded in the number of files, and every
-// individual picture in it is bounded.
+// It is deliberately per file and not per page: the live preview draws one
+// file at a time and knows nothing of the others. The page total is bounded
+// by the exporter alone, through Spend (#356), and the exported page says
+// when it left a picture out that the live page draws.
 //
 // baseDir is the directory the diff was sent from; f must be the file itself.
 // A file that is not an image, or was deleted, has nothing to decide and gets
@@ -406,6 +410,27 @@ func InDiff(baseDir string, f *model.File) (Status, int64) {
 		return StatusTooLarge, st.Size()
 	}
 	return StatusOK, st.Size()
+}
+
+// Spend charges an image of the diff against the page budget MaxPageBytes.
+// status and size are InDiff's answer for the file; spent is what the files
+// before it in a stable order have cost so far. A file that fits is charged
+// and keeps StatusOK; one that would push the page past the budget becomes
+// StatusOverBudget and is not charged, so a smaller file after it can still
+// fit. Any other status is returned as it is and costs nothing.
+//
+// This is called only when exporting. A live page cannot call it, since it
+// never sees more than one file, which is why the exported page may leave out
+// a picture the live page draws; the placeholder names the reason.
+func Spend(status Status, size int64, spent *int64) Status {
+	if status != StatusOK {
+		return status
+	}
+	if *spent+size > MaxPageBytes {
+		return StatusOverBudget
+	}
+	*spent += size
+	return StatusOK
 }
 
 // RecordInDiff writes InDiff's answer onto every file of a diff, so that the
