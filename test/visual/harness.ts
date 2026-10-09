@@ -30,6 +30,24 @@ export type Handoff = {
   pid: number
 }
 
+export const MANY_GROUP = 'many'
+export const MANY_FILES = 300
+export const MANY_LINES = 40
+
+/** manyFilesDiff is a unified diff that adds `files` new files of `lines`
+ * lines each, written out here rather than kept as a fixture of a few
+ * megabytes. */
+export function manyFilesDiff(files: number, lines: number): string {
+  const out: string[] = []
+  for (let i = 0; i < files; i++) {
+    const path = `pkg${i % 10}/file${i}.go`
+    out.push(`diff --git a/${path} b/${path}`, 'new file mode 100644', 'index 0000000..1111111')
+    out.push('--- /dev/null', `+++ b/${path}`, `@@ -0,0 +1,${lines} @@`)
+    for (let k = 0; k < lines; k++) out.push(`+func F${k}() int { return ${k} * ${i} }`)
+  }
+  return out.join('\n') + '\n'
+}
+
 /** Reads what globalSetup left behind for the specs. */
 export function handoff(): Handoff {
   return JSON.parse(readFileSync(handoffPath, 'utf8')) as Handoff
@@ -125,6 +143,18 @@ export async function start(): Promise<Handoff> {
   })
   if (add.status !== 0) {
     throw new Error(`feeding the fixture failed:\n${add.stderr ?? ''}${add.stdout ?? ''}`)
+  }
+
+  // A second group with a few hundred files, for what only shows when there
+  // are that many on one page (#390). It is a group of its own so the
+  // fixture above, which the other specs measure, is left exactly as it is.
+  const many = spawnSync(bin, ['--port', String(port), '--no-open', '--target', MANY_GROUP], {
+    env,
+    input: manyFilesDiff(MANY_FILES, MANY_LINES),
+    encoding: 'utf8',
+  })
+  if (many.status !== 0) {
+    throw new Error(`feeding the many-files group failed:\n${many.stderr ?? ''}${many.stdout ?? ''}`)
   }
 
   // The exported page is the same UI with no server behind it, which is

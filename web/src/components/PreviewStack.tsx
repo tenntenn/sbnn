@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { Comment, Diff, FileDiff, PreviewKind, Status } from '../types'
 import { filePath, isPreviewable } from '../types'
 import type { PreviewLinkTargets } from '../markdown'
@@ -9,6 +9,7 @@ import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
 import type { ScrollFraction } from './DiffStack'
 import { client } from '../client'
+import { useLazyMount } from '../useLazyMount'
 
 // How far ahead of the visible area a section is fetched: generous enough
 // that the render is usually ready by the time the reader arrives, small
@@ -143,6 +144,14 @@ export function PreviewStack({
     return () => observer.disconnect()
   }, [containerRef, order])
 
+  // Which sections carry their body on the page. The rest are a shell that
+  // stands as tall as the body last was (#390).
+  const { mounted } = useLazyMount(
+    containerRef,
+    order,
+    useCallback((key: string) => sectionEls.current.get(key), []),
+  )
+
   // Follow the diff: move to the same file, at the same fraction into its
   // section, that the diff pane is showing.
   useEffect(() => {
@@ -240,6 +249,7 @@ export function PreviewStack({
                   status={status}
                   kind={kind}
                   active={activated.has(key)}
+                  bodyMounted={mounted.has(key)}
                   onUserScroll={() => onSync(false)}
                   comments={comments}
                   onChanged={onChanged}

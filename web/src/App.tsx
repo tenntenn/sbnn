@@ -452,13 +452,28 @@ export function App() {
       if (!target) return
       setCurrentCommentId(target.id)
       goToKey(target.key)
-      window.setTimeout(() => {
+      // The comment sits in a section body, and a body far from the viewport
+      // is not on the page until the jump above has brought it near: look
+      // again for a moment rather than once (#390).
+      const started = performance.now()
+      const scrolled = new Set<string>()
+      const reveal = () => {
         // The comment is drawn in the diff pane and in the preview, under
         // an id of its own in each; whichever panes are showing it follow.
-        for (const id of commentDomIds(target.id)) {
-          document.getElementById(id)?.scrollIntoView({ block: 'center' })
+        // A pane whose body mounts later is picked up by the next look, so
+        // this runs to the end of the window rather than stopping at the
+        // first pane that has it.
+        const ids = commentDomIds(target.id)
+        for (const id of ids) {
+          if (scrolled.has(id)) continue
+          const el = document.getElementById(id)
+          if (!el) continue
+          scrolled.add(id)
+          el.scrollIntoView({ block: 'center' })
         }
-      }, 50)
+        if (scrolled.size < ids.length && performance.now() - started < 1500) window.setTimeout(reveal, 50)
+      }
+      window.setTimeout(reveal, 50)
     },
     [comments, currentCommentId, activeKey, goToKey],
   )
