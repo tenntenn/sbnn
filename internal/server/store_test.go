@@ -343,16 +343,14 @@ func TestRoundsArePersisted(t *testing.T) {
 	s.AddDiff("api", &model.Diff{})
 	s.AddDiff("api", &model.Diff{})
 
-	b, err := os.ReadFile(path)
-	if err != nil {
+	// The second round was appended to the log, so read the file the way
+	// the next server does.
+	loaded := NewStore(path)
+	if err := loaded.Load(); err != nil {
 		t.Fatal(err)
 	}
-	var p persisted
-	if err := json.Unmarshal(b, &p); err != nil {
-		t.Fatal(err)
-	}
-	if p.Rounds["api"] != 2 {
-		t.Errorf(`"rounds" = %v, want api=2`, p.Rounds)
+	if loaded.rounds["api"] != 2 {
+		t.Errorf("rounds = %v, want api=2", loaded.rounds)
 	}
 }
 
@@ -609,6 +607,15 @@ func TestSharedSeqIsWrittenForOlderSbnn(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The field lives in the snapshot, which is what an older sbnn can read;
+	// the mutations above were appended after it. Folding the log into a
+	// snapshot is what happens once the log outgrows it.
+	s.mu.Lock()
+	err := s.write()
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

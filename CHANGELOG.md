@@ -35,9 +35,19 @@ type persisted struct {
 const persistVersion = 1
 ```
 
-Current schema version: **1**. A change that older sbnn cannot read is a bump
+Current schema version: **2**. A change that older sbnn cannot read is a bump
 of `persistVersion`, and belongs here with what happens to an existing session
 file when it meets the newer binary.
+
+- **Version 2** (unreleased): the file is a snapshot followed by a log. The
+  first JSON value is the whole session, as in version 1; each line after it is
+  one mutation (`internal/server/store_log.go`), appended and fsynced before
+  the request returns, and folded back into a new snapshot once the log is
+  longer than the snapshot. A version 1 file, which is a snapshot with no log,
+  loads unchanged and is rewritten on the first mutation. An older sbnn refuses
+  a version 2 snapshot that has no log yet, and sets aside one that has a log as
+  broken (`session-<port>.json.broken`, which a newer sbnn reads again when it
+  is moved back).
 
 ### `reviews.jsonl`
 
