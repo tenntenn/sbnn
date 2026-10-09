@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { groupFromLocation } from './api'
+import { groupFromLocation, type ChangeScope } from './api'
 import { client } from './client'
+import { LoadOrder } from './loadOrder'
 import { readBoolSetting, readEnumSetting, readNumberSetting, readSetting, readStringSet, writeBoolSetting, writeSetting, writeStringSet } from './storage'
 import { isPreviewable, type Comment, type Diff, type FileDiff, type PreviewKind, type Status, type ViewMode, type Verdict } from './types'
 import { DiffFileSection } from './components/DiffFileSection'
@@ -233,27 +234,50 @@ export function App() {
     writeSetting(SPLIT_KEY, String(splitRatio))
   }, [splitRatio])
 
-  const reload = useCallback(async () => {
-    try {
-      const data = await client.load(group)
-      const ids = data.diffs.map((d) => d.id)
-      if (notifyRef.current && !client.isStatic) {
-        announceNewDiffs(group, newDiffIds(seenDiffIds.current, ids).length)
+  const loads = useRef(new LoadOrder())
+
+  // scope says what the event that asked for this touched. 'comments' fetches
+  // the comments and the status; the diffs, and the review fields that come
+  // with them, are what the page already holds (#403). Anything else - the
+  // first load, a reconnect, a new diff, a review - fetches the whole group,
+  // which is also what heals a missed event.
+  const reload = useCallback(
+    async (scope?: ChangeScope) => {
+      const ticket = loads.current.begin(scope !== 'comments')
+      try {
+        if (scope === 'comments') {
+          const data = await client.loadComments(group)
+          if (!ticket.freshComments()) return
+          setComments((prev) => shareComments(prev, data.comments))
+          setStatus(data.status)
+          setError(null)
+          return
+        }
+        const data = await client.load(group)
+        if (ticket.freshDiffs()) {
+          const ids = data.diffs.map((d) => d.id)
+          if (notifyRef.current && !client.isStatic) {
+            announceNewDiffs(group, newDiffIds(seenDiffIds.current, ids).length)
+          }
+          seenDiffIds.current = new Set(ids)
+          // Keep the objects that did not change, so that one new comment does
+          // not make every file section render again (#376).
+          setDiffs((prev) => shareDiffs(prev, data.diffs))
+          setReviewedAt(data.reviewedAt ?? null)
+          setReviewVerdict(data.reviewVerdict ?? null)
+          setRoundReviewed(data.reviewed ?? null)
+        }
+        if (ticket.freshComments()) {
+          setComments((prev) => shareComments(prev, data.comments))
+          setStatus(data.status)
+        }
+        setError(null)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
       }
-      seenDiffIds.current = new Set(ids)
-      // Keep the objects that did not change, so that one new comment does
-      // not make every file section render again (#376).
-      setDiffs((prev) => shareDiffs(prev, data.diffs))
-      setComments((prev) => shareComments(prev, data.comments))
-      setReviewedAt(data.reviewedAt ?? null)
-      setReviewVerdict(data.reviewVerdict ?? null)
-      setRoundReviewed(data.reviewed ?? null)
-      setStatus(data.status)
-      setError(null)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }, [group])
+    },
+    [group],
+  )
 
   // One identity for as long as the group stays, so that a section memoised on
   // its props is not rendered again just because the page was.
@@ -261,8 +285,8 @@ export function App() {
 
   useEffect(() => {
     void reload()
-    return client.subscribe(group, () => {
-      void reload()
+    return client.subscribe(group, (scope) => {
+      void reload(scope)
     })
   }, [group, reload])
 

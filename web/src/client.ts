@@ -33,6 +33,13 @@ export type PreviewResult =
       complete: boolean
     }
 
+/** CommentsData is what a comments-only reload brings: the comments, and the
+ * status that counts them. */
+export interface CommentsData {
+  comments: Comment[]
+  status: Status | null
+}
+
 export interface GroupData {
   diffs: Diff[]
   comments: Comment[]
@@ -60,6 +67,9 @@ export interface SbnnClient {
   /** sbnnVersion is the sbnn that wrote a static page, where the page says. */
   readonly sbnnVersion?: string
   load(group: string): Promise<GroupData>
+  /** loadComments is load for an event that only touched comments: it does not
+   * fetch the diffs, and leaves the review fields alone. */
+  loadComments(group: string): Promise<CommentsData>
   addComment(group: string, comment: api.NewComment): Promise<void>
   updateComment(group: string, id: string, patch: api.CommentPatch): Promise<void>
   deleteComment(group: string, id: string): Promise<void>
@@ -87,7 +97,7 @@ export interface SbnnClient {
    * is synchronous: the browser fetches the image itself once it is set as
    * a src, there is nothing for sbnn to await first. */
   imageSrc(group: string, diffId: string, fileId: string): string | undefined
-  subscribe(group: string, onChange: () => void): () => void
+  subscribe(group: string, onChange: (scope?: api.ChangeScope) => void): () => void
 }
 
 /** StaticPayload is the data `sbnn export` embeds into the page. */
@@ -168,6 +178,10 @@ function createLiveClient(): SbnnClient {
         reviewVerdict: g.reviewVerdict,
         status,
       }
+    },
+    async loadComments(group) {
+      const [comments, status] = await Promise.all([api.getComments(group), api.getStatus()])
+      return { comments: comments ?? [], status }
     },
     async addComment(group, comment) {
       await api.addComment(group, comment)
@@ -433,6 +447,9 @@ function createStaticClient(data: StaticPayload): SbnnClient {
         reviewVerdict: data.reviewVerdict,
         reviewed: data.reviewed,
       }
+    },
+    async loadComments() {
+      return { comments: read(), status: null }
     },
     async addComment(group, comment) {
       const now = new Date().toISOString()

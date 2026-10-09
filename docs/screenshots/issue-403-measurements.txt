@@ -1,0 +1,18 @@
+before
+  add comment                  transfer   958618 B  decoded  31145966 B  [('group', 938), ('status', 3)]
+  resolve comment              transfer   958631 B  decoded  31145965 B  [('group', 983), ('status', 3)]
+  delete comment               transfer   958558 B  decoded  31145516 B  [('group', 740), ('status', 3)]
+  submit review (approved)     transfer   958665 B  decoded  31145682 B  [('group', 790), ('status', 3)]
+  add comment after review     transfer   958718 B  decoded  31146132 B  [('group', 629), ('status', 3)]
+  head live  : sbnn t402 31 round(s) · 1001 comment(s) · 1001 open content_copy Copy prompt task_alt Approved settings
+  head reload: sbnn t402 31 round(s) · 1001 comment(s) · 1001 open content_copy Copy prompt task_alt Approved settings
+  same: True 831515885 831515885
+after
+  add comment                  transfer    40051 B  decoded    418726 B  [('group/comments', 47), ('status', 4)]
+  resolve comment              transfer    40065 B  decoded    418726 B  [('group/comments', 20), ('status', 4)]
+  delete comment               transfer    39994 B  decoded    418311 B  [('group/comments', 12), ('status', 3)]
+  submit review (approved)     transfer   958690 B  decoded  31145718 B  [('group', 838), ('status', 7)]
+  add comment after review     transfer    40086 B  decoded    418786 B  [('group/comments', 14), ('status', 3)]
+  head live  : sbnn t402 31 round(s) · 1001 comment(s) · 1001 open content_copy Copy prompt task_alt Approved settings
+  head reload: sbnn t402 31 round(s) · 1001 comment(s) · 1001 open content_copy Copy prompt task_alt Approved settings
+  same: True -64951991 -64951991

@@ -1019,7 +1019,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.notify(name)
+	s.notifyComments(name)
 	writeJSON(w, http.StatusOK, c)
 }
 
@@ -1086,7 +1086,7 @@ func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such comment", http.StatusNotFound)
 		return
 	}
-	s.notify(name)
+	s.notifyComments(name)
 	writeJSON(w, http.StatusOK, c)
 }
 
@@ -1099,7 +1099,7 @@ func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such comment", http.StatusNotFound)
 		return
 	}
-	s.notify(name)
+	s.notifyComments(name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1109,7 +1109,7 @@ func (s *Server) handleClearComments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	removed := s.store.ClearComments(name, r.URL.Query().Get("resolved") == "true")
-	s.notify(name)
+	s.notifyComments(name)
 	writeJSON(w, http.StatusOK, map[string]int{"removed": removed})
 }
 
@@ -1326,13 +1326,40 @@ func (s *Server) notifyReview(g *model.Group) {
 	s.broker.publishReview(g.Name, msg)
 }
 
-// notify tells connected browsers that a group changed.
+// scopeComments is the scope of a change that touched nothing but the comments
+// of a group. A change event without a scope may have touched anything.
+const scopeComments = "comments"
+
+// notify tells connected browsers that a group changed. The page answers by
+// fetching the whole group, diffs included.
 func (s *Server) notify(group string) {
-	msg, err := json.Marshal(map[string]string{"type": "change", "group": group})
+	s.notifyScoped(group, "")
+}
+
+// notifyComments is notify for a change that only touched comments. The event
+// says so, which lets a page fetch the comments and the status instead of
+// every diff of the group (#403): a review of 3000 files is 31 MB of diffs and
+// 330 KB of comments, and a comment event used to pay for all of it.
+//
+// The full event goes out beside the scoped one, for a subscriber that has
+// dropped an event (see broker.publishChange).
+func (s *Server) notifyComments(group string) {
+	s.notifyScoped(group, scopeComments)
+}
+
+func (s *Server) notifyScoped(group, scope string) {
+	full, err := json.Marshal(map[string]string{"type": "change", "group": group})
 	if err != nil {
 		return
 	}
-	s.broker.publishChange(msg)
+	var scoped []byte
+	if scope != "" {
+		scoped, err = json.Marshal(map[string]string{"type": "change", "group": group, "scope": scope})
+		if err != nil {
+			return
+		}
+	}
+	s.broker.publishChange(full, scoped)
 }
 
 // decodeBody decodes a JSON request body under a size limit, answering the
@@ -1462,12 +1489,17 @@ type broker struct {
 	// reviews holds the most recent review notice per group, so a client that
 	// missed one while catching up still gets it when it reconnects.
 	reviews map[string]event
+	// lagging marks a subscriber whose queue was full when a change notice
+	// came: it lost an event whose scope nobody knows any more, so the next
+	// notice it is given says "everything" (see publishChange).
+	lagging map[chan event]bool
 }
 
 func newBroker() *broker {
 	return &broker{
 		subs:    map[chan event]struct{}{},
 		reviews: map[string]event{},
+		lagging: map[chan event]bool{},
 	}
 }
 
@@ -1487,6 +1519,7 @@ func (b *broker) unsubscribe(ch chan event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.subs, ch)
+	delete(b.lagging, ch)
 }
 
 // count reports how many listeners are connected, which tests use to know
@@ -1522,12 +1555,29 @@ func (b *broker) forgetReviews(group string) {
 	delete(b.reviews, group)
 }
 
-// publishChange tells subscribers a group changed. Losing one of these costs
-// nothing: the next one supersedes it, and the browser refetches the group.
-func (b *broker) publishChange(msg []byte) {
+// publishChange tells subscribers a group changed. full says "anything may have
+// changed"; scoped, when not nil, says what did, and is what a subscriber gets
+// as long as it has missed nothing.
+//
+// Losing a notice used to cost nothing, because the next one superseded it and
+// the browser refetched the whole group. A scoped notice does not supersede
+// the one before it: a dropped diffs notice followed by a comments one would
+// leave the diffs stale until something else came along. So a subscriber that
+// had a notice dropped is given the full one next, which covers what it lost.
+func (b *broker) publishChange(full, scoped []byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.fanout(event{data: msg})
+	for ch := range b.subs {
+		msg := full
+		if scoped != nil && !b.lagging[ch] {
+			msg = scoped
+		}
+		if deliver(ch, event{data: msg}) {
+			delete(b.lagging, ch)
+		} else {
+			b.lagging[ch] = true
+		}
+	}
 }
 
 // publishReview tells subscribers a review was submitted, and remembers it.
@@ -1558,14 +1608,16 @@ func (b *broker) fanout(ev event) {
 // a review lands never learned it happened, and `sbnn wait` then blocked
 // forever on a review that already finished. So make room for it by discarding
 // queued change notices, keeping any review notices in order.
-func deliver(ch chan event, ev event) {
+//
+// It reports whether ev was queued.
+func deliver(ch chan event, ev event) bool {
 	select {
 	case ch <- ev:
-		return
+		return true
 	default:
 	}
 	if ev.id == 0 {
-		return
+		return false
 	}
 	keep := make([]event, 0, cap(ch)+1)
 drain:
@@ -1587,4 +1639,5 @@ drain:
 			slog.Warn("dropped a review notice: the event queue is full", "id", q.id)
 		}
 	}
+	return true
 }

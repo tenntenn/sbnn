@@ -56,7 +56,7 @@ func TestReviewNoticeSurvivesABehindSubscriber(t *testing.T) {
 
 	// Fall far enough behind that the queue is full of change notices.
 	for range cap(ch) * 2 {
-		b.publishChange([]byte(`{"type":"change","group":"default"}`))
+		b.publishChange([]byte(`{"type":"change","group":"default"}`), nil)
 	}
 	if len(ch) != cap(ch) {
 		t.Fatalf("queued %d change notices, want the queue full at %d", len(ch), cap(ch))

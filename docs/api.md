@@ -737,7 +737,7 @@ Two kinds of event, told apart by `type`:
 
 | `type` | payload | id |
 | --- | --- | --- |
-| `change` | `{"type":"change","group":"<name>"}` — a diff, comment or hook moved. `group` is empty when every group went at once. | none |
+| `change` | `{"type":"change","group":"<name>"}` — a diff, comment or hook moved. `group` is empty when every group went at once. A change that touched nothing but comments adds `"scope":"comments"`, which tells a page it need not fetch the diffs again. No `scope` means anything may have changed. | none |
 | `review` | `{"type":"review","group","reviewedAt","comments","verdict"}` — a review was submitted. `comments` is how many are still open. | a counter |
 
 A `:` ping goes out every 25 seconds so an idle connection is not collected.
