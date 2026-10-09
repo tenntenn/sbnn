@@ -94,6 +94,11 @@ func parseSession(b []byte) (*session, error) {
 	if err := dec.Decode(&sess.snap); err != nil {
 		return nil, err
 	}
+	if sess.snap.Version > persistVersion {
+		// What follows is in a format this build cannot read, and Load says
+		// so instead of calling the file broken.
+		return &sess, nil
+	}
 	off := int(dec.InputOffset())
 	rest := b[off:]
 	sess.snapBytes = off
@@ -121,6 +126,13 @@ func parseSession(b []byte) (*session, error) {
 		}
 		var rec logRecord
 		if err := json.Unmarshal(line, &rec); err != nil {
+			if len(rest) == 0 {
+				// The last record, with its newline but not its contents:
+				// the block was extended before the data reached it. It was
+				// not acknowledged either.
+				sess.dirty = true
+				break
+			}
 			return nil, fmt.Errorf("record %d of the log: %w", len(sess.records)+1, err)
 		}
 		sess.records = append(sess.records, &rec)

@@ -119,16 +119,7 @@ func (s *Store) Load() error {
 	}
 	sess, err := parseSession(b)
 	if err != nil {
-		// Starting empty on top of the old file means the next diff,
-		// comment or hook renames a fresh session over it. A truncated
-		// write from a killed server is exactly the case where the old
-		// bytes are still worth having, so keep them.
-		kept, moveErr := s.setAside()
-		if moveErr != nil {
-			return fmt.Errorf("session file %s is broken and could not be moved aside (%v): %w", s.path, moveErr, err)
-		}
-		return fmt.Errorf("session file %s is broken, so sbnn started a new session; "+
-			"the old one was kept as %s: %w", s.path, kept, err)
+		return s.brokenFile(err)
 	}
 	// A file from a newer sbnn may hold fields this build knows nothing
 	// about. Loading it as far as the JSON tags happen to line up would turn
@@ -168,9 +159,11 @@ func (s *Store) Load() error {
 	// a log tail that was cut short is a write the server never answered. Both
 	// leave the file unfit to append to, so the next mutation rewrites it.
 	s.dirty = sess.dirty
-	s.groups = validGroups(s.path, p.Groups)
+	// The log is replayed over the snapshot as it was written, and only then
+	// are the groups sbnn would never have accepted dropped, so that a record
+	// for one of them is replayed like any other instead of failing.
+	s.groups = slices.DeleteFunc(slices.Clone(p.Groups), func(g *model.Group) bool { return g == nil })
 	if len(s.groups) != len(p.Groups) {
-		// The dropped groups are still in the snapshot on disk.
 		s.dirty = true
 	}
 	s.seq = p.Seqs
@@ -195,9 +188,25 @@ func (s *Store) Load() error {
 	}
 	for _, rec := range sess.records {
 		if err := s.apply(rec); err != nil {
-			return fmt.Errorf("session file %s: %w", s.path, err)
+			// A record that cannot be replayed means what follows it cannot be
+			// trusted either, and appending after it would bury it. Start
+			// over, and keep the file like any other broken one.
+			s.groups, s.seq, s.rounds = nil, nil, nil
+			s.snapBytes, s.logBytes, s.dirty = 0, 0, false
+			return s.brokenFile(err)
 		}
 	}
+	valid := validGroups(s.path, s.groups)
+	if len(valid) != len(s.groups) {
+		// The dropped groups are still in the file.
+		s.dirty = true
+		for _, g := range s.groups {
+			if !slices.Contains(valid, g) {
+				delete(s.rounds, g.Name)
+			}
+		}
+	}
+	s.groups = valid
 	return nil
 }
 
@@ -231,6 +240,21 @@ func validGroups(path string, groups []*model.Group) []*model.Group {
 		kept = append(kept, g)
 	}
 	return kept
+}
+
+// brokenFile sets a session file that cannot be read aside, so that the new
+// session does not overwrite it, and says where it went.
+func (s *Store) brokenFile(err error) error {
+	// Starting empty on top of the old file means the next diff, comment or
+	// hook renames a fresh session over it. A truncated write from a killed
+	// server is exactly the case where the old bytes are still worth having,
+	// so keep them.
+	kept, moveErr := s.setAside()
+	if moveErr != nil {
+		return fmt.Errorf("session file %s is broken and could not be moved aside (%v): %w", s.path, moveErr, err)
+	}
+	return fmt.Errorf("session file %s is broken, so sbnn started a new session; "+
+		"the old one was kept as %s: %w", s.path, kept, err)
 }
 
 // setAside renames a session file sbnn refuses to load, so that the new
@@ -305,7 +329,8 @@ func (s *Store) nextID(prefix string) string {
 
 // sharedSeq is what the pre-split "seq" field is written as: the highest of
 // the per-prefix counters, so an sbnn old enough to read only that field
-// carries on without reusing an id. The caller must hold the lock.
+// carries on without reusing an id. It is only as current as the last
+// snapshot, which is all such an sbnn could read. The caller must hold the lock.
 func (s *Store) sharedSeq() int {
 	highest := 0
 	for _, n := range s.seq {

@@ -15,7 +15,12 @@ func stateOf(t *testing.T, s *Store) string {
 	t.Helper()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	b, err := json.Marshal(persisted{Seqs: s.seq, Groups: s.groups, Rounds: s.rounds})
+	groups := s.groups
+	if len(groups) == 0 {
+		// A store that has held groups and one that never did look alike.
+		groups = nil
+	}
+	b, err := json.Marshal(persisted{Seqs: s.seq, Groups: groups, Rounds: s.rounds})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,6 +247,7 @@ func TestATornLastRecordIsDropped(t *testing.T) {
 		{"cut in the middle", `{"op":"comment","group":"default","comment":{"id":"c9","gro`},
 		{"complete but unterminated", `{"op":"delAll"}`},
 		{"a lone brace", `{`},
+		{"terminated but not a record", "{\"op\":\"comm\x00\x00\x00\x00\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
