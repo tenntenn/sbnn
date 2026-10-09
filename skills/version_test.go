@@ -50,6 +50,13 @@ func TestStamp(t *testing.T) {
 	}
 }
 
+func TestVersionReadsACRLFCopy(t *testing.T) {
+	crlf := strings.ReplaceAll(string(Stamp([]byte(sample), "1.2.0")), "\n", "\r\n")
+	if got := Version([]byte(crlf)); got != "1.2.0" {
+		t.Errorf("Version() = %q, want 1.2.0", got)
+	}
+}
+
 func TestDecide(t *testing.T) {
 	v100 := string(Stamp([]byte(sample), "1.0.0"))
 	v110 := string(Stamp([]byte(sample+"more\n"), "1.1.0"))

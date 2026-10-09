@@ -65,6 +65,9 @@ func Stamp(md []byte, version string) []byte {
 // carries none (a copy installed by a source build, or one that predates the
 // stamp).
 func Version(md []byte) string {
+	// A copy that passed through autocrlf on Windows still carries its
+	// release; reading it as unstamped would let an older binary overwrite it.
+	md = bytes.ReplaceAll(md, []byte("\r\n"), []byte("\n"))
 	front, _, ok := splitFront(md)
 	if !ok {
 		return ""

@@ -70,6 +70,7 @@ func init() {
 	f.BoolVar(&skillForce, "force", false, "Overwrite existing files")
 	f.BoolVar(&skillList, "list", false, "List the files of the skill")
 	f.StringVar(&skillRefresh, "refresh", "", "Directory holding an installed skill to update, unless it is newer than this sbnn")
+	skillCmd.MarkFlagsMutuallyExclusive("refresh", "install", "list", "force")
 }
 
 func runSkill(_ *cobra.Command, _ []string) error {
