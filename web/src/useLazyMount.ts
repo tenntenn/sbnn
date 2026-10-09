@@ -47,6 +47,9 @@ export function useLazyMount(
   const getElRef = useRef(getEl)
   getElRef.current = getEl
 
+  // The section a jump is on its way to: mounted by ensure, and not to be
+  // let go of by an observer callback that arrives before the scroll lands.
+  const pinned = useRef<string | null>(null)
   // False from the moment the observers are rebuilt until both have reported.
   const ready = useRef(false)
 
@@ -54,6 +57,7 @@ export function useLazyMount(
     if (!ready.current) return
     setMounted((previous) =>
       reconcileMounted(previous, orderRef.current, near.current, keepBand.current, (key) => {
+        if (key === pinned.current) return true
         const el = getElRef.current(key)
         return el ? sectionHoldsState(el) : false
       }),
@@ -121,6 +125,10 @@ export function useLazyMount(
   }, [reconcile])
 
   const ensure = useCallback((key: string) => {
+    pinned.current = key
+    window.setTimeout(() => {
+      if (pinned.current === key) pinned.current = null
+    }, 1000)
     setMounted((previous) => (previous.has(key) ? previous : new Set(previous).add(key)))
   }, [])
 
