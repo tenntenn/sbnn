@@ -47,6 +47,15 @@ export function drawable(c: Pick<Comment, 'side' | 'startLine' | 'endLine'>): bo
  * of what the preview shows) falls back to the nearest block before it, and
  * to the first block when there is none. A list of no blocks places nothing.
  * Within one block comments keep the order they were given in.
+ *
+ * That fallback is a decision, not an accident: a comment whose end line is
+ * in a gap between blocks, in the front matter (which has no block of its
+ * own) or before the first block is shown under the nearest preceding block,
+ * or under the first block when there is none.
+ *
+ * There is no group filter here or in the caller: the comments in App are
+ * those of the one group the page shows, and the caller only narrows them to
+ * the file.
  */
 export function placeComments(blocks: BlockRange[], comments: Comment[]): Map<number, Comment[]> {
   const placed = new Map<number, Comment[]>()
@@ -67,4 +76,35 @@ export function placeComments(blocks: BlockRange[], comments: Comment[]): Map<nu
     else placed.set(index, [c])
   }
   return placed
+}
+
+/** SLOT_CLASS is the class of the element a file's comments are drawn into.
+ * Everything inside such an element is a comment, never the document. */
+export const SLOT_CLASS = 'preview-comments'
+
+/** COMMENT_ID_PREFIX is how the diff pane's copy of a comment is named in
+ * the DOM; PREVIEW_COMMENT_ID_PREFIX is the preview's copy, so that one
+ * comment drawn in both panes does not give the page two elements with the
+ * same id. */
+export const COMMENT_ID_PREFIX = 'comment-'
+export const PREVIEW_COMMENT_ID_PREFIX = 'preview-comment-'
+
+/** commentDomIds are the ids a comment may have on the page, one per pane. */
+export function commentDomIds(id: string): string[] {
+  return [COMMENT_ID_PREFIX, PREVIEW_COMMENT_ID_PREFIX].map((p) => `${p}${id}`)
+}
+
+/**
+ * diffSlots says which slots to create and which to drop to go from the
+ * blocks that have one to the blocks that should. Slots that stay are left
+ * alone, which is what keeps a thread's own state (a half written reply)
+ * when another comment arrives.
+ */
+export function diffSlots(have: Iterable<number>, want: Iterable<number>): { add: number[]; remove: number[] } {
+  const h = new Set(have)
+  const w = new Set(want)
+  return {
+    add: [...w].filter((i) => !h.has(i)).sort((a, b) => a - b),
+    remove: [...h].filter((i) => !w.has(i)).sort((a, b) => a - b),
+  }
 }

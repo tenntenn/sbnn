@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { client } from '../client'
 import { CommentForm } from './CommentThread'
+import { SLOT_CLASS } from '../previewComments'
 
 interface Props {
   group: string
@@ -66,6 +67,20 @@ function highlights(): { set(name: string, value: Highlight): void; delete(name:
   return registry ?? null
 }
 
+/** inComment says whether node is inside a comment drawn into the preview.
+ * The one place that knows it: the comments are not the document, so nothing
+ * in them is selected text, a click on the document or a source mark. */
+function inComment(node: Node | null): boolean {
+  const el = node instanceof Element ? node : (node?.parentElement ?? null)
+  return el?.closest(`.${SLOT_CLASS}`) != null
+}
+
+/** sourceMarks are the marks of root that say which source line the document
+ * is at, in document order, leaving out anything inside a drawn comment. */
+function sourceMarks(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-ln]')).filter((m) => !inComment(m))
+}
+
 /** anchoredRoot is the preview body node sits in, if that preview is one a
  * comment can anchor to. Only sbnn's own renderer marks itself as anchored:
  * mo renders in a frame sbnn may not read, and a partial preview marks the
@@ -73,9 +88,9 @@ function highlights(): { set(name: string, value: Highlight): void; delete(name:
  * neither can say which line a selection is on. */
 function anchoredRoot(node: Node | null): HTMLElement | null {
   const el = node instanceof Element ? node : (node?.parentElement ?? null)
-  // The comments drawn into a preview are not the document: text selected in
-  // one, or a click in one, is not a selection of the file.
-  if (el?.closest('.preview-comments')) return null
+  // Text selected in a drawn comment, or a click in one, is not a selection
+  // of the file.
+  if (inComment(el)) return null
   return el?.closest<HTMLElement>('.markdown[data-line-anchored]') ?? null
 }
 
@@ -119,7 +134,7 @@ function selectedText(range: Range, root: HTMLElement): [Text, Text] | null {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     if (!range.intersectsNode(node)) continue
-    if (node.parentElement?.closest('.preview-comments')) continue
+    if (inComment(node)) continue
     const text = node as Text
     const from = text === range.startContainer ? range.startOffset : 0
     const to = text === range.endContainer ? range.endOffset : text.data.length
@@ -153,7 +168,7 @@ function markBefore(node: Node, marks: HTMLElement[]): HTMLElement | null {
 function selectedLines(range: Range, root: HTMLElement): [number, number] | null {
   const ends = selectedText(range, root)
   if (!ends) return null
-  const marks = Array.from(root.querySelectorAll<HTMLElement>('[data-ln]'))
+  const marks = sourceMarks(root)
   const from = markBefore(ends[0], marks)
   const to = markBefore(ends[1], marks)
   const start = from && markLines(from)
