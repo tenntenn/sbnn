@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import type { Comment } from '../types'
 import { client } from '../client'
+import { COMMENT_ID_PREFIX } from '../previewComments'
 import { renderComment } from '../markdown'
 import { insertSuggestion, originalLines, parseBody, suggestionBlock, suggestions } from '../suggestion'
 
@@ -8,14 +9,17 @@ interface ThreadProps {
   group: string
   comments: Comment[]
   onChanged: () => void
+  /** idPrefix names the comments in the DOM. A pane that draws the same
+   * comments as another passes its own, so no id is on the page twice. */
+  idPrefix?: string
 }
 
 /** CommentThread renders the comments anchored to one line range. */
-export function CommentThread({ group, comments, onChanged }: ThreadProps) {
+export function CommentThread({ group, comments, onChanged, idPrefix }: ThreadProps) {
   return (
     <div className="thread">
       {comments.map((c) => (
-        <CommentItem key={c.id} group={group} comment={c} onChanged={onChanged} />
+        <CommentItem key={c.id} group={group} comment={c} onChanged={onChanged} idPrefix={idPrefix} />
       ))}
     </div>
   )
@@ -115,10 +119,12 @@ function CommentItem({
   group,
   comment,
   onChanged,
+  idPrefix = COMMENT_ID_PREFIX,
 }: {
   group: string
   comment: Comment
   onChanged: () => void
+  idPrefix?: string
 }) {
   const [editing, setEditing] = useState(false)
   const [body, setBody] = useState(comment.body)
@@ -142,7 +148,7 @@ function CommentItem({
   const segments = parseBody(comment.body)
 
   return (
-    <div id={`comment-${comment.id}`} className={`comment${comment.resolved ? ' resolved' : ''}`}>
+    <div id={`${idPrefix}${comment.id}`} className={`comment${comment.resolved ? ' resolved' : ''}`}>
       <div className="comment-meta">
         {comment.author && <span className="badge author">{comment.author}</span>}
         <span className="comment-range">{rangeLabel(comment)}</span>

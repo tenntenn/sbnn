@@ -84,14 +84,14 @@ $ ./sbnn --version
 
 Move the binary onto your `PATH` and it is installed.
 
-sbnn is built with the Go version `go.mod` names, `go 1.27.0`. Your own Go does
+sbnn is built with the Go version `go.mod` names, `go 1.27.2`. Your own Go does
 not have to be that new: since Go 1.21 the default `GOTOOLCHAIN=auto` fetches
 whatever toolchain a module asks for, so the command above works on an older Go
 and says so as it goes:
 
 ```console
 $ go install github.com/tenntenn/sbnn@latest
-go: github.com/tenntenn/sbnn@v0.0.0-... requires go >= 1.27.0; switching to go1.27.0
+go: github.com/tenntenn/sbnn@v0.0.0-... requires go >= 1.27.2; switching to go1.27.2
 ```
 
 It stops only if you have set `GOTOOLCHAIN=local`, or you are on Go 1.20 or
@@ -100,7 +100,7 @@ are running:
 
 ```console
 $ GOTOOLCHAIN=local go install github.com/tenntenn/sbnn@latest
-go: github.com/tenntenn/sbnn@latest: ... requires go >= 1.27.0 (running go 1.24.7; GOTOOLCHAIN=local)
+go: github.com/tenntenn/sbnn@latest: ... requires go >= 1.27.2 (running go 1.24.7; GOTOOLCHAIN=local)
 ```
 
 Upgrade Go to the version that line asks for, or leave `GOTOOLCHAIN` at its

@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { FileDiff, PreviewFormat, PreviewKind, Status } from '../types'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import type { Comment, FileDiff, PreviewFormat, PreviewKind, Status } from '../types'
 import { filePath, hunksOf, previewFormatOf } from '../types'
 import { client, type PreviewResult } from '../client'
 import { assetTrouble, resolvePreviewLinks, type PreviewLinkTargets } from '../markdown'
 import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
 import { SourceView } from './SourceView'
+import { CommentThread } from './CommentThread'
+import { PREVIEW_COMMENT_ID_PREFIX, SLOT_CLASS, blockRanges, diffSlots, placeComments } from '../previewComments'
 
 interface Props {
   group: string
@@ -24,6 +27,10 @@ interface Props {
   /** onUserScroll fires when the reader scrolls this section themselves,
    * which is what turns following the diff off. */
   onUserScroll?: () => void
+  /** comments are the review's comments; the ones on this file are drawn in
+   * a Markdown preview that can say which line is which. */
+  comments?: Comment[]
+  onChanged?: () => void
 }
 
 /** formatOf is previewFormatOf with this page's answer to whether there is
@@ -167,6 +174,8 @@ export function PreviewFileSection({
   active,
   linkTargets,
   onUserScroll,
+  comments,
+  onChanged,
 }: Props) {
   const [preview, setPreview] = useState<PreviewResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -269,6 +278,75 @@ export function PreviewFileSection({
       preview?.kind === 'html' ? resolvePreviewLinks(preview.html, filePath(file), linkTargets) : '',
     [preview, file, linkTargets],
   )
+
+  // The object itself has to be stable, not only the string in it: React
+  // writes innerHTML again whenever it is handed a new object, which would
+  // wipe the comment slots below off the page on every render.
+  const innerHTML = useMemo(() => ({ __html: previewHTML }), [previewHTML])
+
+  // Comments are drawn only where a selection can be turned into a line, for
+  // the same reason: a partial preview, a notebook and mo's frame cannot say
+  // which line anything is on, so a comment has nowhere to sit in them.
+  const lineAnchored = format === 'markdown' && preview?.kind === 'html' && preview.complete
+  const fileComments = useMemo(
+    () =>
+      lineAnchored
+        ? (comments ?? []).filter((c) => c.diffId === diffId && c.fileId === file.id)
+        : [],
+    [lineAnchored, comments, diffId, file.id],
+  )
+  // The element the preview HTML is in, held in state so that a replaced
+  // element (same HTML, new node) is something the slots below notice.
+  const [body, setBody] = useState<HTMLDivElement | null>(null)
+  const placement = useMemo(
+    () => placeComments(blockRanges(previewHTML), fileComments),
+    [previewHTML, fileComments],
+  )
+  // The blocks that hold a comment, as a string so that a reload handing this
+  // section new comment objects changes nothing here.
+  const slotKey = Array.from(placement.keys()).sort((a, b) => a - b).join(',')
+  const [slots, setSlots] = useState<Map<number, HTMLElement>>(() => new Map())
+  // The slots that are on the page now. A ref beside the state because the
+  // effects below diff against it without waiting for a render.
+  const slotEls = useRef(new Map<number, HTMLElement>())
+  // The preview's HTML is set with dangerouslySetInnerHTML, so React owns
+  // none of its nodes. A slot is an element put in after a block once that
+  // HTML is on the page, and the thread is portalled into it. A new HTML
+  // string, or a new element, replaces the whole body and every slot with
+  // it, so everything is dropped here and rebuilt by the next effect.
+  useLayoutEffect(() => {
+    const els = slotEls.current
+    return () => {
+      for (const slot of els.values()) slot.remove()
+      els.clear()
+      setSlots(new Map())
+    }
+  }, [body, previewHTML])
+  // Past that, slots come and go one by one: a slot whose block still holds a
+  // comment is left exactly as it is, so the thread in it keeps what the
+  // reader has half typed when another comment turns up.
+  useLayoutEffect(() => {
+    if (!body) return
+    const els = slotEls.current
+    const { add, remove } = diffSlots(els.keys(), slotKey === '' ? [] : slotKey.split(',').map(Number))
+    if (add.length === 0 && remove.length === 0) return
+    const blocks = Array.from(body.children).filter(
+      (el): el is HTMLElement => el instanceof HTMLElement && el.dataset.ln !== undefined,
+    )
+    for (const index of remove) {
+      els.get(index)?.remove()
+      els.delete(index)
+    }
+    for (const index of add) {
+      const block = blocks[index]
+      if (!block) continue
+      const slot = document.createElement('div')
+      slot.className = SLOT_CLASS
+      block.after(slot)
+      els.set(index, slot)
+    }
+    setSlots(new Map(els))
+  }, [body, previewHTML, slotKey])
 
   const frameUrl = preview?.kind === 'frame' ? preview.url : undefined
   const estimatedHeight = useMemo(() => estimatedFrameHeight(file), [file])
@@ -463,7 +541,8 @@ export function PreviewFileSection({
           data-line-anchored={format === 'markdown' && preview.complete ? 'true' : undefined}
           onWheel={onUserScroll}
           onTouchMove={onUserScroll}
-          dangerouslySetInnerHTML={{ __html: previewHTML }}
+          ref={setBody}
+          dangerouslySetInnerHTML={innerHTML}
         />
       ) : preview?.kind === 'frame' && preview.url ? (
         <iframe
@@ -486,6 +565,20 @@ export function PreviewFileSection({
       ) : (
         <p className="empty">No preview.</p>
       )}
+      {Array.from(slots).map(([index, slot]) =>
+        createPortal(
+          <CommentThread
+            group={group}
+            comments={placement.get(index) ?? []}
+            onChanged={onChanged ?? noop}
+            idPrefix={PREVIEW_COMMENT_ID_PREFIX}
+          />,
+          slot,
+          `${index}`,
+        ),
+      )}
     </section>
   )
 }
+
+function noop() {}

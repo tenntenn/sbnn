@@ -1423,6 +1423,18 @@ a {
   margin-top: 0;
 }
 
+/* The comments on a file are drawn into its preview under the block holding
+   the line they end on. They are the diff pane's own thread, so they only
+   need to sit flush with the text instead of in a line number gutter. */
+.markdown .preview-comments {
+  margin: var(--space-md) 0;
+  line-height: 1.5;
+}
+
+.markdown .preview-comments .thread {
+  margin-left: 0;
+}
+
 .markdown h1,
 .markdown h2,
 .markdown h3,
