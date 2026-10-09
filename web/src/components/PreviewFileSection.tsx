@@ -331,7 +331,17 @@ export function PreviewFileSection({
     if (!body) return
     const els = slotEls.current
     const targets = resolveTargets(body, ranges, placement)
-    setGrouped(new Map(Array.from(targets, ([key, t]) => [key, t.comments])))
+    // Only when something moved: a reload hands over new comment objects
+    // with the same content, and that must not re-render every thread.
+    setGrouped((prev) => {
+      const same =
+        prev.size === targets.size &&
+        Array.from(targets).every(([key, t]) => {
+          const old = prev.get(key)
+          return old !== undefined && JSON.stringify(old) === JSON.stringify(t.comments)
+        })
+      return same ? prev : new Map(Array.from(targets, ([key, t]) => [key, t.comments]))
+    })
     const { add, remove } = diffSlots(els.keys(), targets.keys())
     if (add.length === 0 && remove.length === 0) return
     for (const key of remove) {

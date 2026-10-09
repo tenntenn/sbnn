@@ -87,7 +87,9 @@ function afterRow(tr: HTMLElement): SlotTarget['attach'] {
 
 function beforeMark(code: HTMLElement, next: HTMLElement | null): SlotTarget['attach'] {
   return (slot) => {
-    code.insertBefore(slot, next)
+    // A mark wrapped in another element is not a child of code.
+    if (next && next.parentNode) next.parentNode.insertBefore(slot, next)
+    else code.append(slot)
     return slot
   }
 }
@@ -117,8 +119,10 @@ export function resolveTargets(
       if (line !== null) {
         // The last mark of that line: a tight list item has two on it.
         const mark = marks[lines.lastIndexOf(line)]
-        const host = mark.closest('li, tr, pre')
-        if (host instanceof HTMLElement && block.contains(host)) {
+        // A quote inside an item is not the item's own line: it stays under
+        // the whole block rather than at the end of the item.
+        const host = mark.closest('li, tr, pre, blockquote')
+        if (host instanceof HTMLElement && host.tagName !== 'BLOCKQUOTE' && block.contains(host)) {
           key = line
           if (host.tagName === 'LI') target = { tag: 'div', attach: inItem(host, mark) }
           else if (host.tagName === 'TR') target = { tag: 'div', attach: afterRow(host) }
