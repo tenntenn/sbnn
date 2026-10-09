@@ -1,0 +1,28 @@
+#376 measurements. Fixture: 20 rounds x 20 files (400 files, 40 of them 300-line
+Markdown), 300 comments. Headless Chrome (agent-browser), page measured with a
+PerformanceObserver('longtask'), performance.memory and the resource timing
+entries of GET /_/api/groups/t376. Server and page on the same machine.
+
+Initial mount (both builds, same):
+  DOM nodes 282201, longtask total 3.7-4.6 s (one task of 2.4-2.7 s), 2 loads of 6.1 MB
+
+10 events, one new comment each, 3 s apart  (main thread blocked by long tasks)
+  before: 6045 ms  (10618-4573)   heap 230 MB after the run
+  after:     0 ms  (3732-3732)    heap 137 MB after the run
+  both: 10 loads, 61 MB transferred (one full GET of the group per event)
+
+5 events, one new 2-file round each, 3 s apart
+  before: 3191 ms  (13809-10618)  DOM 282304 -> 287084
+  after:     0 ms                 DOM 282304 -> 287084  (the new round is shown)
+
+Soak, 100 events (alternating comment / 2-file round), one per second:
+  see soak-before-100-events.txt and soak-after-100-events.txt
+  before: 53.5 s of long tasks (57862 - 4324 initial), JS heap sawtooth up to 1146 MB
+  after:   0 s of long tasks,                          JS heap 172-244 MB
+  both: server RSS flat at 90-112 MB, threads 20, fds 11-15, EventSource opened
+        once and still open (esCreated 1, esOpen 1), no iframes.
+  The page transfers 6.1 MB per event in both (678 MB / 100 events before, 766 MB after).
+
+CPU trace of one comment event, before: 6.3 s window, ~1.3 s busy; the React
+render of ~400 sections plus 1212 DOMParser.parseFromString calls (comment
+bodies sanitised again on every render) dominate; parse of the JSON is small.

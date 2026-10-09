@@ -1,0 +1,10 @@
+i=20 rss_kb=109532 threads=20 fds=11
+"{\"dom\":291884,\"heapMB\":590,\"loads\":24,\"loadMB\":148.1,\"longtasks\":27,\"longtaskTotalMs\":14864,\"longtaskMax\":2441,\"esCreated\":1,\"esOpen\":1,\"iframes\":0,\"t\":407314}"
+i=40 rss_kb=94296 threads=20 fds=11
+"{\"dom\":301544,\"heapMB\":827,\"loads\":44,\"loadMB\":275.3,\"longtasks\":47,\"longtaskTotalMs\":24063,\"longtaskMax\":2441,\"esCreated\":1,\"esOpen\":1,\"iframes\":0,\"t\":430305}"
+i=60 rss_kb=111892 threads=20 fds=11
+"{\"dom\":311204,\"heapMB\":1146,\"loads\":64,\"loadMB\":406,\"longtasks\":67,\"longtaskTotalMs\":33469,\"longtaskMax\":2441,\"esCreated\":1,\"esOpen\":1,\"iframes\":0,\"t\":453008}"
+i=80 rss_kb=92464 threads=20 fds=11
+"{\"dom\":320864,\"heapMB\":378,\"loads\":84,\"loadMB\":540.2,\"longtasks\":87,\"longtaskTotalMs\":46756,\"longtaskMax\":2441,\"esCreated\":1,\"esOpen\":1,\"iframes\":0,\"t\":476642}"
+i=100 rss_kb=107708 threads=20 fds=11
+"{\"dom\":330524,\"heapMB\":768,\"loads\":104,\"loadMB\":677.9,\"longtasks\":107,\"longtaskTotalMs\":57862,\"longtaskMax\":2441,\"esCreated\":1,\"esOpen\":1,\"iframes\":0,\"t\":499925}"
