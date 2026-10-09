@@ -6,11 +6,11 @@ from reading the code.
 
 ## What you need
 
-- **The Go toolchain `go.mod` asks for**, which is `go 1.27.0`. Your installed
+- **The Go toolchain `go.mod` asks for**, which is `go 1.27.2`. Your installed
   Go does not have to be that new: since Go 1.21 the default `GOTOOLCHAIN=auto`
   downloads the toolchain a module requires. It stops only under
   `GOTOOLCHAIN=local`, or on Go 1.20 and earlier, and the error names both
-  versions — `go: go.mod requires go >= 1.27.0 (running go 1.24.7;
+  versions — `go: go.mod requires go >= 1.27.2 (running go 1.24.7;
   GOTOOLCHAIN=local)` — so upgrade to the version it prints.
 - **[aqua](https://aquaproj.github.io/).** Run `aqua install` in the repository
   root to get the pinned tools — `task` and `tagpr`, at the versions in
