@@ -1,0 +1,60 @@
+#402: per-event main-thread cost against the number of files
+
+Setup
+  group t402 on a fresh server (port 6403), minified builds of origin/main 65cc9f4
+  ("before") and of this branch ("after"), Chrome via agent-browser, one tab.
+  Group sizes: 400 files / 133 comments, 1500 / 500, 3000 / 1000
+  (100 files per round, 2 Markdown files in each, 1 comment per 3 files).
+  After the page has loaded and settled: 5 comment events (POST a comment), then
+  3 round events (pipe a 2-file diff in), one event every 3 s.
+  Long tasks (>= 50 ms) from a PerformanceObserver, summed per kind of event.
+  Two runs of each cell; the two numbers are shown as run1 / run2.
+  Scripts: method/ (seed.py, measure.py, matrix.sh, sample.js, init.js, gen.py).
+  Raw results: results.jsonl.
+
+Long-task time per event (ms), run1 / run2
+
+  files   event      before          after
+  400     comment    0 / 0           0 / 0
+  400     round      0 / 0           0 / 0
+  1500    comment    0 / 0           0 / 0
+  1500    round      37.7 / 40.0     0 / 0
+  3000    comment    121.4 / 115.6   15.8 / 0
+  3000    round      92.7 / 92.3     0 / 56.3
+
+  At 3000 files the "after" long tasks that are left are barely over the 50 ms
+  line (longest 79 ms, against 166 ms before); the "before" runs had one such
+  task for every event.
+
+Where the time went at 3000 files (CPU profile of 5 comment + 3 round events,
+non-minified build of each side so the frames have names; prof-before.txt and
+prof-after.txt hold the lists)
+
+                                       before     after   (ms, all 8 events)
+  React render + commit (performWorkOnRoot)   795       125
+  Sidebar (render of every file row)          197         2
+    of which commentCount (filters all comments once per file)  147   gone
+  PreviewFileSection (3000 rendered per event) 83         6
+  React commitRoot (DOM updates)              317        38
+  main-thread tasks >= 5 ms, total           2017      1223 (incl. ~110 ms of profiler start)
+  tasks >= 50 ms                         10 (1259 ms)  4 (381 ms)
+
+What is left per event at 3000 files (about 60-70 ms, none of it a long task)
+  - the response is received and parsed: the group is 31 MB of JSON
+    uncompressed -> 25-40 ms. Linear in the payload.
+  - style, layout and paint of a 65k-node document: ~30-40 ms (PrePaint and
+    compositing inputs walk the whole tree). Linear in the DOM.
+  - a major GC about every 8 s, ~130 ms, mostly tracing DOM wrappers.
+  Follow-ups: send only what changed (comments) for a comment event, and window
+  the sidebar / shrink the preview shells to cut the DOM.
+
+DOM nodes at 3000 files, both sides: 65.7k (sidebar 28.3k, diff stack 5.7k,
+preview stack 31.6k, 3006 preview sections). Heap right after load (3000 files):
+161 MB before, 125 MB after (the sidebar no longer builds 3000 rows of
+closures on every render; the number is a snapshot, GC timing moves it).
+
+Behaviour checked after the change (verify.py, 3000 files): sidebar jump to
+file 1500, 40, 2900 and 0 lands on the clicked file and the active file follows;
+the scroll position is unchanged when a round arrives; after the round, scrolling
+to the bottom makes the new round's file active and mounts its body (one
+observer kept across rounds still sees the new sections).

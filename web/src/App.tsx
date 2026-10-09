@@ -664,7 +664,7 @@ export function App() {
       forced={previewForced}
       onSetKind={setPreviewKind}
       comments={comments}
-      onChanged={() => void reload()}
+      onChanged={onChanged}
     />
   )
 

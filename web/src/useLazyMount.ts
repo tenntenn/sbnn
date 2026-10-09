@@ -11,6 +11,7 @@ import {
   FIND_QUIET_MS,
   isMac,
 } from './findHold'
+import { syncObserved } from './observed'
 import {
   KEEP_MARGIN,
   NEAR_MARGIN,
@@ -107,15 +108,20 @@ export function useLazyMount(
     )
   }, [])
 
+  // The two observers live as long as the pane does and are kept pointed at the
+  // sections that exist by the effect after this one (#402): rebuilding them for
+  // every round meant observing every section again for the sake of a few new
+  // ones.
+  const observers = useRef<{
+    near: IntersectionObserver
+    keep: IntersectionObserver
+    nearEls: Map<string, HTMLElement>
+    keepEls: Map<string, HTMLElement>
+  } | null>(null)
   useEffect(() => {
     const root = containerRef.current
     if (!root) return
-    // Without IntersectionObserver there is nothing to measure distance with,
-    // and the safe answer is the old behaviour: everything mounted.
-    if (typeof IntersectionObserver === 'undefined') {
-      setMounted(new Set(order))
-      return
-    }
+    if (typeof IntersectionObserver === 'undefined') return
     // Each observer's first callback reports every section it watches. Until
     // both have, one band is still empty, and judging by it would unmount
     // sections that are merely waiting to be reported.
@@ -147,17 +153,39 @@ export function useLazyMount(
     keepBand.current = new Set()
     const nearObserver = watch(NEAR_MARGIN, near.current)
     const keepObserver = watch(KEEP_MARGIN, keepBand.current)
-    for (const key of order) {
-      const el = getElRef.current(key)
-      if (!el) continue
-      nearObserver.observe(el)
-      keepObserver.observe(el)
+    observers.current = {
+      near: nearObserver,
+      keep: keepObserver,
+      nearEls: new Map(),
+      keepEls: new Map(),
     }
     return () => {
       nearObserver.disconnect()
       keepObserver.disconnect()
+      observers.current = null
     }
-  }, [containerRef, order, reconcile])
+  }, [containerRef, reconcile])
+
+  useEffect(() => {
+    // Without IntersectionObserver there is nothing to measure distance with,
+    // and the safe answer is the old behaviour: everything mounted.
+    if (typeof IntersectionObserver === 'undefined') {
+      setMounted(new Set(order))
+      return
+    }
+    const watching = observers.current
+    if (!watching) return
+    const get = (key: string) => getElRef.current(key)
+    const gone = syncObserved(watching.near, watching.nearEls, order, get)
+    syncObserved(watching.keep, watching.keepEls, order, get)
+    // An unobserved element never reports leaving, so what it left behind is
+    // dropped here, and the mounted set is judged again without it.
+    for (const key of gone) {
+      near.current.delete(key)
+      keepBand.current.delete(key)
+    }
+    if (gone.length > 0) reconcile()
+  }, [order, reconcile])
 
   // A section that was held while it was far away is let go of once the
   // reader is done with it: focus leaving it is the moment to look again.
