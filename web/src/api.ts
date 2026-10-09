@@ -61,6 +61,12 @@ export function getGroup(group: string): Promise<Group> {
   return request<Group>(`/_/api/groups/${encodeURIComponent(group)}`)
 }
 
+/** getComments is the comments of a group and nothing else, which is what a
+ * page fetches for an event that only touched comments (#403). */
+export function getComments(group: string): Promise<Comment[]> {
+  return request<Comment[]>(`/_/api/groups/${encodeURIComponent(group)}/comments`)
+}
+
 export function getPreview(group: string, diffId: string, fileId: string): Promise<Preview> {
   return request<Preview>(
     `/_/api/groups/${encodeURIComponent(group)}/diffs/${encodeURIComponent(diffId)}` +
@@ -170,8 +176,39 @@ export async function getPrompt(group: string): Promise<string> {
 }
 
 /**
+ * ChangeScope says what a change event touched. Absent means anything may have:
+ * the page then fetches the whole group, as it always did. 'comments' means
+ * nothing but comments moved, so the diffs the page holds are still right.
+ */
+export type ChangeScope = 'comments' | undefined
+
+/**
+ * eventScope decides what a server sent event asks of the page: undefined when
+ * it is not about this group, otherwise the scope to reload with, wrapped so
+ * that "reload everything" is distinguishable from "ignore".
+ *
+ * A message that cannot be read is an event of unknown content, so it asks for
+ * everything. So does any scope this page does not know, which is how a newer
+ * server can add scopes without an older page going stale.
+ */
+export function eventScope(raw: string, group: string): { scope: ChangeScope } | undefined {
+  try {
+    const data = JSON.parse(raw) as { type?: string; group?: string; scope?: string }
+    // "change" is a new diff or comment; "review" is the Submit button,
+    // which another tab has to hear about too - it is what turns the
+    // page from open to reviewed.
+    const interesting = data.type === 'change' || data.type === 'review'
+    if (!interesting || (data.group && data.group !== group)) return undefined
+    return { scope: data.type === 'change' && data.scope === 'comments' ? 'comments' : undefined }
+  } catch {
+    return { scope: undefined }
+  }
+}
+
+/**
  * subscribe listens to server sent events and calls onChange whenever the
- * given group changed. It returns an unsubscribe function.
+ * given group changed, with the scope of what changed. It returns an
+ * unsubscribe function.
  *
  * Events are fire-and-forget: the broker keeps no backlog and stamps no `id:`,
  * so everything published while the stream was down is simply gone. An
@@ -183,7 +220,7 @@ export async function getPrompt(group: string): Promise<string> {
  * too, which costs one duplicate load and in exchange makes "the page is
  * stale forever" unreachable; it is not worth optimising away.
  */
-export function subscribe(group: string, onChange: () => void): () => void {
+export function subscribe(group: string, onChange: (scope?: ChangeScope) => void): () => void {
   const source = new EventSource('/_/events')
   source.onopen = () => {
     onChange()
@@ -195,17 +232,12 @@ export function subscribe(group: string, onChange: () => void): () => void {
   source.onerror = () => {
     console.debug('sbnn: event stream lost, reconnecting')
   }
+  // A missed event is healed by the reconnect above, and the server makes
+  // sure a subscriber that dropped one is not handed a comments-only notice
+  // next (broker.publishChange), so a scope never hides a diff the page lacks.
   source.onmessage = (ev) => {
-    try {
-      const data = JSON.parse(ev.data) as { type?: string; group?: string }
-      // "change" is a new diff or comment; "review" is the Submit button,
-      // which another tab has to hear about too - it is what turns the
-      // page from open to reviewed.
-      const interesting = data.type === 'change' || data.type === 'review'
-      if (interesting && (!data.group || data.group === group)) onChange()
-    } catch {
-      onChange()
-    }
+    const action = eventScope(ev.data, group)
+    if (action) onChange(action.scope)
   }
   return () => source.close()
 }
