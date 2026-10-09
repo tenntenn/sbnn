@@ -1,0 +1,11 @@
+session file bytes: <state>/sbnn/session-6398.json 4701524
+label=before
+plain GET (no Accept-Encoding):
+  size=6378001 time=0.041189s
+gzip GET (Accept-Encoding: gzip):
+  size=6378001 time=0.045331s enc=
+headers:
+20 events (one comment each, then a reload with Accept-Encoding: gzip, then a plain reload):
+  per event, gzip reload:  avg size=6382639 bytes, avg time=0.0427s
+  per event, plain reload: avg size=6382639 bytes, avg time=0.0436s
+  comment CLI call (includes process start) avg 22 ms
