@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { client } from '../client'
-import { isSelectingPress } from '../selectionPress'
+import { isMac, isSelectingPress } from '../selectionPress'
 import { CommentForm } from './CommentThread'
 
 interface Props {
@@ -405,10 +405,24 @@ export function PreviewSelection({ group, onChanged }: Props) {
 
     const down = (ev: Event) => {
       const target = ev.target
+      pointing = !isSelectingPress(ev as MouseEvent, isMac())
+      if (pointing) {
+        // The browser may still move the selection on its own (macOS selects
+        // the word under the pointer), or collapse it when the press landed
+        // outside it. Once it has settled, follow it: a menu left over a
+        // selection that is no longer there would comment on the wrong text.
+        const at = pointOf(ev)
+        window.setTimeout(() => {
+          const capture = current.current
+          if (!capture || capture.drafting) return
+          const selection = window.getSelection()
+          if (selection && !selection.isCollapsed && selection.toString() === capture.text) return
+          if (!take(at)) clear()
+        }, 0)
+        return
+      }
       onMenu = target instanceof Node && menu.current !== null && menu.current.contains(target)
       touched = ev.type === 'touchstart'
-      pointing = !isSelectingPress(ev as MouseEvent)
-      if (pointing) return
       // A press that lands on text the browser still counts as selected
       // starts a drag of that text rather than a new selection - so a second
       // look at the same paragraph would select nothing at all. Nothing in a
@@ -424,7 +438,7 @@ export function PreviewSelection({ group, onChanged }: Props) {
     // step with a selection that is still changing - the races that comes
     // with simply do not arise.
     const up = (ev: Event) => {
-      if (onMenu || pointing || !isSelectingPress(ev as MouseEvent)) return
+      if (onMenu || pointing) return
       // Once the form is open it owns the interaction: a click in the
       // preview behind it neither re-aims it nor throws away what has been
       // written. Cancel, Escape and posting are the ways out of it.

@@ -14,10 +14,13 @@ describe('isSelectingPress', () => {
     { name: 'secondary button release does not select', ev: { type: 'mouseup', button: 2 }, want: false },
     { name: 'touchstart selects', ev: { type: 'touchstart' }, want: true },
     { name: 'touchend selects', ev: { type: 'touchend' }, want: true },
+    { name: 'ctrl+click selects off macOS', ev: { type: 'mousedown', button: 0, ctrlKey: true }, want: true },
+    { name: 'ctrl+click is the context menu on macOS', ev: { type: 'mousedown', button: 0, ctrlKey: true }, mac: true, want: false },
+    { name: 'plain click selects on macOS', ev: { type: 'mousedown', button: 0 }, mac: true, want: true },
   ]
   for (const c of cases) {
     it(c.name, () => {
-      assert.equal(isSelectingPress(c.ev), c.want)
+      assert.equal(isSelectingPress(c.ev, c.mac), c.want)
     })
   }
 })
