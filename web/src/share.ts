@@ -29,7 +29,7 @@ export function shareDiffs(prev: Diff[], next: Diff[]): Diff[] {
     const same =
       old !== undefined &&
       old.title === d.title &&
-      old.raw.length === d.raw.length &&
+      (old.raw?.length ?? 0) === (d.raw?.length ?? 0) &&
       old.files.length === d.files.length &&
       old.createdAt === d.createdAt
     return same ? old : d
