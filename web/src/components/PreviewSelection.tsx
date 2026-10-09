@@ -73,6 +73,9 @@ function highlights(): { set(name: string, value: Highlight): void; delete(name:
  * neither can say which line a selection is on. */
 function anchoredRoot(node: Node | null): HTMLElement | null {
   const el = node instanceof Element ? node : (node?.parentElement ?? null)
+  // The comments drawn into a preview are not the document: text selected in
+  // one, or a click in one, is not a selection of the file.
+  if (el?.closest('.preview-comments')) return null
   return el?.closest<HTMLElement>('.markdown[data-line-anchored]') ?? null
 }
 
@@ -116,6 +119,7 @@ function selectedText(range: Range, root: HTMLElement): [Text, Text] | null {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     if (!range.intersectsNode(node)) continue
+    if (node.parentElement?.closest('.preview-comments')) continue
     const text = node as Text
     const from = text === range.startContainer ? range.startOffset : 0
     const to = text === range.endContainer ? range.endOffset : text.data.length

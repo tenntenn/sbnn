@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { FileDiff, PreviewFormat, PreviewKind, Status } from '../types'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import type { Comment, FileDiff, PreviewFormat, PreviewKind, Status } from '../types'
 import { filePath, hunksOf, previewFormatOf } from '../types'
 import { client, type PreviewResult } from '../client'
 import { assetTrouble, resolvePreviewLinks, type PreviewLinkTargets } from '../markdown'
 import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
 import { SourceView } from './SourceView'
+import { CommentThread } from './CommentThread'
+import { blockRanges, placeComments } from '../previewComments'
 
 interface Props {
   group: string
@@ -24,6 +27,10 @@ interface Props {
   /** onUserScroll fires when the reader scrolls this section themselves,
    * which is what turns following the diff off. */
   onUserScroll?: () => void
+  /** comments are the review's comments; the ones on this file are drawn in
+   * a Markdown preview that can say which line is which. */
+  comments?: Comment[]
+  onChanged?: () => void
 }
 
 /** formatOf is previewFormatOf with this page's answer to whether there is
@@ -167,6 +174,8 @@ export function PreviewFileSection({
   active,
   linkTargets,
   onUserScroll,
+  comments,
+  onChanged,
 }: Props) {
   const [preview, setPreview] = useState<PreviewResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -269,6 +278,61 @@ export function PreviewFileSection({
       preview?.kind === 'html' ? resolvePreviewLinks(preview.html, filePath(file), linkTargets) : '',
     [preview, file, linkTargets],
   )
+
+  // The object itself has to be stable, not only the string in it: React
+  // writes innerHTML again whenever it is handed a new object, which would
+  // wipe the comment slots below off the page on every render.
+  const innerHTML = useMemo(() => ({ __html: previewHTML }), [previewHTML])
+
+  // Comments are drawn only where a selection can be turned into a line, for
+  // the same reason: a partial preview, a notebook and mo's frame cannot say
+  // which line anything is on, so a comment has nowhere to sit in them.
+  const lineAnchored = format === 'markdown' && preview?.kind === 'html' && preview.complete
+  const fileComments = useMemo(
+    () =>
+      lineAnchored
+        ? (comments ?? []).filter((c) => c.diffId === diffId && c.fileId === file.id)
+        : [],
+    [lineAnchored, comments, diffId, file.id],
+  )
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const placement = useMemo(
+    () => placeComments(blockRanges(previewHTML), fileComments),
+    [previewHTML, fileComments],
+  )
+  // The blocks that hold a comment, as a string so that a reload handing this
+  // section new comment objects does not rebuild the slots (and with them
+  // whatever the reader is typing into a thread).
+  const slotKey = Array.from(placement.keys()).sort((a, b) => a - b).join(',')
+  const [slots, setSlots] = useState<Map<number, HTMLElement>>(() => new Map())
+  // The preview's HTML is set with dangerouslySetInnerHTML, so React owns
+  // none of its nodes. A slot is an element put in after a block once that
+  // HTML is on the page, and the thread is portalled into it. A new HTML
+  // string replaces the whole body, slots included, so they are rebuilt then.
+  useLayoutEffect(() => {
+    const body = bodyRef.current
+    if (!body || slotKey === '') {
+      setSlots((current) => (current.size === 0 ? current : new Map()))
+      return
+    }
+    const blocks = Array.from(body.children).filter(
+      (el): el is HTMLElement => el instanceof HTMLElement && el.dataset.ln !== undefined,
+    )
+    const made = new Map<number, HTMLElement>()
+    for (const key of slotKey.split(',')) {
+      const index = Number(key)
+      const block = blocks[index]
+      if (!block) continue
+      const slot = document.createElement('div')
+      slot.className = 'preview-comments'
+      block.after(slot)
+      made.set(index, slot)
+    }
+    setSlots(made)
+    return () => {
+      for (const slot of made.values()) slot.remove()
+    }
+  }, [previewHTML, slotKey])
 
   const frameUrl = preview?.kind === 'frame' ? preview.url : undefined
   const estimatedHeight = useMemo(() => estimatedFrameHeight(file), [file])
@@ -463,7 +527,8 @@ export function PreviewFileSection({
           data-line-anchored={format === 'markdown' && preview.complete ? 'true' : undefined}
           onWheel={onUserScroll}
           onTouchMove={onUserScroll}
-          dangerouslySetInnerHTML={{ __html: previewHTML }}
+          ref={bodyRef}
+          dangerouslySetInnerHTML={innerHTML}
         />
       ) : preview?.kind === 'frame' && preview.url ? (
         <iframe
@@ -486,6 +551,15 @@ export function PreviewFileSection({
       ) : (
         <p className="empty">No preview.</p>
       )}
+      {Array.from(slots).map(([index, slot]) =>
+        createPortal(
+          <CommentThread group={group} comments={placement.get(index) ?? []} onChanged={onChanged ?? noop} />,
+          slot,
+          `${index}`,
+        ),
+      )}
     </section>
   )
 }
+
+function noop() {}
