@@ -30,12 +30,19 @@ export interface KeyFacts {
   altKey: boolean
 }
 
+/** isMac reports whether the page runs on an Apple platform, where the find
+ * key is Cmd and Ctrl+F is the text field's "cursor forward". */
+export function isMac(): boolean {
+  if (typeof navigator === 'undefined') return false
+  return /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent)
+}
+
 /** startsFind reports whether the key press opens or advances the browser's
- * find: Ctrl/Cmd+F, Ctrl/Cmd+G (next match) and F3. */
-export function startsFind(e: KeyFacts): boolean {
+ * find: Cmd+F and Cmd+G on a Mac, Ctrl+F and Ctrl+G elsewhere, and F3. */
+export function startsFind(e: KeyFacts, mac: boolean = false): boolean {
   if (e.altKey) return false
   if (e.key === 'F3') return true
-  if (!e.ctrlKey && !e.metaKey) return false
+  if (mac ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey) return false
   const k = e.key.toLowerCase()
   return k === 'f' || k === 'g'
 }

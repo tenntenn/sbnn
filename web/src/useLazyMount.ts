@@ -6,6 +6,7 @@ import {
   nextFindBatch,
   startsFind,
   FIND_QUIET_MS,
+  isMac,
 } from './findHold'
 import {
   KEEP_MARGIN,
@@ -143,6 +144,11 @@ export function useLazyMount(
   const [found, setFound] = useState<ReadonlySet<string>>(() => new Set())
   const foundRef = useRef(found)
   foundRef.current = found
+  const lazyRef = useRef(lazy)
+  lazyRef.current = lazy
+  // Set while a hold is on: schedules another batch, for when the review grows.
+  const resumeFind = useRef<(() => void) | null>(null)
+  useEffect(() => resumeFind.current?.(), [order])
 
   useEffect(() => {
     let active = false
@@ -161,7 +167,10 @@ export function useLazyMount(
       job = undefined
       if (!active) return
       const anchor = orderRef.current.findIndex((key) => near.current.has(key))
-      const keys = nextFindBatch(orderRef.current, foundRef.current, anchor < 0 ? 0 : anchor)
+      // Sections the lazy rules already mounted need no slot of the batch.
+      const have = new Set(foundRef.current)
+      for (const key of lazyRef.current) have.add(key)
+      const keys = nextFindBatch(orderRef.current, have, anchor < 0 ? 0 : anchor)
       if (keys.length === 0) return
       const next = new Set(foundRef.current)
       for (const key of keys) next.add(key)
@@ -218,13 +227,17 @@ export function useLazyMount(
       watchQuiet()
       schedule()
     }
+    resumeFind.current = () => {
+      if (active && job === undefined) schedule()
+    }
     const onKey = (e: KeyboardEvent) => {
-      if (startsFind(e)) begin()
+      if (startsFind(e, isMac())) begin()
       else if (active && endsFind(e)) end()
     }
     window.addEventListener('keydown', onKey, true)
     return () => {
       window.removeEventListener('keydown', onKey, true)
+      resumeFind.current = null
       end()
     }
   }, [])

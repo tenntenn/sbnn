@@ -28,7 +28,10 @@ const key = (k: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: b
 describe('startsFind', () => {
   const cases = [
     { name: 'Ctrl+F', e: key('f', { ctrlKey: true }), want: true },
-    { name: 'Cmd+F', e: key('f', { metaKey: true }), want: true },
+    { name: 'Cmd+F is not the find key off a Mac', e: key('f', { metaKey: true }), want: false },
+    { name: 'Cmd+F on a Mac', e: key('f', { metaKey: true }), mac: true, want: true },
+    { name: 'Cmd+G on a Mac', e: key('g', { metaKey: true }), mac: true, want: true },
+    { name: 'Ctrl+F on a Mac moves the cursor, it is not a find', e: key('f', { ctrlKey: true }), mac: true, want: false },
     { name: 'Ctrl+Shift+F (key is upper case)', e: key('F', { ctrlKey: true }), want: true },
     { name: 'Ctrl+G is the next match', e: key('g', { ctrlKey: true }), want: true },
     { name: 'F3', e: key('F3'), want: true },
@@ -39,7 +42,7 @@ describe('startsFind', () => {
   ]
   for (const c of cases) {
     it(c.name, () => {
-      assert.equal(startsFind(c.e), c.want)
+      assert.equal(startsFind(c.e, c.mac), c.want)
     })
   }
 })
