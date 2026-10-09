@@ -66,7 +66,9 @@ const (
 	// page, all of them together (#356). Without it ten images that each fit
 	// under MaxBytes made a 28MB page. It equals MaxTotalBytes so that the
 	// diff images and one document's siblings are each held to the same
-	// ceiling, about 11MB of base64.
+	// ceiling, about 11MB of base64. The two are separate budgets: the
+	// siblings of Markdown documents are not counted here, so a page that
+	// has both can carry more than one ceiling's worth.
 	MaxPageBytes = 8 << 20 // 8MiB
 )
 
@@ -80,8 +82,9 @@ const (
 	StatusOK Status = "ok"
 	// StatusTooLarge means the file is past MaxBytes on its own.
 	StatusTooLarge Status = "too-large"
-	// StatusOverBudget means the document had already spent MaxTotalBytes
-	// on the images before this one.
+	// StatusOverBudget means the budget had already been spent before this
+	// image: MaxTotalBytes for the images of one document, or, for an image
+	// of the diff in an exported page, MaxPageBytes (see Spend).
 	StatusOverBudget Status = "over-budget"
 	// StatusOutside means the path leaves the directory the diff was sent
 	// from - see source.AbsPath for why that is refused rather than read.
