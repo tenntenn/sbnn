@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import type { Diff, FileDiff, PreviewKind, Status } from '../types'
+import type { Comment, Diff, FileDiff, PreviewKind, Status } from '../types'
 import { filePath, isPreviewable } from '../types'
 import type { PreviewLinkTargets } from '../markdown'
 import { PreviewFileSection } from './PreviewFileSection'
@@ -32,6 +32,8 @@ interface Props {
   kind: PreviewKind
   forced: boolean
   onSetKind: (kind: PreviewKind) => void
+  comments: Comment[]
+  onChanged: () => void
 }
 
 export function PreviewStack({
@@ -45,6 +47,8 @@ export function PreviewStack({
   kind,
   forced,
   onSetKind,
+  comments,
+  onChanged,
 }: Props) {
   const [activated, setActivated] = useState<Set<string>>(() => new Set())
   const sectionEls = useRef(new Map<string, HTMLDivElement>())
@@ -237,6 +241,8 @@ export function PreviewStack({
                   kind={kind}
                   active={activated.has(key)}
                   onUserScroll={() => onSync(false)}
+                  comments={comments}
+                  onChanged={onChanged}
                 />
               </div>
             )

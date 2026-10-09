@@ -9,6 +9,7 @@ import { Divider } from './components/Divider'
 import { Icon } from './components/Icon'
 import { PreviewFileSection } from './components/PreviewFileSection'
 import { PreviewSelection } from './components/PreviewSelection'
+import { commentDomIds } from './previewComments'
 import { PreviewStack } from './components/PreviewStack'
 import { Sidebar } from './components/Sidebar'
 import { clampRatio, SplitPane, SPLIT_DEFAULT } from './components/SplitPane'
@@ -445,7 +446,11 @@ export function App() {
       setCurrentCommentId(target.id)
       goToKey(target.key)
       window.setTimeout(() => {
-        document.getElementById(`comment-${target.id}`)?.scrollIntoView({ block: 'center' })
+        // The comment is drawn in the diff pane and in the preview, under
+        // an id of its own in each; whichever panes are showing it follow.
+        for (const id of commentDomIds(target.id)) {
+          document.getElementById(id)?.scrollIntoView({ block: 'center' })
+        }
       }, 50)
     },
     [comments, currentCommentId, activeKey, goToKey],
@@ -618,6 +623,8 @@ export function App() {
         status={status}
         kind={resolvedPreviewKind}
         active
+        comments={comments}
+        onChanged={() => void reload()}
       />
     ) : (
       <p className="empty">Select a file.</p>
@@ -634,6 +641,8 @@ export function App() {
       kind={resolvedPreviewKind}
       forced={previewForced}
       onSetKind={setPreviewKind}
+      comments={comments}
+      onChanged={() => void reload()}
     />
   )
 
