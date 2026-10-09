@@ -18,6 +18,7 @@ import { plainKey, shortcuts, stepToComment, typingInto } from './shortcuts'
 import { announceNewDiffs, clearUnread, newDiffIds, requestNotifyPermission, storedNotify, storeNotify } from './notify'
 import { applyTheme, storedTheme, type Theme } from './theme'
 import { sectionKey } from './sectionKey'
+import { shareComments, shareDiffs } from './share'
 
 /** Pane names the three panes, which a phone shows one at a time. */
 type Pane = 'files' | 'diff' | 'preview'
@@ -240,8 +241,10 @@ export function App() {
         announceNewDiffs(group, newDiffIds(seenDiffIds.current, ids).length)
       }
       seenDiffIds.current = new Set(ids)
-      setDiffs(data.diffs)
-      setComments(data.comments)
+      // Keep the objects that did not change, so that one new comment does
+      // not make every file section render again (#376).
+      setDiffs((prev) => shareDiffs(prev, data.diffs))
+      setComments((prev) => shareComments(prev, data.comments))
       setReviewedAt(data.reviewedAt ?? null)
       setReviewVerdict(data.reviewVerdict ?? null)
       setRoundReviewed(data.reviewed ?? null)
@@ -251,6 +254,10 @@ export function App() {
       setError(err instanceof Error ? err.message : String(err))
     }
   }, [group])
+
+  // One identity for as long as the group stays, so that a section memoised on
+  // its props is not rendered again just because the page was.
+  const onChanged = useCallback(() => void reload(), [reload])
 
   useEffect(() => {
     void reload()
@@ -550,7 +557,7 @@ export function App() {
       activeKey={activeKey}
       activeDiffId={activeEntry?.diff.id ?? null}
       onSelect={(diffId, fileId) => goToKey(sectionKey(diffId, fileId))}
-      onChanged={() => void reload()}
+      onChanged={onChanged}
       query={query}
       onQuery={setQuery}
       searchRef={searchRef}
@@ -577,7 +584,7 @@ export function App() {
           file={activeEntry.file}
           comments={activeComments}
           narrow
-          onChanged={() => void reload()}
+          onChanged={onChanged}
           folded={resolveFolded(
             foldOverrides.get(activeKey!),
             Boolean(activeEntry.file.folded),
@@ -607,7 +614,7 @@ export function App() {
       onSetFolded={setFolded}
       onSetViewMode={setViewModeFor}
       onSetViewModeDefault={setViewModeDefaultFor}
-      onChanged={() => void reload()}
+      onChanged={onChanged}
       containerRef={diffScrollRef}
       onActiveChange={setActiveKey}
       onScrollFraction={setScrollFraction}
@@ -984,7 +991,7 @@ export function App() {
           rather than beside the preview because it is pinned to the window,
           and because both layouts - the stack of files and the phone's
           single one - need it. */}
-      <PreviewSelection group={group} onChanged={() => void reload()} />
+      <PreviewSelection group={group} onChanged={onChanged} />
     </div>
   )
 }

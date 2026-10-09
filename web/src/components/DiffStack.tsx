@@ -1,5 +1,7 @@
 import {
   forwardRef,
+  memo,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -12,6 +14,7 @@ import type { Comment, Diff, ViewMode } from '../types'
 import { estimatedHeight } from '../estimatedHeight'
 import { sectionKey } from '../sectionKey'
 import { nextActive } from '../activeSection'
+import { sameElements } from '../share'
 import { DiffFileSection } from './DiffFileSection'
 import { Icon } from './Icon'
 
@@ -130,6 +133,91 @@ export function FileStepper({
   )
 }
 
+const NO_COMMENTS: Comment[] = []
+
+interface StackFileProps {
+  sectionKey: string
+  group: string
+  diff: Diff
+  file: Diff['files'][number]
+  comments: Comment[]
+  folded: boolean
+  foldedByReader: boolean
+  viewMode: ViewMode
+  onChanged: () => void
+  onSetFolded: (key: string, value: boolean) => void
+  onSetViewMode: (key: string, mode: ViewMode) => void
+  register: (key: string, el: HTMLDivElement | null) => void
+}
+
+/**
+ * One file of the stack. It is memoised on purpose: every SSE event reloads
+ * the group, and without this a new comment on one file rendered all of the
+ * other few hundred (670 ms of main thread with 400 files, #376). Everything
+ * it takes is either a primitive or an object that keeps its identity while it
+ * does not change (see ../share), so only the file that changed renders.
+ */
+// The comment list of a file is built again on every render of the stack, so
+// it is compared by its elements (which keep their identity, see ../share)
+// rather than by reference. The narrow layout in App.tsx still passes inline
+// closures to its single DiffFileSection; it renders one file, so that is
+// not worth a memo.
+function stackFilePropsEqual(a: StackFileProps, b: StackFileProps): boolean {
+  for (const k of Object.keys(a) as (keyof StackFileProps)[]) {
+    if (k === 'comments') continue
+    if (a[k] !== b[k]) return false
+  }
+  return sameElements(a.comments, b.comments)
+}
+
+const StackFile = memo(function StackFile({
+  sectionKey: key,
+  group,
+  diff,
+  file,
+  comments,
+  folded,
+  foldedByReader,
+  viewMode,
+  onChanged,
+  onSetFolded,
+  onSetViewMode,
+  register,
+}: StackFileProps) {
+  return (
+    <div
+      id={key}
+      data-section-key={key}
+      className="file-section"
+      // A large review mounts every file at once, and laying out
+      // and painting all of them is what makes the first render
+      // of a few hundred files take seconds. content-visibility
+      // lets the browser do that work for the sections near the
+      // viewport only; a browser that does not know the property
+      // simply renders everything as before. The style is inline
+      // because the size has to be per-file to be worth anything.
+      style={{
+        contentVisibility: 'auto',
+        containIntrinsicSize: `auto ${estimatedHeight(file, folded, comments.length, viewMode)}px`,
+      }}
+      ref={(el) => register(key, el)}
+    >
+      <DiffFileSection
+        group={group}
+        diff={diff}
+        file={file}
+        comments={comments}
+        onChanged={onChanged}
+        folded={folded}
+        foldedByReader={foldedByReader}
+        onSetFolded={(value) => onSetFolded(key, value)}
+        viewMode={viewMode}
+        onSetViewMode={(mode) => onSetViewMode(key, mode)}
+      />
+    </div>
+  )
+}, stackFilePropsEqual)
+
 export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
   {
     group,
@@ -184,6 +272,11 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
     }
     return map
   }, [comments])
+
+  const registerSection = useCallback((key: string, el: HTMLDivElement | null) => {
+    if (el) sectionEls.current.set(key, el)
+    else sectionEls.current.delete(key)
+  }, [])
 
   // A ref mirror of the latest callbacks, read from inside the observer and
   // scroll listener below: those are only rebuilt when `order` changes, so a
@@ -332,44 +425,25 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
           )}
           {d.files.map((file) => {
             const key = sectionKey(d.id, file.id)
-            const fileComments = commentsByKey.get(key) ?? []
+            const fileComments = commentsByKey.get(key) ?? NO_COMMENTS
             const folded = resolveFolded(foldOverrides.get(key), Boolean(file.folded), fileComments.length > 0)
             const viewMode = viewModeOverrides.get(key) ?? viewModeDefault ?? file.viewMode
             return (
-              <div
+              <StackFile
                 key={file.id}
-                id={key}
-                data-section-key={key}
-                className="file-section"
-                // A large review mounts every file at once, and laying out
-                // and painting all of them is what makes the first render
-                // of a few hundred files take seconds. content-visibility
-                // lets the browser do that work for the sections near the
-                // viewport only; a browser that does not know the property
-                // simply renders everything as before. The style is inline
-                // because the size has to be per-file to be worth anything.
-                style={{
-                  contentVisibility: 'auto',
-                  containIntrinsicSize: `auto ${estimatedHeight(file, folded, fileComments.length, viewMode)}px`,
-                }}
-                ref={(el) => {
-                  if (el) sectionEls.current.set(key, el)
-                  else sectionEls.current.delete(key)
-                }}
-              >
-                <DiffFileSection
-                  group={group}
-                  diff={d}
-                  file={file}
-                  comments={fileComments}
-                  onChanged={onChanged}
-                  folded={folded}
-                  foldedByReader={foldOverrides.get(key) === true}
-                  onSetFolded={(value) => onSetFolded(key, value)}
-                  viewMode={viewMode}
-                  onSetViewMode={(mode) => onSetViewMode(key, mode)}
-                />
-              </div>
+                sectionKey={key}
+                group={group}
+                diff={d}
+                file={file}
+                comments={fileComments}
+                folded={folded}
+                foldedByReader={foldOverrides.get(key) === true}
+                viewMode={viewMode}
+                onChanged={onChanged}
+                onSetFolded={onSetFolded}
+                onSetViewMode={onSetViewMode}
+                register={registerSection}
+              />
             )
           })}
         </div>
