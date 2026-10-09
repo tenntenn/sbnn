@@ -6,7 +6,9 @@
  * the find bar, but the key that opens it reaches the page as a keydown. On it
  * the stacks mount the remaining bodies in small batches, so the main thread
  * is never blocked for long, hold them while the reader is plausibly still
- * using the find bar, and fall back to the lazy rules afterwards.
+ * using the find bar, and fall back to the lazy rules afterwards. The preview
+ * pane also fetches the rendered Markdown (and notebook) previews a few at a
+ * time, since their text is not in the diff (#400).
  *
  * This module is the decisions; useLazyMount is the part that watches the page.
  */
@@ -80,6 +82,42 @@ export function nextFindBatch(
     if (d > 0 && after < order.length && out.length < size && !have.has(order[after])) out.push(order[after])
   }
   return out
+}
+
+/** PREFETCH_CONCURRENCY is how many previews the hold has in flight at once.
+ * Rendering Markdown costs the server real work, so a review with forty such
+ * files must not ask for all of them in one burst (#400). */
+export const PREFETCH_CONCURRENCY = 4
+
+/** PREFETCH_SLOT_MS is how long a started fetch may keep its slot without
+ * reporting back, so one that is lost cannot stop the rest. */
+export const PREFETCH_SLOT_MS = 15_000
+
+/**
+ * prefetchesForFind reports whether the hold fetches a file's preview. Only a
+ * preview that is rendered markup differs from the diff: a Markdown file
+ * rendered by sbnn and a notebook. A source file's preview is its text, which
+ * the diff pane already holds, and a Markdown file shown through mo is a whole
+ * document rendered server-side per frame, which the hold never asks for.
+ */
+export function prefetchesForFind(format: string | null, renderedHere: boolean): boolean {
+  if (format === 'notebook') return true
+  return format === 'markdown' && renderedHere
+}
+
+/**
+ * nextPrefetchBatch picks the previews to start now: the nearest to `anchor`
+ * that are not in `have`, as many as fit under `limit` given `inflight` that
+ * have not finished yet. It is nextFindBatch with a bound on concurrency.
+ */
+export function nextPrefetchBatch(
+  order: readonly string[],
+  have: ReadonlySet<string>,
+  anchor: number,
+  inflight: number,
+  limit: number = PREFETCH_CONCURRENCY,
+): string[] {
+  return nextFindBatch(order, have, anchor, limit - inflight)
 }
 
 /** mountedWithFind is what the stacks render: the lazily mounted sections plus

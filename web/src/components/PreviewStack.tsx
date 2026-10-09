@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { Comment, Diff, FileDiff, PreviewKind, Status } from '../types'
-import { filePath, isPreviewable } from '../types'
+import { filePath, isPreviewable, previewFormatOf } from '../types'
+import { prefetchesForFind } from '../findHold'
 import type { PreviewLinkTargets } from '../markdown'
 import { PreviewFileSection } from './PreviewFileSection'
 import { sectionKey } from '../sectionKey'
@@ -9,7 +10,7 @@ import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
 import type { ScrollFraction } from './DiffStack'
 import { client } from '../client'
-import { useLazyMount } from '../useLazyMount'
+import { useLazyMount, type FindPrefetch } from '../useLazyMount'
 
 // How far ahead of the visible area a section is fetched: generous enough
 // that the render is usually ready by the time the reader arrives, small
@@ -146,10 +147,43 @@ export function PreviewStack({
 
   // Which sections carry their body on the page. The rest are a shell that
   // stands as tall as the body last was (#390).
-  const { mounted, lazy } = useLazyMount(
+  //
+  // While the reader is searching the page (#398) the hold also fetches the
+  // previews whose rendered text the diff does not carry (#400): only the
+  // files prefetchesForFind names, a few at a time.
+  const activatedRef = useRef(activated)
+  activatedRef.current = activated
+  const prefetchable = useMemo(() => {
+    const keys = new Set<string>()
+    for (const r of rounds) {
+      for (const f of r.files) {
+        const format = previewFormatOf(f, hasSource)
+        if (prefetchesForFind(format, format !== 'markdown' || kind === 'preview')) {
+          keys.add(sectionKey(r.diff.id, f.id))
+        }
+      }
+    }
+    return keys
+  }, [rounds, hasSource, kind])
+  const prefetchableRef = useRef(prefetchable)
+  prefetchableRef.current = prefetchable
+  const findPrefetch = useMemo<FindPrefetch>(
+    () => ({
+      wants: (key) => prefetchableRef.current.has(key) && !activatedRef.current.has(key),
+      start: (keys) =>
+        setActivated((current) => {
+          const next = new Set(current)
+          for (const key of keys) next.add(key)
+          return next
+        }),
+    }),
+    [],
+  )
+  const { mounted, lazy, settled } = useLazyMount(
     containerRef,
     order,
     useCallback((key: string) => sectionEls.current.get(key), []),
+    findPrefetch,
   )
 
   // Follow the diff: move to the same file, at the same fraction into its
@@ -249,6 +283,7 @@ export function PreviewStack({
                   status={status}
                   kind={kind}
                   active={activated.has(key)}
+                  onSettled={() => settled(key)}
                   bodyMounted={mounted.has(key)}
                   frameMounted={lazy.has(key)}
                   onUserScroll={() => onSync(false)}

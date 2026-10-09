@@ -25,6 +25,9 @@ interface Props {
    * to ask the server (or, worse, mo) to render it yet. Once true it stays
    * true, so scrolling back to an already-loaded file never refetches it. */
   active: boolean
+  /** onSettled is called when a fetch this section started has finished,
+   * whether it worked or not: the find hold counts its fetches in flight. */
+  onSettled?: () => void
   /** bodyMounted says whether the rendered preview is on the page. A section
    * far from the viewport keeps what it fetched but drops the DOM, and stands
    * as tall as the preview last was (#390). Absent means mounted. */
@@ -183,6 +186,7 @@ export function PreviewFileSection({
   status,
   kind,
   active,
+  onSettled,
   bodyMounted = true,
   frameMounted = bodyMounted,
   linkTargets,
@@ -205,6 +209,8 @@ export function PreviewFileSection({
   const [bodyBox, setBodyBox] = useState<HTMLDivElement | null>(null)
   const [bodyHeight, setBodyHeight] = useState(0)
 
+  const settledRef = useRef(onSettled)
+  settledRef.current = onSettled
   const format = formatOf(file)
   const previewable = format !== null
   // The loader below is keyed on this string rather than on file itself,
@@ -265,7 +271,10 @@ export function PreviewFileSection({
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (cancelled) return
+        setLoading(false)
+        // A cancelled run is replaced by one that reports for itself.
+        settledRef.current?.()
       })
     return () => {
       cancelled = true
