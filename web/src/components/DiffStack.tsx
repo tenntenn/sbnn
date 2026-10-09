@@ -394,6 +394,9 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
   const orderRef = useRef(order)
   orderRef.current = order
   const watchedSections = useRef(new Map<string, HTMLDivElement>())
+  // An unobserved section reports nothing, so the active file is judged again
+  // by hand when one goes (the rebuilt observer used to do it by reporting).
+  const recomputeActiveRef = useRef<(() => void) | null>(null)
   useEffect(() => {
     const root = containerRef.current
     if (!root) return
@@ -422,9 +425,11 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
       { root, rootMargin: `0px 0px -${Math.round(ACTIVE_BAND * 100)}% 0px`, threshold: 0 },
     )
     activeObserver.current = observer
+    recomputeActiveRef.current = recomputeActive
     return () => {
       observer.disconnect()
       activeObserver.current = null
+      recomputeActiveRef.current = null
       watchedSections.current.clear()
     }
   }, [containerRef])
@@ -437,6 +442,7 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
       sectionEls.current.get(key),
     )
     for (const key of gone) intersecting.current.delete(key)
+    if (gone.length > 0) recomputeActiveRef.current?.()
   }, [order])
 
   useEffect(() => {
