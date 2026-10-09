@@ -40,22 +40,28 @@ go install github.com/tenntenn/sbnn@latest
 ```
 
 **Keep this skill as new as the binary.** The skill is embedded in `sbnn`, so
-the installed binary is the authority on what it says. Compare the copy you
-are reading with the one the binary carries, and refresh it when they differ
-— without asking, since an older copy describes commands and flags the binary
-no longer matches:
+the installed binary is the authority on what it says, and each copy records
+the release of the sbnn that wrote it (`metadata.version` in the front
+matter). Let the binary compare that release with its own and refresh the
+copy when it is the newer of the two — without asking, since an older copy
+describes commands and flags the binary no longer matches:
 
 ```
-sbnn skill | cmp -s - <path of this SKILL.md> || sbnn skill --install <directory holding the sbnn/ directory> --force
+sbnn skill --refresh <directory holding the sbnn/ directory>
 ```
 
-`<path of this SKILL.md>` is the file you read this from, and the directory
-to install into is two levels above it (`~/.claude/skills/sbnn/SKILL.md` →
-`~/.claude/skills`). `--force` replaces every file of the skill, including
-`references/`. After a refresh, read the new `SKILL.md` again and follow that
-one. Skip this when the skill was not installed as files (it came from
-`sbnn skill >> AGENTS.md`, say), and when `sbnn skill` fails, carry on with
-the copy you have and say so.
+The directory is two levels above the file you read this from
+(`~/.claude/skills/sbnn/SKILL.md` → `~/.claude/skills`). The command replaces
+every file of the skill, including `references/`, only when the binary is
+newer or the copy records no release. When it says it refreshed the skill,
+read the new `SKILL.md` again and follow that one. When it says the installed
+skill is **newer** than the binary, it left the skill alone on purpose, since
+overwriting it would swap newer text for older: carry on with the copy you
+have, and tell the user that `sbnn` should be upgraded
+(`go install github.com/tenntenn/sbnn@latest`). A source build (`dev`) records
+no release and never overwrites a released skill. Skip this when the skill was
+not installed as files (it came from `sbnn skill >> AGENTS.md`, say), and when
+`sbnn skill --refresh` fails, carry on with the copy you have and say so.
 
 sbnn renders the Markdown preview itself, so nothing else is needed. `mo`
 renders a richer one for those who install it, and the reader picks which in
