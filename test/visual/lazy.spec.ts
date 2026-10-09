@@ -78,7 +78,17 @@ test.describe('lazily mounted sections', () => {
     expect(await find(), 'the far preview is not fetched before the key').toBe(false)
     // The sections near the viewport fetch on their own; the bound is on what
     // the hold adds, so count from the key on.
-    await expect.poll(() => inflight).toBe(0)
+    await expect(page.locator('.preview-stack .markdown').first()).toBeVisible()
+    let loaded = -1
+    await expect
+      .poll(async () => {
+        await page.waitForTimeout(400)
+        const now = await page.locator('.preview-stack .markdown').count()
+        const stable = now === loaded && inflight === 0
+        loaded = now
+        return stable
+      })
+      .toBe(true)
     peak = 0
     await page.keyboard.press('Control+f')
     await expect(page.locator('.preview-stack .markdown')).toHaveCount(MD_FILES, { timeout: 60_000 })

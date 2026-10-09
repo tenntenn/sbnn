@@ -5,6 +5,8 @@ import {
   mountedWithFind,
   nextFindBatch,
   nextPrefetchBatch,
+  PREFETCH_CONCURRENCY,
+  PREFETCH_SLOT_MS,
   startsFind,
   FIND_QUIET_MS,
   isMac,
@@ -79,6 +81,14 @@ export function useLazyMount(
   // Fetches the hold started that have not finished, and every one it started.
   const inflight = useRef(new Set<string>())
   const started = useRef(new Set<string>())
+  const slotTimers = useRef(new Map<string, number>())
+  // Set while a hold is on: schedules another batch, for when the review grows.
+  const resumeFind = useRef<(() => void) | null>(null)
+  const settled = useCallback((key: string) => {
+    window.clearTimeout(slotTimers.current.get(key))
+    slotTimers.current.delete(key)
+    if (inflight.current.delete(key)) resumeFind.current?.()
+  }, [])
 
   // The section a jump is on its way to: mounted by ensure, and not to be
   // let go of by an observer callback that arrives before the scroll lands.
@@ -165,8 +175,6 @@ export function useLazyMount(
   foundRef.current = found
   const lazyRef = useRef(lazy)
   lazyRef.current = lazy
-  // Set while a hold is on: schedules another batch, for when the review grows.
-  const resumeFind = useRef<(() => void) | null>(null)
   useEffect(() => resumeFind.current?.(), [order])
 
   useEffect(() => {
@@ -199,7 +207,7 @@ export function useLazyMount(
       // The previews the bodies will show are fetched under a bound of their
       // own; a finished fetch calls resumeFind for the next ones.
       const pf = prefetchRef.current
-      if (pf) {
+      if (pf && inflight.current.size < PREFETCH_CONCURRENCY) {
         const skip = new Set(started.current)
         for (const key of orderRef.current) if (!pf.wants(key)) skip.add(key)
         const fetches = nextPrefetchBatch(
@@ -212,6 +220,9 @@ export function useLazyMount(
           for (const key of fetches) {
             started.current.add(key)
             inflight.current.add(key)
+            // A fetch that never reports back (its section stopped asking)
+            // must not hold its slot for good.
+            slotTimers.current.set(key, window.setTimeout(() => settled(key), PREFETCH_SLOT_MS))
           }
           pf.start(fetches)
         }
@@ -258,7 +269,8 @@ export function useLazyMount(
       }
       foundRef.current = new Set()
       setFound(foundRef.current)
-      inflight.current = new Set()
+      // `inflight` stays: those fetches are still running, and a hold begun
+      // again before they finish has to count them against the bound.
       started.current = new Set()
     }
     const begin = () => {
@@ -281,11 +293,10 @@ export function useLazyMount(
       window.removeEventListener('keydown', onKey, true)
       resumeFind.current = null
       end()
+      for (const timer of slotTimers.current.values()) window.clearTimeout(timer)
+      slotTimers.current.clear()
+      inflight.current.clear()
     }
-  }, [])
-
-  const settled = useCallback((key: string) => {
-    if (inflight.current.delete(key)) resumeFind.current?.()
   }, [])
 
   const mounted = useMemo(() => mountedWithFind(lazy, found), [lazy, found])

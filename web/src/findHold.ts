@@ -89,6 +89,10 @@ export function nextFindBatch(
  * files must not ask for all of them in one burst (#400). */
 export const PREFETCH_CONCURRENCY = 4
 
+/** PREFETCH_SLOT_MS is how long a started fetch may keep its slot without
+ * reporting back, so one that is lost cannot stop the rest. */
+export const PREFETCH_SLOT_MS = 15_000
+
 /**
  * prefetchesForFind reports whether the hold fetches a file's preview. Only a
  * preview that is rendered markup differs from the diff: a Markdown file

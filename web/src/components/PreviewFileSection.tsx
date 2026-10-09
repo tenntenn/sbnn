@@ -271,7 +271,9 @@ export function PreviewFileSection({
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (cancelled) return
+        setLoading(false)
+        // A cancelled run is replaced by one that reports for itself.
         settledRef.current?.()
       })
     return () => {
