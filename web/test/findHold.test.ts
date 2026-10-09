@@ -6,7 +6,10 @@ import {
   endsFind,
   findExpired,
   mountedWithFind,
+  PREFETCH_CONCURRENCY,
   nextFindBatch,
+  nextPrefetchBatch,
+  prefetchesForFind,
   startsFind,
 } from '../src/findHold'
 
@@ -113,6 +116,54 @@ describe('nextFindBatch', () => {
     }
     assert.equal(have.size, 400)
     assert.equal(batches, Math.ceil(400 / FIND_BATCH))
+  })
+})
+
+describe('prefetchesForFind', () => {
+  const cases = [
+    { name: 'markdown rendered here', format: 'markdown', here: true, want: true },
+    { name: 'markdown through mo', format: 'markdown', here: false, want: false },
+    { name: 'notebook', format: 'notebook', here: true, want: true },
+    { name: 'source is already in the diff', format: 'source', here: true, want: false },
+    { name: 'image', format: 'image', here: true, want: false },
+    { name: 'no preview', format: null, here: true, want: false },
+  ]
+  for (const c of cases) {
+    it(c.name, () => assert.equal(prefetchesForFind(c.format, c.here), c.want))
+  }
+})
+
+describe('nextPrefetchBatch', () => {
+  const order = Array.from({ length: 40 }, (_, i) => `k${i}`)
+
+  it('starts at most the concurrency bound, nearest first', () => {
+    const got = nextPrefetchBatch(order, new Set(), 10, 0)
+    assert.equal(got.length, PREFETCH_CONCURRENCY)
+    assert.deepEqual(got, ['k10', 'k9', 'k11', 'k8'])
+  })
+
+  it('counts what is still in flight against the bound', () => {
+    assert.equal(nextPrefetchBatch(order, new Set(), 0, 3).length, 1)
+    assert.deepEqual(nextPrefetchBatch(order, new Set(), 0, PREFETCH_CONCURRENCY), [])
+    assert.deepEqual(nextPrefetchBatch(order, new Set(), 0, PREFETCH_CONCURRENCY + 2), [])
+  })
+
+  it('skips what is already started', () => {
+    const have = new Set(['k0', 'k1'])
+    assert.deepEqual(nextPrefetchBatch(order, have, 0, 2), ['k2', 'k3'])
+  })
+
+  it('drains the whole list without offering a key twice', () => {
+    const have = new Set<string>()
+    for (;;) {
+      const keys = nextPrefetchBatch(order, have, 17, 0)
+      if (keys.length === 0) break
+      for (const k of keys) {
+        assert.ok(!have.has(k))
+        have.add(k)
+      }
+    }
+    assert.equal(have.size, order.length)
   })
 })
 

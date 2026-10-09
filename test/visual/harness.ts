@@ -48,6 +48,29 @@ export function manyFilesDiff(files: number, lines: number): string {
   return out.join('\n') + '\n'
 }
 
+export const MD_GROUP = 'markdown'
+export const MD_FILES = 24
+/** MD_NEEDLE is the text that only the rendered preview of the last Markdown
+ * file of MD_GROUP carries: the diff holds it as an HTML entity (#400). */
+export const MD_NEEDLE = 'zzpreviewonly400'
+
+/** markdownDiff is a unified diff that adds `files` Markdown files. The last
+ * one writes MD_NEEDLE as an entity, so it is in the rendered preview and not
+ * in the diff text. */
+export function markdownDiff(files: number): string {
+  const out: string[] = []
+  const entity = MD_NEEDLE.replace('p', '&#112;')
+  for (let i = 0; i < files; i++) {
+    const path = `docs/note${i}.md`
+    const lines = [`# Note ${i}`, '', ...Array.from({ length: 40 }, (_, k) => `Paragraph ${k} of note ${i}.`)]
+    if (i === files - 1) lines[5] = `Only in the preview: ${entity}.`
+    out.push(`diff --git a/${path} b/${path}`, 'new file mode 100644', 'index 0000000..1111111')
+    out.push('--- /dev/null', `+++ b/${path}`, `@@ -0,0 +1,${lines.length} @@`)
+    for (const l of lines) out.push(`+${l}`)
+  }
+  return out.join('\n') + '\n'
+}
+
 /** Reads what globalSetup left behind for the specs. */
 export function handoff(): Handoff {
   return JSON.parse(readFileSync(handoffPath, 'utf8')) as Handoff
@@ -155,6 +178,16 @@ export async function start(): Promise<Handoff> {
   })
   if (many.status !== 0) {
     throw new Error(`feeding the many-files group failed:\n${many.stderr ?? ''}${many.stdout ?? ''}`)
+  }
+
+  // Markdown files with text that only their rendered preview has (#400).
+  const md = spawnSync(bin, ['--port', String(port), '--no-open', '--target', MD_GROUP], {
+    env,
+    input: markdownDiff(MD_FILES),
+    encoding: 'utf8',
+  })
+  if (md.status !== 0) {
+    throw new Error(`feeding the markdown group failed:\n${md.stderr ?? ''}${md.stdout ?? ''}`)
   }
 
   // The exported page is the same UI with no server behind it, which is

@@ -1,0 +1,40 @@
+#400 measurements. Fixture as #398 (method/setup.sh): 20 rounds x 20 files =
+400 files, 40 of them 300-line Markdown, sbnn on --port 6402 --target t400,
+started with `env -C <fixture>/fx` so previews read the working tree. The
+needle sits only in docs/r20/doc1.md, written as zz&#109;dneedle400: the diff
+carries the entity, the rendered preview carries "zzmdneedle400". Headless
+Chrome (agent-browser, session pr-400), 1400x900, page loaded fresh. Headless
+Chrome has no find bar: window.find() stands in for it and the key is a
+synthetic Ctrl+F keydown on window (method/find.js, idle.js, run.sh).
+The preview pane renders Markdown in the page; the server is asked for the
+file content (GET .../files/<id>/content), one request per preview.
+
+Before (origin/main, 3edb6d1)
+  before the key:   12,355 DOM nodes, 9 content requests, 1 rendered Markdown
+  after Ctrl+F (+10 s): 278,558 nodes, still 9 requests, 2 rendered Markdown
+  window.find("zzmdneedle400"): false, before and after the key
+  Escape: back to 12,355 nodes
+
+After (this branch)
+  before the key:   12,355 DOM nodes, 9 content requests, 1 rendered Markdown
+                    (the fast default path is unchanged)
+  after Ctrl+F:     all 40 rendered Markdown mounted after 5.85 s
+                    322k nodes (278k without the previews, +43k for 40 of them)
+                    47 content requests (+38: the 38 Markdown files not yet fetched)
+                    long tasks 2 (97 ms max, 148 ms total), longest frame gap 89 ms
+                    0 iframes
+  window.find("zzmdneedle400"): true, selection inside .preview-stack
+                    (find-preview-only-text.png)
+  requests in flight: at most 4 at a time (idle.js: overlap of the
+                    requests' start..responseEnd since the key)
+  Escape: 12,355 nodes, 1 rendered Markdown, find false again
+  60 s idle (no Escape): 12,355 nodes and 1 rendered Markdown at 99 s
+
+Server (one run each, /proc/<pid>/stat, 100 ticks = 1 s)
+  before: +0 CPU ticks over the key; RSS 93 MB after the page load
+  after:  +15 ticks (0.15 s CPU) over the key; peak RSS 110 MB (108 MB after
+          the page load)
+
+Not measured: a real find bar; mo (the hold never asks for a frame); the
+exported page (no network there: previews render in the page, not tested in
+a browser, covered by the existing static-client path).
