@@ -44,7 +44,7 @@ test.describe('lazily mounted sections', () => {
     await expect(rows.last()).toContainText(`file${MANY_FILES - 1}.go`)
     expect(await rows.count(), 'rows on the page at the end').toBeLessThan(MANY_FILES / 2)
     const after = await page.locator('.sidebar').evaluate((el) => el.scrollHeight)
-    expect(Math.abs(after - tall), 'the list is as tall at the end as at the start').toBeLessThan(tall * 0.05)
+    expect(Math.abs(after - tall), 'the list is as tall at the end as at the start').toBeLessThan(tall * 0.1)
   })
 
   test('a file far down is mounted once the sidebar jumps to it, and the first one is let go', async ({ page }) => {

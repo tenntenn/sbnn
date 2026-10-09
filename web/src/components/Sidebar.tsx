@@ -597,10 +597,16 @@ const FileChunk = memo(function FileChunk({
   onSetRead,
 }: ChunkProps) {
   const ref = useRef<HTMLUListElement>(null)
-  const measured = useRef<number | undefined>(undefined)
+  // What the rows measured, and for how many rows: a measurement of another
+  // run of rows (a search narrowed this one) is not this list's height.
+  const measured = useRef<{ height: number; rows: number } | undefined>(undefined)
+  const rows = end - start
   const [isNear, setNear] = useState(
     near === null || eager || typeof IntersectionObserver === 'undefined',
   )
+  // What the observer last said, which may be ahead of `isNear` when focus
+  // kept the rows on the page.
+  const wanted = useRef(isNear)
   let holdsActive = false
   if (near && activeKey !== null) {
     for (let i = start; i < end; i++) {
@@ -610,27 +616,54 @@ const FileChunk = memo(function FileChunk({
       }
     }
   }
-  const show = isNear || holdsActive
+  // Without the observer (a short list) every row is there, whatever a past
+  // life of this chunk left in isNear.
+  const show = near === null || isNear || holdsActive
+  const shown = useRef(show)
+  shown.current = show
+
+  const measure = () => {
+    const el = ref.current
+    // A list that is hidden (a shut round, another tab) measures 0 and says
+    // nothing.
+    if (!near || !el || !shown.current || el.offsetHeight <= 0) return
+    measured.current = { height: el.offsetHeight, rows }
+    near.learn(el.offsetHeight, rows)
+  }
 
   useEffect(() => {
     const el = ref.current
     if (!near || !el) return
     return near.watch(el, (nowNear) => {
-      if (!nowNear && el.contains(document.activeElement)) return
+      wanted.current = nowNear
+      if (!nowNear) {
+        // Focus inside keeps the rows; leaving lets them go (onBlur below).
+        if (el.contains(document.activeElement)) return
+        // Read while the rows are still there.
+        measure()
+      }
       setNear(nowNear)
     })
-  }, [near])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [near, rows])
 
-  // How tall the rows made the list, for when they are gone. A list that is
-  // hidden (a shut round, another tab) measures 0 and says nothing.
+  // How tall the rows made the list, for when they are gone.
   useLayoutEffect(() => {
-    const el = ref.current
-    if (!near || !show || !el) return
-    const height = el.offsetHeight
-    if (height <= 0) return
-    measured.current = height
-    near.learn(height, end - start)
-  })
+    if (show) measure()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [near, show, rows])
+
+  // Focus that kept the rows past the observer's "not near" is let go of
+  // here, once it has moved out of the list.
+  const onBlur = () => {
+    if (!near) return
+    window.setTimeout(() => {
+      const el = ref.current
+      if (!el || wanted.current || el.contains(document.activeElement)) return
+      measure()
+      setNear(false)
+    }, 0)
+  }
 
   return (
     <ul
@@ -638,10 +671,17 @@ const FileChunk = memo(function FileChunk({
       className="file-list"
       hidden={shut}
       aria-hidden={show ? undefined : true}
+      onBlur={onBlur}
       style={
         show || !near
           ? undefined
-          : { height: placeholderHeight(measured.current, end - start, near.rowHeight) }
+          : {
+              height: placeholderHeight(
+                measured.current?.rows === rows ? measured.current.height : undefined,
+                rows,
+                near.rowHeight,
+              ),
+            }
       }
     >
       {show &&
