@@ -340,13 +340,15 @@ export function PreviewStack({
   return (
     <div
       className="preview-stack"
+      data-tour="preview"
       style={{ '--preview-toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
     >
       <div className="preview-toolbar" ref={toolbarRef}>
         {!forced && (
-          <div className="toggle">
+          <div className="toggle" role="group" aria-label={t('preview.rendererLabel')}>
             <button
               className={kind === 'preview' ? 'active' : ''}
+              aria-pressed={kind === 'preview'}
               onClick={() => onSetKind('preview')}
               title={t('preview.previewTitle')}
             >
@@ -355,6 +357,7 @@ export function PreviewStack({
             </button>
             <button
               className={kind === 'mo' ? 'active' : ''}
+              aria-pressed={kind === 'mo'}
               onClick={() => onSetKind('mo')}
               title={t('preview.moTitle')}
             >
@@ -377,6 +380,8 @@ export function PreviewStack({
         >
           <button
             className={`ghost icon-only${sync && kind === 'preview' ? ' active' : ''}`}
+            aria-pressed={sync && kind === 'preview'}
+            aria-label={t('key.sync')}
             disabled={kind !== 'preview'}
             onClick={() => onSync(!sync)}
           >

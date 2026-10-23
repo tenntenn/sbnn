@@ -278,7 +278,14 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
 - Press `?` for the keyboard shortcuts: `j`/`k` move between files, `n`/`p`
   between comments, `f` folds, `v` switches split and unified, `s` toggles
   the scroll sync, `r` opens the review box, `/` searches the file list. None
-  of them fires while you are typing.
+  of them fires while you are typing. The **?** button in the header opens
+  the same sheet.
+- The first time a review is opened in a browser, a short tour points out
+  the file list, the diff, the preview, how to comment on a line and how to
+  finish the review. Skip it with Esc; **Show the tour again** in the `?`
+  sheet brings it back. Where the browser refuses to store anything (a
+  sandboxed frame, blocked site data) it does not open by itself, since it
+  could not remember having been seen.
 - The header switch cycles **Auto / Light / Dark**: Auto follows the system
   (or whatever host an exported page is read in), and a choice is remembered
   per browser. The Markdown preview keeps mo's own theme — mo has its own

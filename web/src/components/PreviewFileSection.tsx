@@ -506,6 +506,7 @@ export function PreviewFileSection({
           <span title={t('preview.reload')}>
             <button
               className="ghost icon-only"
+              aria-label={t('preview.reload')}
               onClick={() => setReloadKey((k) => k + 1)}
               disabled={!previewable}
             >
@@ -519,13 +520,24 @@ export function PreviewFileSection({
         {!client.isStatic &&
           format === 'markdown' &&
           (preview?.kind === 'frame' && preview.moUrl ? (
-            <a className="ghost button" href={preview.moUrl} target="_blank" rel="noreferrer">
+            <a
+              className="ghost button"
+              href={preview.moUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={t('preview.openInMo')}
+            >
               <MoIcon small />
               mo
               <Icon name="open_in_new" small />
             </a>
           ) : (
-            <button className="ghost" onClick={() => void openInMo()} disabled={openingMo}>
+            <button
+              className="ghost"
+              onClick={() => void openInMo()}
+              disabled={openingMo}
+              title={t('preview.openInMo')}
+            >
               <MoIcon small />
               {openingMo ? t('preview.opening') : 'mo'}
               <Icon name="open_in_new" small />

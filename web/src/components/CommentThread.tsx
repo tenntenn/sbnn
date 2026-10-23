@@ -217,6 +217,7 @@ function CommentItem({
             <button
               className="ghost"
               disabled={busy}
+              title={comment.resolved ? t('comment.reopenTitle') : t('comment.resolveTitle')}
               onClick={() =>
                 run(() => client.updateComment(group, comment.id, { resolved: !comment.resolved }))
               }
@@ -229,6 +230,7 @@ function CommentItem({
             <button
               className="ghost danger"
               disabled={busy}
+              title={t('comment.deleteTitle')}
               onClick={() => run(() => client.deleteComment(group, comment.id))}
             >
               {t('comment.delete')}
@@ -383,7 +385,9 @@ export function CommentForm({ onSubmit, onCancel, label, seed, canSuggest, hint 
         <button className="ghost" disabled={busy} onClick={onCancel}>
           {t('common.cancel')}
         </button>
-        <span className="hint">{t('comment.sendHint')}</span>
+        <span className="hint" title={t('comment.sendHintTitle')}>
+          {t('comment.sendHint')}
+        </span>
       </div>
       {error && <div className="error inline">{error}</div>}
     </div>

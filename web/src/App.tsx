@@ -13,6 +13,8 @@ import { PreviewSelection } from './components/PreviewSelection'
 import { commentDomIds } from './previewComments'
 import { PreviewStack } from './components/PreviewStack'
 import { Sidebar } from './components/Sidebar'
+import { Tour } from './components/Tour'
+import { markTourSeen, shouldAutoStart } from './tour'
 import { clampRatio, SplitPane, SPLIT_DEFAULT } from './components/SplitPane'
 import { useNarrowLayout } from './useMediaQuery'
 import { plainKey, shortcuts, stepToComment, typingInto } from './shortcuts'
@@ -140,6 +142,10 @@ export function App() {
   const [reviewNote, setReviewNote] = useState<string | null>(null)
   const [help, setHelp] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // The tour opens by itself once per browser, the first time a review is on
+  // the page, and from the help sheet whenever the reader asks for it.
+  const [tourOpen, setTourOpen] = useState(false)
+  const tourChecked = useRef(false)
   const [sidebarWidth, setSidebarWidth] = useState(storedSidebarWidth)
   const [theme, setTheme] = useState<Theme>(storedTheme)
   const [query, setQuery] = useState('')
@@ -170,6 +176,23 @@ export function App() {
   useEffect(() => {
     applyTheme(theme)
   }, [theme])
+
+  // Not on the welcome page: there is nothing there for the tour to point
+  // at. The wait lets the first sections lay out, so the frame lands on them
+  // rather than on where they were before the fonts arrived.
+  const hasDiffs = diffs.length > 0
+  useEffect(() => {
+    if (!hasDiffs || tourChecked.current) return
+    tourChecked.current = true
+    if (!shouldAutoStart()) return
+    const timer = window.setTimeout(() => setTourOpen(true), 400)
+    return () => window.clearTimeout(timer)
+  }, [hasDiffs])
+
+  const closeTour = useCallback(() => {
+    setTourOpen(false)
+    markTourSeen()
+  }, [])
 
   // A menu left open is a click away from closing, wherever that click lands.
   useEffect(() => {
@@ -519,6 +542,9 @@ export function App() {
   // away eleven times.
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
+      // The tour answers its own keys while it is up; a `j` there would move
+      // the page out from under the frame it is drawing.
+      if (tourOpen) return
       if (!plainKey(ev)) return
       if (ev.key === 'Escape') {
         setHelp(false)
@@ -583,6 +609,7 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [
+    tourOpen,
     stepFile,
     stepComment,
     focusSearch,
@@ -763,7 +790,7 @@ export function App() {
           </span>
         )}
         <span className="spacer" />
-        <div className="toolbar-group">
+        <div className="toolbar-group" data-tour="review">
           {/* A disabled button swallows hover, so the tooltip that explains
               why it is disabled has to live on a span around it instead. */}
           <span title={t('app.copyPromptTitle')}>
@@ -787,11 +814,25 @@ export function App() {
           )}
         </div>
         <span className="toolbar-divider" />
+        {/* A question mark rather than an icon: it is the key that opens the
+            same sheet, so the button teaches the shortcut by being it. */}
+        <button
+          className="ghost icon-only"
+          data-tour="help"
+          aria-haspopup="dialog"
+          aria-expanded={help}
+          aria-label={t('app.help')}
+          title={t('app.help')}
+          onClick={() => setHelp((open) => !open)}
+        >
+          ?
+        </button>
         <div className="settings-menu" ref={settingsRef}>
           <button
             className="ghost icon-only"
             aria-haspopup="true"
             aria-expanded={settingsOpen}
+            aria-label={t('settings.title')}
             onClick={() => setSettingsOpen((open) => !open)}
             title={t('settings.title')}
           >
@@ -804,6 +845,8 @@ export function App() {
                 <div className="toggle sm">
                   <button
                     className={theme === 'auto' ? 'active' : ''}
+                    aria-pressed={theme === 'auto'}
+                    aria-label={t('settings.themeAuto')}
                     onClick={() => setTheme('auto')}
                     title={t('settings.themeAuto')}
                   >
@@ -811,6 +854,8 @@ export function App() {
                   </button>
                   <button
                     className={theme === 'light' ? 'active' : ''}
+                    aria-pressed={theme === 'light'}
+                    aria-label={t('settings.themeLight')}
                     onClick={() => setTheme('light')}
                     title={t('settings.themeLight')}
                   >
@@ -818,6 +863,8 @@ export function App() {
                   </button>
                   <button
                     className={theme === 'dark' ? 'active' : ''}
+                    aria-pressed={theme === 'dark'}
+                    aria-label={t('settings.themeDark')}
                     onClick={() => setTheme('dark')}
                     title={t('settings.themeDark')}
                   >
@@ -1009,9 +1056,24 @@ export function App() {
               ))}
             </dl>
             <p className="hint">{t('help.typing')}</p>
+            {diffs.length > 0 && (
+              <div className="help-actions">
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    setHelp(false)
+                    setTourOpen(true)
+                  }}
+                >
+                  {t('help.tour')}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
+
+      {tourOpen && <Tour onClose={closeTour} />}
 
       {narrow ? (
         <div className="body">

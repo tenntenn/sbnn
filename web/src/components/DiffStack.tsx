@@ -473,12 +473,17 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
   }, [containerRef])
 
   return (
-    <div className="diff-stack" style={{ '--diff-toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}>
+    <div
+      className="diff-stack"
+      data-tour="diff"
+      style={{ '--diff-toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
+    >
       <div className="diff-toolbar" ref={toolbarRef}>
         <span className="hint">{t('diff.everyFile')}</span>
-        <div className="toggle">
+        <div className="toggle" role="group" aria-label={t('diff.everyFile')}>
           <button
             className={viewModeDefault === 'split' ? 'active' : ''}
+            aria-pressed={viewModeDefault === 'split'}
             onClick={() => onSetViewModeDefault('split')}
             title={t('diff.everySplitTitle')}
           >
@@ -487,6 +492,7 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
           </button>
           <button
             className={viewModeDefault === 'unified' ? 'active' : ''}
+            aria-pressed={viewModeDefault === 'unified'}
             onClick={() => onSetViewModeDefault('unified')}
             title={t('diff.everyUnifiedTitle')}
           >

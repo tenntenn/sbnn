@@ -291,6 +291,52 @@ const en = {
   'storage.unsaved':
     'This browser refused to save your comments (private window, blocked site data, or a full quota).',
   'storage.unsavedAdvice': ' Use "Copy prompt" now to keep a copy: nothing you write here will survive this tab.',
+
+  // Tooltips for controls whose meaning is not on their face (#409).
+  'app.help': 'Help: keys and a tour of the page',
+  'help.tour': 'Show the tour again',
+  'sidebar.label': 'Files in this review',
+  'sidebar.layoutLabel': 'How the rounds are shown',
+  'sidebar.readTitle': 'Files you have ticked off as read, out of every file in this review',
+  'sidebar.roundToggle': 'Show or hide the files of this round, sent {date}',
+  'sidebar.openComments': 'Open comments',
+  'sidebar.additions': 'Lines added',
+  'sidebar.deletions': 'Lines removed',
+  'diff.viewModeLabel': 'How this file is laid out',
+  'comment.resolveTitle': 'Mark this comment as dealt with; it stays on the page, faded',
+  'comment.reopenTitle': 'Mark this comment as still open',
+  'comment.deleteTitle': 'Delete this comment for good',
+  'comment.sendHintTitle': 'Press ⌘ + Enter (Ctrl + Enter elsewhere) to send',
+  'preview.openInMo': 'Open this file in mo, in a new tab',
+  'preview.rendererLabel': 'Which renderer draws the preview',
+
+  // The first-run tour.
+  'tour.label': 'Tour of the review page',
+  'tour.step': '{at} / {total}',
+  'tour.back': 'Back',
+  'tour.next': 'Next',
+  'tour.done': 'Done',
+  'tour.skip': 'Skip tour',
+  'tour.files.title': 'The files in this review',
+  'tour.files.body':
+    'Every file the review carries, round by round. Search paths and lines with /, tick a file off as read, and click one to go to it.',
+  'tour.diff.title': 'The diff',
+  'tour.diff.body':
+    "One section per file. Its header folds it away and switches between split and unified; j and k step from file to file.",
+  'tour.preview.title': 'The preview',
+  'tour.preview.body':
+    'Markdown, notebooks, images and source files are rendered here, and follow the diff as you scroll. Select text in a Markdown preview to comment on the lines it came from.',
+  'tour.comment.title': 'Commenting on a line',
+  'tour.comment.body':
+    'Click a line number to comment on that line; drag across several, or shift-click one, to cover a range. From the keyboard, Tab to a line number and press Enter.',
+  'tour.review.title': 'Finishing the review',
+  'tour.review.body':
+    'When you are done, Submit review tells whoever is waiting, with your verdict. Copy prompt puts the open comments on the clipboard for an agent.',
+  'tour.review.bodyStatic':
+    'Copy prompt puts your comments on the clipboard, to paste into an agent. On an exported page they are kept in this browser only.',
+  'tour.help.title': 'Help is always here',
+  'tour.help.body':
+    'This button, or the ? key, lists every shortcut and starts this tour again. The settings beside it hold the theme and the language.',
 } satisfies Record<string, string>
 
 /** MessageKey is every key the page may look up. */
@@ -555,6 +601,50 @@ const ja: Record<MessageKey, string> = {
   'storage.unsaved':
     'このブラウザがコメントの保存を拒否しました(プライベートウィンドウ、サイトデータのブロック、または容量不足)。',
   'storage.unsavedAdvice': ' 今すぐ「プロンプトをコピー」で控えを取ってください。このタブを閉じると、書いた内容は残りません。',
+
+  'app.help': 'ヘルプ: キー操作と画面ツアー',
+  'help.tour': '画面ツアーをもう一度見る',
+  'sidebar.label': 'このレビューのファイル',
+  'sidebar.layoutLabel': 'ラウンドの表示方法',
+  'sidebar.readTitle': 'このレビューのファイルのうち、既読の印を付けたものの数',
+  'sidebar.roundToggle': 'このラウンドのファイルを表示 / 非表示({date} に送信)',
+  'sidebar.openComments': '未解決のコメント',
+  'sidebar.additions': '追加された行',
+  'sidebar.deletions': '削除された行',
+  'diff.viewModeLabel': 'このファイルの表示方法',
+  'comment.resolveTitle': '対応済みにします。コメントは薄く表示されたまま残ります',
+  'comment.reopenTitle': 'このコメントを未解決に戻します',
+  'comment.deleteTitle': 'このコメントを完全に削除します',
+  'comment.sendHintTitle': '⌘ + Enter(Mac 以外では Ctrl + Enter)で送信します',
+  'preview.openInMo': 'このファイルを mo で新しいタブに開く',
+  'preview.rendererLabel': 'プレビューを描画する方法',
+
+  'tour.label': 'レビュー画面のツアー',
+  'tour.step': '{at} / {total}',
+  'tour.back': '戻る',
+  'tour.next': '次へ',
+  'tour.done': '完了',
+  'tour.skip': 'ツアーをスキップ',
+  'tour.files.title': 'レビュー対象のファイル',
+  'tour.files.body':
+    'このレビューに含まれるファイルが、ラウンドごとに並びます。/ でパスと行を検索でき、読み終えたファイルには既読の印を付けられます。クリックするとそのファイルへ移動します。',
+  'tour.diff.title': 'diff',
+  'tour.diff.body':
+    'ファイルごとに 1 つのセクションがあります。見出しから折りたたみや分割 / 統合表示の切り替えができ、j と k でファイル間を移動できます。',
+  'tour.preview.title': 'プレビュー',
+  'tour.preview.body':
+    'Markdown、notebook、画像、ソースファイルをここに描画し、diff のスクロールに追従します。Markdown プレビューの文章を選択すると、その元になった行にコメントできます。',
+  'tour.comment.title': '行にコメントする',
+  'tour.comment.body':
+    '行番号をクリックするとその行にコメントできます。複数行をドラッグするか Shift を押しながらクリックすると範囲を指定できます。キーボードなら Tab で行番号に移動して Enter を押します。',
+  'tour.review.title': 'レビューを終える',
+  'tour.review.body':
+    '終わったら「レビューを送信」で、判定とともに待っている相手に伝えます。「プロンプトをコピー」は未解決のコメントをエージェント向けにクリップボードへコピーします。',
+  'tour.review.bodyStatic':
+    '「プロンプトをコピー」でコメントをクリップボードにコピーし、エージェントに貼り付けられます。エクスポートしたページでは、コメントはこのブラウザにだけ保存されます。',
+  'tour.help.title': 'ヘルプはいつでもここに',
+  'tour.help.body':
+    'このボタンか ? キーで、すべてのショートカットの一覧と、このツアーをもう一度開けます。隣の設定ではテーマと言語を変えられます。',
 }
 
 export type Language = 'en' | 'ja'

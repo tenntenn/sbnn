@@ -279,6 +279,8 @@ export function Sidebar({
       className={`sidebar${width === 0 ? ' collapsed' : ''}${width === null ? ' fill' : ''}`}
       style={width === null ? undefined : { width }}
       aria-hidden={width === 0}
+      aria-label={t('sidebar.label')}
+      data-tour="files"
     >
       {diffs.length === 0 && <p className="empty">{t('sidebar.empty')}</p>}
 
@@ -308,9 +310,10 @@ export function Sidebar({
             </span>
           )}
           {diffs.length > 1 && (
-            <div className="toggle sm">
+            <div className="toggle sm" role="group" aria-label={t('sidebar.layoutLabel')}>
               <button
                 className={layout === 'list' ? 'active' : ''}
+                aria-pressed={layout === 'list'}
                 onClick={() => setLayout('list')}
                 title={t('sidebar.listTitle')}
               >
@@ -318,6 +321,7 @@ export function Sidebar({
               </button>
               <button
                 className={layout === 'tabs' ? 'active' : ''}
+                aria-pressed={layout === 'tabs'}
                 onClick={() => setLayout('tabs')}
                 title={t('sidebar.tabsTitle')}
               >
@@ -334,7 +338,7 @@ export function Sidebar({
       {total > 0 && (
         <div className="file-search">
           <Icon name="check" small />
-          <span className="hint" style={{ flex: 1 }}>
+          <span className="hint" style={{ flex: 1 }} title={t('sidebar.readTitle')}>
             {t('sidebar.read', { read: readCount, total })}
           </span>
           {readCount > 0 && (
@@ -376,7 +380,9 @@ export function Sidebar({
                   </span>
                 )}
                 {roundComments(diff) > 0 && (
-                  <span className="badge sm warn">{roundComments(diff)}</span>
+                  <span className="badge sm warn" title={t('sidebar.openComments')}>
+                    {roundComments(diff)}
+                  </span>
                 )}
               </button>
               {!client.isStatic && diff.id === activeTab && (
@@ -509,7 +515,7 @@ const SidebarRound = memo(function SidebarRound({
         {!tabs ? (
           <button
             className="diff-round-title as-button"
-            title={dateTime(diff.createdAt)}
+            title={t('sidebar.roundToggle', { date: dateTime(diff.createdAt) })}
             aria-expanded={!shut}
             onClick={() => onToggle(diff.id)}
           >
@@ -518,7 +524,11 @@ const SidebarRound = memo(function SidebarRound({
             </span>
             {diff.title}
             <span className="hint">{files.length}</span>
-            {open > 0 && <span className="badge sm warn">{open}</span>}
+            {open > 0 && (
+              <span className="badge sm warn" title={t('sidebar.openComments')}>
+                {open}
+              </span>
+            )}
           </button>
         ) : (
           <span className="diff-round-title" title={dateTime(diff.createdAt)}>
@@ -529,6 +539,7 @@ const SidebarRound = memo(function SidebarRound({
           <button
             className="ghost danger"
             title={t('sidebar.removeRound')}
+            aria-label={t('sidebar.removeRound')}
             onClick={() => onRemove(diff)}
           >
             <Icon name="close" small />
@@ -794,9 +805,17 @@ const SidebarFile = memo(function SidebarFile({
             ipynb
           </span>
         )}
-        {count > 0 && <span className="badge sm warn">{count}</span>}
-        <span className="stat add">+{file.additions}</span>
-        <span className="stat del">-{file.deletions}</span>
+        {count > 0 && (
+          <span className="badge sm warn" title={t('sidebar.openComments')}>
+            {count}
+          </span>
+        )}
+        <span className="stat add" title={t('sidebar.additions')}>
+          +{file.additions}
+        </span>
+        <span className="stat del" title={t('sidebar.deletions')}>
+          -{file.deletions}
+        </span>
       </button>
     </li>
   )

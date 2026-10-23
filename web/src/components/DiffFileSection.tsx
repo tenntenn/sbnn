@@ -328,8 +328,12 @@ export function DiffFileSection({
               ? `${file.oldPath} → ${file.newPath}`
               : filePath(file)}
           </span>
-          <span className="stat add">+{file.additions}</span>
-          <span className="stat del">-{file.deletions}</span>
+          <span className="stat add" title={t('sidebar.additions')}>
+            +{file.additions}
+          </span>
+          <span className="stat del" title={t('sidebar.deletions')}>
+            -{file.deletions}
+          </span>
         </button>
         <div className="diff-tools">
           <button
@@ -355,9 +359,10 @@ export function DiffFileSection({
               {t('diff.unified')}
             </span>
           ) : (
-            <div className="toggle">
+            <div className="toggle" role="group" aria-label={t('diff.viewModeLabel')}>
               <button
                 className={mode === 'split' ? 'active' : ''}
+                aria-pressed={mode === 'split'}
                 onClick={() => onSetViewMode('split')}
                 title={t('diff.splitTitle')}
               >
@@ -366,6 +371,7 @@ export function DiffFileSection({
               </button>
               <button
                 className={mode === 'unified' ? 'active' : ''}
+                aria-pressed={mode === 'unified'}
                 onClick={() => onSetViewMode('unified')}
                 title={t('diff.unifiedTitle')}
               >
