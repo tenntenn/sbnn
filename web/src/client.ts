@@ -4,6 +4,7 @@ import { renderMarkdown, type PreviewAssets } from './markdown'
 import { renderNotebook } from './notebook'
 import { buildPrompt } from './prompt'
 import { suggestions } from './suggestion'
+import { replyFields, setThreadResolved, withoutComment } from './threads'
 import { t, type MessageKey } from './i18n'
 
 /** PreviewResult is an embedded mo page, HTML rendered here, or the text of
@@ -72,6 +73,8 @@ export interface SbnnClient {
    * fetch the diffs, and leaves the review fields alone. */
   loadComments(group: string): Promise<CommentsData>
   addComment(group: string, comment: api.NewComment): Promise<void>
+  /** addReply answers the comment replyTo, in its thread and on its lines. */
+  addReply(group: string, replyTo: string, body: string): Promise<void>
   updateComment(group: string, id: string, patch: api.CommentPatch): Promise<void>
   deleteComment(group: string, id: string): Promise<void>
   deleteDiff(group: string, diffId: string): Promise<void>
@@ -186,6 +189,9 @@ function createLiveClient(): SbnnClient {
     },
     async addComment(group, comment) {
       await api.addComment(group, comment)
+    },
+    async addReply(group, replyTo, body) {
+      await api.addReply(group, { replyTo, body })
     },
     async updateComment(group, id, patch) {
       await api.updateComment(group, id, patch)
@@ -466,24 +472,51 @@ function createStaticClient(data: StaticPayload): SbnnClient {
       }
       write([...read(), created])
     },
+    async addReply(group, replyTo, body) {
+      // The same rules the server applies: the reply joins the thread of
+      // the comment it names, takes its place and its state, and is never a
+      // question of its own.
+      const comments = read()
+      const thread = replyFields(comments, replyTo)
+      if (!thread) throw new Error(t('static.noReplyTarget'))
+      const now = new Date().toISOString()
+      const created: Comment = {
+        ...thread,
+        id: newID(),
+        group,
+        body,
+        suggestions: suggestions(body),
+        question: false,
+        createdAt: now,
+        updatedAt: now,
+      }
+      write([...comments, created])
+    },
     async updateComment(_group, id, patch) {
+      const now = new Date().toISOString()
+      // Resolving is done to a thread, whichever of its comments was asked.
+      let comments = read()
+      if (patch.resolved !== undefined) comments = setThreadResolved(comments, id, patch.resolved, now)
+      if (patch.body === undefined && patch.question === undefined) {
+        write(comments)
+        return
+      }
       write(
-        read().map((c) =>
+        comments.map((c) =>
           c.id === id
             ? {
                 ...c,
                 body: patch.body ?? c.body,
                 suggestions: suggestions(patch.body ?? c.body),
-                question: patch.question ?? c.question,
-                resolved: patch.resolved ?? c.resolved,
-                updatedAt: new Date().toISOString(),
+                question: c.replyTo ? c.question : (patch.question ?? c.question),
+                updatedAt: now,
               }
             : c,
         ),
       )
     },
     async deleteComment(_group, id) {
-      write(read().filter((c) => c.id !== id))
+      write(withoutComment(read(), id))
     },
     async deleteDiff() {
       throw new Error(t('static.noDrop'))

@@ -117,6 +117,13 @@ export interface NewComment {
   question?: boolean
 }
 
+/** NewReply is a reply to a comment. It names no place: the server puts it
+ * on the lines of the thread it joins. */
+export interface NewReply {
+  replyTo: string
+  body: string
+}
+
 /** CommentPatch is what can be edited on an existing comment. */
 export interface CommentPatch {
   body?: string
@@ -129,6 +136,14 @@ export function addComment(group: string, comment: NewComment): Promise<Comment>
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(comment),
+  })
+}
+
+export function addReply(group: string, reply: NewReply): Promise<Comment> {
+  return request<Comment>(`/_/api/groups/${encodeURIComponent(group)}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(reply),
   })
 }
 

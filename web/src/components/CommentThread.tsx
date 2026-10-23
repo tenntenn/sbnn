@@ -1,10 +1,11 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { Comment } from '../types'
 import { client } from '../client'
 import { COMMENT_ID_PREFIX } from '../previewComments'
 import { renderComment } from '../markdown'
 import { insertSuggestion, originalLines, parseBody, suggestionBlock, suggestions } from '../suggestion'
-import { t, useT } from '../i18n'
+import { threadsOf, type Thread } from '../threads'
+import { dateTime, t, useT } from '../i18n'
 
 interface ThreadProps {
   group: string
@@ -15,13 +16,145 @@ interface ThreadProps {
   idPrefix?: string
 }
 
-/** CommentThread renders the comments anchored to one line range. */
+/**
+ * CommentThread renders the comments anchored to one line range: each
+ * comment that opens a thread, the replies under it, and the form that adds
+ * one more. A reply carries the anchor of its thread, so it arrives here in
+ * the same list as the comment it answers.
+ */
 export function CommentThread({ group, comments, onChanged, idPrefix }: ThreadProps) {
+  const threads = useMemo(() => threadsOf(comments), [comments])
   return (
     <div className="thread">
-      {comments.map((c) => (
-        <CommentItem key={c.id} group={group} comment={c} onChanged={onChanged} idPrefix={idPrefix} />
+      {threads.map((thread) => (
+        <ThreadItem key={thread.root.id} group={group} thread={thread} onChanged={onChanged} idPrefix={idPrefix} />
       ))}
+    </div>
+  )
+}
+
+/**
+ * ThreadItem is one comment and its replies. Resolving and reopening are
+ * the first comment's to offer, since they act on the whole thread; Reply is
+ * too, and its form opens under the last reply, where the answer will land.
+ */
+function ThreadItem({
+  group,
+  thread,
+  onChanged,
+  idPrefix,
+}: {
+  group: string
+  thread: Thread
+  onChanged: () => void
+  idPrefix?: string
+}) {
+  const [replying, setReplying] = useState(false)
+  const replyButton = useRef<HTMLButtonElement>(null)
+  const { root, replies } = thread
+  // Focus goes back to the button that opened the form, so a keyboard
+  // reader who sent or dropped a reply is where they were.
+  const close = () => {
+    setReplying(false)
+    window.setTimeout(() => replyButton.current?.focus(), 0)
+  }
+  return (
+    <div className="comment-thread">
+      <CommentItem
+        group={group}
+        comment={root}
+        onChanged={onChanged}
+        idPrefix={idPrefix}
+        replies={replies.length}
+        replyButton={replyButton}
+        replying={replying}
+        onReply={() => setReplying(true)}
+      />
+      {replies.length > 0 && (
+        <div className="replies" role="list" aria-label={t('comment.replies')}>
+          {replies.map((r) => (
+            <div key={r.id} role="listitem">
+              <CommentItem group={group} comment={r} onChanged={onChanged} idPrefix={idPrefix} />
+            </div>
+          ))}
+        </div>
+      )}
+      {replying && <ReplyForm group={group} root={root} onSent={onChanged} onClose={close} />}
+    </div>
+  )
+}
+
+/**
+ * ReplyForm writes a reply to the thread root opens: the comment editor,
+ * suggestions included where the thread is on lines of the new file, and
+ * the same keys as a new comment - ⌘/Ctrl + Enter sends, Escape drops it.
+ */
+function ReplyForm({
+  group,
+  root,
+  onSent,
+  onClose,
+}: {
+  group: string
+  root: Comment
+  onSent: () => void
+  onClose: () => void
+}) {
+  const t = useT()
+  const [body, setBody] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const editor = useRef<HTMLTextAreaElement>(null)
+  const canSuggest = root.side !== 'old' && root.startLine > 0
+
+  const submit = async () => {
+    if (body.trim() === '' || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await client.addReply(group, root.id, body)
+      setBody('')
+      onSent()
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="reply-form" role="group" aria-label={t('comment.replyLabel')}>
+      <CommentEditor
+        editorRef={editor}
+        value={body}
+        onChange={setBody}
+        onSubmit={() => void submit()}
+        onCancel={onClose}
+        placeholder={t('comment.replyPlaceholder')}
+        label={t('comment.replyLabel')}
+        autoFocus
+      />
+      <div className="comment-actions">
+        <button disabled={busy || body.trim() === ''} onClick={() => void submit()}>
+          {t('comment.sendReply')}
+        </button>
+        {canSuggest && (
+          <SuggestButton
+            editorRef={editor}
+            seed={originalLines(root.snippet).join('\n')}
+            disabled={busy}
+            onInsert={setBody}
+          />
+        )}
+        <button className="ghost" disabled={busy} onClick={onClose}>
+          {t('common.cancel')}
+        </button>
+        <span className="hint" title={t('comment.sendHintTitle')}>
+          {t('comment.sendHint')}
+        </span>
+      </div>
+      {error && <div className="error inline">{error}</div>}
     </div>
   )
 }
@@ -121,11 +254,23 @@ function CommentItem({
   comment,
   onChanged,
   idPrefix = COMMENT_ID_PREFIX,
+  replies = 0,
+  replyButton,
+  replying = false,
+  onReply,
 }: {
   group: string
   comment: Comment
   onChanged: () => void
   idPrefix?: string
+  /** replies is how many replies the comment has, which deleting it takes
+   * along. */
+  replies?: number
+  /** replyButton, replying and onReply are given for the comment that opens
+   * a thread, which is the one that offers Reply. */
+  replyButton?: React.RefObject<HTMLButtonElement | null>
+  replying?: boolean
+  onReply?: () => void
 }) {
   const t = useT()
   const [editing, setEditing] = useState(false)
@@ -148,17 +293,40 @@ function CommentItem({
   }
 
   const segments = parseBody(comment.body)
+  const reply = !!comment.replyTo
+  const author = comment.author || t('comment.reviewer')
 
   return (
-    <div id={`${idPrefix}${comment.id}`} className={`comment${comment.resolved ? ' resolved' : ''}`}>
+    <div
+      id={`${idPrefix}${comment.id}`}
+      className={`comment${reply ? ' reply' : ''}${comment.resolved ? ' resolved' : ''}`}
+      aria-label={reply ? t('comment.replyFrom', { author }) : undefined}
+    >
       <div className="comment-meta">
-        {comment.author && <span className="badge author">{comment.author}</span>}
-        <span className="comment-range">{rangeLabel(comment)}</span>
+        {reply ? (
+          // A reply is on its thread's lines, which the comment above
+          // already names; what it needs is who said it, and when.
+          <>
+            {comment.author ? (
+              <span className="badge author">{comment.author}</span>
+            ) : (
+              <span className="reply-author">{author}</span>
+            )}
+            <time className="reply-time" dateTime={comment.createdAt}>
+              {dateTime(comment.createdAt)}
+            </time>
+          </>
+        ) : (
+          <>
+            {comment.author && <span className="badge author">{comment.author}</span>}
+            <span className="comment-range">{rangeLabel(comment)}</span>
+          </>
+        )}
         {!editing && suggestions(comment.body).length > 0 && (
           <span className="badge">{t('comment.suggestion')}</span>
         )}
         {comment.question && <span className="badge question">{t('comment.question')}</span>}
-        {comment.resolved && <span className="badge">{t('comment.resolved')}</span>}
+        {comment.resolved && !reply && <span className="badge">{t('comment.resolved')}</span>}
       </div>
 
       {editing ? (
@@ -214,23 +382,43 @@ function CommentItem({
             ),
           )}
           <div className="comment-actions">
-            <button
-              className="ghost"
-              disabled={busy}
-              title={comment.resolved ? t('comment.reopenTitle') : t('comment.resolveTitle')}
-              onClick={() =>
-                run(() => client.updateComment(group, comment.id, { resolved: !comment.resolved }))
-              }
-            >
-              {comment.resolved ? t('comment.reopen') : t('comment.resolve')}
-            </button>
+            {onReply && (
+              <button
+                ref={replyButton}
+                className="ghost"
+                disabled={busy || replying}
+                title={t('comment.replyTitle')}
+                aria-expanded={replying}
+                onClick={onReply}
+              >
+                {t('comment.reply')}
+              </button>
+            )}
+            {!reply && (
+              <button
+                className="ghost"
+                disabled={busy}
+                title={comment.resolved ? t('comment.reopenTitle') : t('comment.resolveTitle')}
+                onClick={() =>
+                  run(() => client.updateComment(group, comment.id, { resolved: !comment.resolved }))
+                }
+              >
+                {comment.resolved ? t('comment.reopen') : t('comment.resolve')}
+              </button>
+            )}
             <button className="ghost" disabled={busy} onClick={() => setEditing(true)}>
               {t('comment.edit')}
             </button>
             <button
               className="ghost danger"
               disabled={busy}
-              title={t('comment.deleteTitle')}
+              title={
+                reply
+                  ? t('comment.deleteReplyTitle')
+                  : replies > 0
+                    ? t('comment.deleteThreadTitle')
+                    : t('comment.deleteTitle')
+              }
               onClick={() => run(() => client.deleteComment(group, comment.id))}
             >
               {t('comment.delete')}
@@ -250,16 +438,20 @@ interface EditorProps {
   onSubmit: () => void
   onCancel?: () => void
   autoFocus?: boolean
+  /** placeholder and label replace the new comment's, for a reply. */
+  placeholder?: string
+  label?: string
 }
 
-function CommentEditor({ editorRef, value, onChange, onSubmit, onCancel, autoFocus }: EditorProps) {
+function CommentEditor({ editorRef, value, onChange, onSubmit, onCancel, autoFocus, placeholder, label }: EditorProps) {
   return (
     <textarea
       ref={editorRef}
       className="comment-input"
       autoFocus={autoFocus}
+      aria-label={label}
       rows={Math.max(3, Math.min(16, value.split('\n').length + 1))}
-      placeholder={t('comment.placeholder')}
+      placeholder={placeholder ?? t('comment.placeholder')}
       value={value}
       onChange={(ev) => onChange(ev.target.value)}
       onKeyDown={(ev) => {

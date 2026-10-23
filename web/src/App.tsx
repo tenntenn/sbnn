@@ -11,6 +11,7 @@ import { Icon } from './components/Icon'
 import { PreviewFileSection } from './components/PreviewFileSection'
 import { PreviewSelection } from './components/PreviewSelection'
 import { commentDomIds } from './previewComments'
+import { isReply, openThreadCount, threadCount } from './threads'
 import { PreviewStack } from './components/PreviewStack'
 import { Sidebar } from './components/Sidebar'
 import { Tour } from './components/Tour'
@@ -396,7 +397,11 @@ export function App() {
     () => (activeKey ? comments.filter((c) => sectionKey(c.diffId, c.fileId) === activeKey) : []),
     [comments, activeKey],
   )
-  const openComments = comments.filter((c) => !c.resolved).length
+  // A comment and its replies are one thread, and one of everything this
+  // page counts.
+  const openComments = useMemo(() => openThreadCount(comments), [comments])
+  const commentCount = useMemo(() => threadCount(comments), [comments])
+  const activeCommentCount = useMemo(() => threadCount(activeComments), [activeComments])
   const fileCount = diffs.reduce((total, diff) => total + diff.files.length, 0)
 
   const setFolded = useCallback((key: string, value: boolean) => {
@@ -456,7 +461,7 @@ export function App() {
   // Closing is the end of a review: the diffs, the comments and the hooks
   // go, and the page is back to waiting for the next one.
   const closeReview = async () => {
-    const open = comments.filter((c) => !c.resolved).length
+    const open = openThreadCount(comments)
     const question =
       open > 0 ? t('settings.closeConfirmOpen', { count: open }) : t('settings.closeConfirm')
     if (!window.confirm(question)) return
@@ -503,8 +508,10 @@ export function App() {
   // in the same file the search started from.
   const stepComment = useCallback(
     (by: number) => {
+      // A reply is read with the comment it answers, so the tour stops at
+      // the comment and not at every answer under it.
       const stops = comments
-        .filter((c) => !c.resolved)
+        .filter((c) => !c.resolved && !isReply(c))
         .map((c) => ({ id: c.id, key: sectionKey(c.diffId, c.fileId) }))
       const target = stepToComment(stops, currentCommentId, activeKey, by)
       if (!target) return
@@ -777,7 +784,7 @@ export function App() {
         <span className="brand">sbnn</span>
         <span className="group">{group}</span>
         <span className="hint counts" title={t('app.countsTitle')}>
-          {t('app.counts', { rounds: diffs.length, comments: comments.length })}
+          {t('app.counts', { rounds: diffs.length, comments: commentCount })}
           {openComments > 0 ? t('app.countsOpen', { count: openComments }) : ''}
         </span>
         {client.isStatic && (
@@ -794,7 +801,7 @@ export function App() {
           {/* A disabled button swallows hover, so the tooltip that explains
               why it is disabled has to live on a span around it instead. */}
           <span title={t('app.copyPromptTitle')}>
-            <button className="ghost" onClick={() => void copyPrompt()} disabled={comments.length === 0}>
+            <button className="ghost" onClick={() => void copyPrompt()} disabled={commentCount === 0}>
               <Icon name={copied ? 'check' : 'content_copy'} />
               {copied ? t('app.copied') : t('app.copyPrompt')}
             </button>
@@ -954,7 +961,7 @@ export function App() {
             onClick={() => setPane('diff')}
           >
             {t('tabs.diff')}
-            {activeComments.length > 0 && <span className="tab-count">{activeComments.length}</span>}
+            {activeCommentCount > 0 && <span className="tab-count">{activeCommentCount}</span>}
           </button>
           <button
             className={pane === 'preview' ? 'active' : ''}

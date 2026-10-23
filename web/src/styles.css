@@ -1058,10 +1058,35 @@ body.resizing iframe {
   margin-left: 0;
 }
 
-.comment + .comment {
+.comment-thread + .comment-thread {
   border-top: var(--border-width-hairline) solid var(--border);
   margin-top: var(--space-md);
   padding-top: var(--space-md);
+}
+
+/* Replies sit a small step in from the comment they answer, with a hairline
+   down their side, so a thread reads as one conversation and two threads on
+   the same lines still read as two. */
+.replies,
+.reply-form {
+  margin: var(--space-sm) 0 0 var(--space-lg);
+  padding-left: var(--space-md);
+  border-left: var(--border-width-hairline) solid var(--border);
+}
+
+.replies [role='listitem'] + [role='listitem'] {
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: var(--border-width-hairline) solid var(--border);
+}
+
+.reply-author {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.reply-time {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Resolved is a state, and the row already says so twice: a badge, and the

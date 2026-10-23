@@ -10,6 +10,7 @@ import {
   type RefObject,
 } from 'react'
 import { noCounts, openCounts, type FileCounts, type OpenCounts } from '../openCounts'
+import { threadCount } from '../threads'
 import type { Comment, Diff, FileDiff, Status } from '../types'
 import { filePath } from '../types'
 import { client } from '../client'
@@ -824,7 +825,7 @@ const SidebarFile = memo(function SidebarFile({
 /** roundSize counts what a round takes with it: every comment on it, the
  * resolved ones included, since the store deletes them all. */
 function roundSize(comments: Comment[], diffId: string): number {
-  return comments.filter((c) => c.diffId === diffId).length
+  return threadCount(comments.filter((c) => c.diffId === diffId))
 }
 
 /** removeRoundQuestion asks before a round goes.

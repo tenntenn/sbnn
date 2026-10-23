@@ -1,6 +1,6 @@
 /**
  * How many unresolved comments each file and each round holds, counted in one
- * pass over the comments (#402).
+ * pass over the comments (#402). A comment and its replies count once.
  *
  * The sidebar used to ask "how many open comments are on this file" once per
  * file, by filtering the whole comment list each time: with 3000 files and 1000
@@ -40,8 +40,12 @@ export function noCounts(): FileCounts {
 export function openCounts(comments: readonly Comment[], prev?: OpenCounts): OpenCounts {
   const fresh = new Map<string, Map<string, number>>()
   const totals = new Map<string, number>()
+  // A reply is counted with the comment it answers, which is already counted;
+  // one whose comment is gone stands for its own thread, as threadsOf has it.
+  const roots = new Set<string>()
+  for (const c of comments) if (!c.replyTo) roots.add(c.id)
   for (const c of comments) {
-    if (c.resolved) continue
+    if (c.resolved || (c.replyTo && roots.has(c.replyTo))) continue
     let files = fresh.get(c.diffId)
     if (!files) {
       files = new Map()
