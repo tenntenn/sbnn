@@ -103,6 +103,50 @@ reader:
 These are repository settings as much as files: if one of them is turned off,
 this section is the record of what it was for.
 
+## Updates
+
+`sbnn update` replaces the sbnn binary, and a release binary checks for a newer
+release on its own, so what they fetch and what they accept is spelled out
+here. The code is `internal/selfupdate`.
+
+- **What is contacted.** `https://api.github.com/repos/tenntenn/sbnn/releases/latest`
+  (or `.../releases/tags/<tag>` for `sbnn update --version`) to learn the
+  release, then `checksums.txt` and the archive for the running OS and
+  architecture from `https://github.com/tenntenn/sbnn/releases/download/<tag>/`.
+  Only HTTPS is used, and only to `api.github.com` and `github.com`; the
+  redirect GitHub answers a download with is followed only to its asset hosts
+  (`objects.githubusercontent.com`, `release-assets.githubusercontent.com`),
+  over HTTPS. Every request has a timeout and every response a size cap.
+- **What is sent.** A `User-Agent` naming the sbnn version. `GITHUB_TOKEN`, when
+  it is set, is sent as a bearer token to `api.github.com` only, to raise the
+  rate limit; it is removed from any redirect and never sent to a download
+  host.
+- **How the archive is verified.** Its SHA-256 has to match the entry for its
+  name in the `checksums.txt` of the same release before anything is unpacked.
+  A mismatch, a missing entry or a missing `checksums.txt` stops the update
+  with nothing replaced. The checksum and the archive come from the same
+  release, so this protects against a corrupted or swapped download, not
+  against a compromised release; it is the same check a person downloading by
+  hand would make.
+- **What is unpacked.** Only the `sbnn` (`sbnn.exe`) entry at the top of the
+  archive, which has to be a regular file under a size cap. An archive with an
+  absolute path or a `..` in any entry is refused as a whole.
+- **How the binary is replaced.** The new binary is written next to the real
+  executable (symlinks resolved), given its permissions, and renamed over it,
+  so it is either the old binary or the whole new one. On Windows the running
+  executable is renamed aside first and removed by the next run. sbnn never
+  elevates itself: when the directory is not writable, it says so and stops.
+- **What is never done.** An older release is installed only when
+  `--version` names it. A binary built with `go install` is not replaced; it is
+  told to run `go install github.com/tenntenn/sbnn@latest`.
+- **The start-up check.** At most once every 24 hours a release binary asks
+  the API for the latest release, concurrently with the command and with a
+  short timeout, and remembers the answer in `<state>/update-check.json`
+  (mode 0600). It downloads nothing. It is skipped for source builds, when
+  stderr is not a terminal, with `--json`, in the background server and in
+  hook commands, and whenever `SBNN_NO_UPDATE_CHECK` is set to anything —
+  set that to keep sbnn from contacting GitHub at all.
+
 ## Supported versions
 
 sbnn has no releases yet: `version.Version` is `dev`
