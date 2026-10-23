@@ -3,7 +3,9 @@ import { setHeldPreviewRange } from '../previewHold'
 import { client } from '../client'
 import { isMac, isSelectingPress } from '../selectionPress'
 import { CommentForm } from './CommentThread'
+import { CommentIcon } from './CommentIcon'
 import { SLOT_CLASS } from '../previewComments'
+import { useT } from '../i18n'
 
 interface Props {
   group: string
@@ -278,6 +280,7 @@ function caretPoint(selection: Selection): Point | null {
  * off that preview's own element.
  */
 export function PreviewSelection({ group, onChanged }: Props) {
+  const t = useT()
   const [capture, setCapture] = useState<Capture | null>(null)
   const menu = useRef<HTMLDivElement>(null)
   // The document level listeners below are attached once and read the
@@ -566,20 +569,24 @@ export function PreviewSelection({ group, onChanged }: Props) {
       }}
     >
       {!capture.drafting ? (
+        // A bare "+" floating over the text read as anything - zoom, expand,
+        // another selection - but not as "comment on this" (#410). The
+        // bubble and the word say what it does; the name says on what.
         <button
           className="ghost selection-add"
-          title={`Comment on ${label}`}
-          aria-label={`Comment on ${label}`}
+          title={t('selection.addTitle', { range: label })}
+          aria-label={t('selection.addTitle', { range: label })}
           onClick={() => setCapture((c) => (c ? { ...c, drafting: true } : c))}
         >
-          +
+          <CommentIcon small />
+          {t('selection.add')}
         </button>
       ) : (
         <CommentForm
           label={label}
           seed={capture.text}
           canSuggest
-          hint="Selected in the preview; the comment covers the lines it touches"
+          hint={t('selection.hint')}
           onSubmit={submit}
           onCancel={clear}
         />

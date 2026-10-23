@@ -20,6 +20,7 @@ import { syncObserved } from '../observed'
 import { useLazyMount } from '../useLazyMount'
 import { DiffFileSection } from './DiffFileSection'
 import { Icon } from './Icon'
+import { useT } from '../i18n'
 
 export interface DiffStackHandle {
   scrollToSection: (key: string) => void
@@ -118,18 +119,17 @@ export function FileStepper({
   total: number
   onStep: (by: number) => void
 }) {
+  const t = useT()
   if (total < 2 || at < 0) return null
   return (
-    <nav className="file-stepper" aria-label="Files in this review">
+    <nav className="file-stepper" aria-label={t('diff.stepper')}>
       <button className="ghost" disabled={at === 0} onClick={() => onStep(-1)}>
         <Icon name="chevron_left" small />
-        Previous file
+        {t('diff.previousFile')}
       </button>
-      <span className="hint">
-        {at + 1} of {total}
-      </span>
+      <span className="hint">{t('diff.position', { at: at + 1, total })}</span>
       <button className="ghost" disabled={at === total - 1} onClick={() => onStep(1)}>
-        Next file
+        {t('diff.nextFile')}
         <Icon name="chevron_right" small />
       </button>
     </nav>
@@ -282,6 +282,7 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
   },
   ref,
 ) {
+  const t = useT()
   const sectionEls = useRef(new Map<string, HTMLDivElement>())
   const intersecting = useRef(new Set<string>())
   const activeKeyRef = useRef<string | null>(null)
@@ -472,25 +473,31 @@ export const DiffStack = forwardRef<DiffStackHandle, Props>(function DiffStack(
   }, [containerRef])
 
   return (
-    <div className="diff-stack" style={{ '--diff-toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}>
+    <div
+      className="diff-stack"
+      data-tour="diff"
+      style={{ '--diff-toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
+    >
       <div className="diff-toolbar" ref={toolbarRef}>
-        <span className="hint">Every file</span>
-        <div className="toggle">
+        <span className="hint">{t('diff.everyFile')}</span>
+        <div className="toggle" role="group" aria-label={t('diff.everyFile')}>
           <button
             className={viewModeDefault === 'split' ? 'active' : ''}
+            aria-pressed={viewModeDefault === 'split'}
             onClick={() => onSetViewModeDefault('split')}
-            title="Set every file to split - a file toggled on its own still remembers that choice"
+            title={t('diff.everySplitTitle')}
           >
             <Icon name="view_column" small />
-            split
+            {t('diff.split')}
           </button>
           <button
             className={viewModeDefault === 'unified' ? 'active' : ''}
+            aria-pressed={viewModeDefault === 'unified'}
             onClick={() => onSetViewModeDefault('unified')}
-            title="Set every file to unified - a file toggled on its own still remembers that choice"
+            title={t('diff.everyUnifiedTitle')}
           >
             <Icon name="table_rows" small />
-            unified
+            {t('diff.unified')}
           </button>
         </div>
       </div>

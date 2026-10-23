@@ -1,3 +1,5 @@
+import { t } from './i18n'
+
 /** foldLabel explains a fold in words the reader can check.
  *
  * foldReason is written by the server, for the folds it performs itself;
@@ -15,8 +17,8 @@
  * The remaining case - folded, no reason, not by the reader - should not
  * arise, and says only what is certain. */
 export function foldLabel(byReader: boolean, foldReason: string | undefined): string {
-  if (byReader && foldReason) return `Folded by you — the sender had folded it too: ${foldReason}`
-  if (byReader) return 'Folded by you'
-  if (foldReason) return `Folded — ${foldReason}`
-  return 'Folded'
+  if (byReader && foldReason) return t('fold.byYouToo', { reason: foldReason })
+  if (byReader) return t('fold.byYou')
+  if (foldReason) return t('fold.reason', { reason: foldReason })
+  return t('fold.plain')
 }

@@ -1,3 +1,4 @@
+import { t, tn } from './i18n'
 import { readBoolSetting, writeBoolSetting } from './storage'
 
 /**
@@ -67,8 +68,8 @@ export function announceNewDiffs(group: string, count: number): void {
   if (permission() !== 'granted') return
   try {
     const name = group === '' || group === 'default' ? 'sbnn' : group
-    const n = new Notification(`${name}: new diff`, {
-      body: count === 1 ? 'A new diff is ready to review.' : `${count} new diffs are ready to review.`,
+    const n = new Notification(t('notify.title', { name }), {
+      body: tn('notify.body', count),
       tag: `sbnn-${group}`,
     })
     n.onclick = () => {

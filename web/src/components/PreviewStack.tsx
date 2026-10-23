@@ -13,6 +13,7 @@ import { client } from '../client'
 import { useLazyMount, type FindPrefetch } from '../useLazyMount'
 import { sameElements } from '../share'
 import { syncObserved } from '../observed'
+import { useT } from '../i18n'
 
 // How far ahead of the visible area a section is fetched: generous enough
 // that the render is usually ready by the time the reader arrives, small
@@ -159,6 +160,7 @@ export function PreviewStack({
   comments,
   onChanged,
 }: Props) {
+  const t = useT()
   const [activated, setActivated] = useState<Set<string>>(() => new Set())
   const sectionEls = useRef(new Map<string, HTMLDivElement>())
   const toolbarRef = useRef<HTMLDivElement>(null)
@@ -338,23 +340,26 @@ export function PreviewStack({
   return (
     <div
       className="preview-stack"
+      data-tour="preview"
       style={{ '--preview-toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
     >
       <div className="preview-toolbar" ref={toolbarRef}>
         {!forced && (
-          <div className="toggle">
+          <div className="toggle" role="group" aria-label={t('preview.rendererLabel')}>
             <button
               className={kind === 'preview' ? 'active' : ''}
+              aria-pressed={kind === 'preview'}
               onClick={() => onSetKind('preview')}
-              title="sbnn's own preview - needs nothing installed, follows the diff as it scrolls"
+              title={t('preview.previewTitle')}
             >
               <Icon name="visibility" small />
-              preview
+              {t('preview.preview')}
             </button>
             <button
               className={kind === 'mo' ? 'active' : ''}
+              aria-pressed={kind === 'mo'}
               onClick={() => onSetKind('mo')}
-              title="mo - renders more, in a frame, but does not follow the diff"
+              title={t('preview.moTitle')}
             >
               <MoIcon small />
               mo
@@ -367,14 +372,16 @@ export function PreviewStack({
         <span
           title={
             kind !== 'preview'
-              ? "Only sbnn's own preview can follow the diff: mo is framed from another origin, where a page may not touch its scrolling"
+              ? t('preview.syncMo')
               : sync
-                ? 'The preview follows the diff; scrolling it yourself stops that'
-                : 'Follow the diff again'
+                ? t('preview.syncOn')
+                : t('preview.syncOff')
           }
         >
           <button
             className={`ghost icon-only${sync && kind === 'preview' ? ' active' : ''}`}
+            aria-pressed={sync && kind === 'preview'}
+            aria-label={t('key.sync')}
             disabled={kind !== 'preview'}
             onClick={() => onSync(!sync)}
           >
@@ -384,7 +391,7 @@ export function PreviewStack({
       </div>
 
       {nothingToPreview && (
-        <p className="empty">No file in this review has a preview.</p>
+        <p className="empty">{t('preview.noneInReview')}</p>
       )}
 
       {rounds.map(({ diff: d, files }) => (

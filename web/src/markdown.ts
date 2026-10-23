@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify'
 import { Marked, type Tokens } from 'marked'
 import { renderBlocks } from './lineMarks'
+import { t } from './i18n'
 
 const MARKED_OPTIONS = { async: false, gfm: true, breaks: false } as const
 
@@ -165,22 +166,22 @@ function replaceSrc(tag: string, url: string): string {
 export function assetTrouble(status: string | undefined, size: number | undefined): string {
   switch (status) {
     case 'too-large':
-      return `too large to show here (${formatBytes(size)})`
+      return t('asset.tooLarge', { size: formatBytes(size) })
     case 'over-budget':
-      return `left out to keep this page loadable (${formatBytes(size)})`
+      return t('asset.overBudget', { size: formatBytes(size) })
     case 'outside':
-      return 'outside the directory this diff was sent from'
+      return t('asset.outside')
     case 'missing':
-      return 'not in the working tree'
+      return t('asset.missing')
     case 'unsupported':
-      return 'not an image this page can show'
+      return t('asset.unsupported')
     default:
-      return 'not part of this review'
+      return t('asset.notInReview')
   }
 }
 
 export function formatBytes(n: number | undefined): string {
-  if (n === undefined || n <= 0) return 'unknown size'
+  if (n === undefined || n <= 0) return t('asset.unknownSize')
   const mb = n / (1024 * 1024)
   if (mb >= 1) return `${mb.toFixed(1)} MB`
   return `${Math.max(1, Math.round(n / 1024))} KB`
@@ -335,12 +336,12 @@ export function resolvePreviewLinks(
  * to open, and says why it is not one click away - which a link that quietly
  * goes nowhere says neither. */
 function outsideReview(resolved: string, text: string): string {
-  const label = `${resolved} - not part of this review`
+  const label = `${resolved} - ${t('asset.notInReview')}`
   return (
     `<span class="preview-link-outside" title="${escapeHTML(label)}"` +
     ` aria-label="${escapeHTML(label)}">` +
     `<span class="preview-link-text">${text}</span>` +
-    `<span class="preview-link-why">not in this review</span>` +
+    `<span class="preview-link-why">${escapeHTML(t('preview.notInReview'))}</span>` +
     `</span>`
   )
 }

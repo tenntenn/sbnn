@@ -1,6 +1,7 @@
 import type { Diff, FileDiff } from './types'
 import { filePath, hunksOf } from './types'
 import { sectionKey } from './sectionKey'
+import { t, tn } from './i18n'
 
 /**
  * SEARCH_DEBOUNCE_MS is how long typing settles before the lines are read.
@@ -178,7 +179,7 @@ export function searchDiffs(
  */
 export function matchSummary(match: FileMatch): string {
   const parts: string[] = []
-  if (match.inPath) parts.push('path')
-  if (match.lines > 0) parts.push(`${match.lines} line${match.lines === 1 ? '' : 's'}`)
+  if (match.inPath) parts.push(t('search.path'))
+  if (match.lines > 0) parts.push(tn('search.lines', match.lines))
   return parts.join(' + ')
 }

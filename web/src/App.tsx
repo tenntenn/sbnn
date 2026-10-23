@@ -13,6 +13,8 @@ import { PreviewSelection } from './components/PreviewSelection'
 import { commentDomIds } from './previewComments'
 import { PreviewStack } from './components/PreviewStack'
 import { Sidebar } from './components/Sidebar'
+import { Tour } from './components/Tour'
+import { markTourSeen, shouldAutoStart } from './tour'
 import { clampRatio, SplitPane, SPLIT_DEFAULT } from './components/SplitPane'
 import { useNarrowLayout } from './useMediaQuery'
 import { plainKey, shortcuts, stepToComment, typingInto } from './shortcuts'
@@ -20,6 +22,16 @@ import { announceNewDiffs, clearUnread, newDiffIds, requestNotifyPermission, sto
 import { applyTheme, storedTheme, type Theme } from './theme'
 import { sectionKey } from './sectionKey'
 import { shareComments, shareDiffs } from './share'
+import {
+  LANGUAGE_NAMES,
+  LANGUAGES,
+  dateTime,
+  rich,
+  setLanguageSetting,
+  t as translate,
+  useLanguage,
+  useT,
+} from './i18n'
 
 /** Pane names the three panes, which a phone shows one at a time. */
 type Pane = 'files' | 'diff' | 'preview'
@@ -90,6 +102,8 @@ function storedSyncScroll(): boolean {
 }
 
 export function App() {
+  const t = useT()
+  const { setting: languageSetting } = useLanguage()
   const group = useMemo(() => (client.isStatic ? staticGroupName() : groupFromLocation()), [])
   const narrow = useNarrowLayout()
   const [diffs, setDiffs] = useState<Diff[]>([])
@@ -128,6 +142,10 @@ export function App() {
   const [reviewNote, setReviewNote] = useState<string | null>(null)
   const [help, setHelp] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // The tour opens by itself once per browser, the first time a review is on
+  // the page, and from the help sheet whenever the reader asks for it.
+  const [tourOpen, setTourOpen] = useState(false)
+  const tourChecked = useRef(false)
   const [sidebarWidth, setSidebarWidth] = useState(storedSidebarWidth)
   const [theme, setTheme] = useState<Theme>(storedTheme)
   const [query, setQuery] = useState('')
@@ -158,6 +176,23 @@ export function App() {
   useEffect(() => {
     applyTheme(theme)
   }, [theme])
+
+  // Not on the welcome page: there is nothing there for the tour to point
+  // at. The wait lets the first sections lay out, so the frame lands on them
+  // rather than on where they were before the fonts arrived.
+  const hasDiffs = diffs.length > 0
+  useEffect(() => {
+    if (!hasDiffs || tourChecked.current) return
+    tourChecked.current = true
+    if (!shouldAutoStart()) return
+    const timer = window.setTimeout(() => setTourOpen(true), 400)
+    return () => window.clearTimeout(timer)
+  }, [hasDiffs])
+
+  const closeTour = useCallback(() => {
+    setTourOpen(false)
+    markTourSeen()
+  }, [])
 
   // A menu left open is a click away from closing, wherever that click lands.
   useEffect(() => {
@@ -423,9 +458,7 @@ export function App() {
   const closeReview = async () => {
     const open = comments.filter((c) => !c.resolved).length
     const question =
-      open > 0
-        ? `Close this review? ${open} comment(s) are still open and will go with it.`
-        : 'Close this review? Its diffs and comments will go.'
+      open > 0 ? t('settings.closeConfirmOpen', { count: open }) : t('settings.closeConfirm')
     if (!window.confirm(question)) return
     setClosing(true)
     setError(null)
@@ -509,6 +542,9 @@ export function App() {
   // away eleven times.
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
+      // The tour answers its own keys while it is up; a `j` there would move
+      // the page out from under the frame it is drawing.
+      if (tourOpen) return
       if (!plainKey(ev)) return
       if (ev.key === 'Escape') {
         setHelp(false)
@@ -573,6 +609,7 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [
+    tourOpen,
     stepFile,
     stepComment,
     focusSearch,
@@ -640,7 +677,7 @@ export function App() {
         <FileStepper at={flatKeys.indexOf(activeKey!)} total={flatKeys.length} onStep={stepFile} />
       </div>
     ) : (
-      <p className="empty">Select a file.</p>
+      <p className="empty">{t('app.selectFile')}</p>
     )
   ) : (
     <DiffStack
@@ -674,7 +711,7 @@ export function App() {
         onChanged={onChanged}
       />
     ) : (
-      <p className="empty">Select a file.</p>
+      <p className="empty">{t('app.selectFile')}</p>
     )
   ) : (
     <PreviewStack
@@ -700,8 +737,8 @@ export function App() {
 
   const welcome = (
     <div className="welcome">
-      <h1>{client.isStatic ? 'This page carries no diff' : 'Waiting for a diff'}</h1>
-      <p>Pipe one in — sbnn adds it to this page:</p>
+      <h1>{client.isStatic ? t('welcome.static') : t('welcome.waiting')}</h1>
+      <p>{t('welcome.pipe')}</p>
       <pre>
         <code>
           git diff | sbnn{group === 'default' ? '' : ` --target ${group}`}
@@ -709,19 +746,21 @@ export function App() {
         </code>
       </pre>
       <p className="hint">
-        Comments you leave here are readable from the command line with{' '}
-        <code>sbnn comments{group === 'default' ? '' : ` -t ${group}`}</code>.
+        {rich('welcome.comments', {
+          command: <code>sbnn comments{group === 'default' ? '' : ` -t ${group}`}</code>,
+        })}
       </p>
       {otherGroups.length > 0 && (
         <div className="groups">
-          <div className="groups-title">Other reviews</div>
+          <div className="groups-title">{t('welcome.otherReviews')}</div>
           <ul>
             {otherGroups.map((g) => (
               <li key={g.name}>
                 <a href={g.url}>
                   {g.name}
                   <span className="hint">
-                    {g.diffs} diff(s){g.unresolved > 0 ? `, ${g.unresolved} open` : ''}
+                    {t('welcome.groupDiffs', { count: g.diffs })}
+                    {g.unresolved > 0 ? t('group.open', { count: g.unresolved }) : ''}
                   </span>
                 </a>
               </li>
@@ -738,31 +777,26 @@ export function App() {
         <span className="brand">sbnn</span>
         <span className="group">{group}</span>
         <span className="hint counts">
-          {diffs.length} round(s) · {comments.length} comment(s)
-          {openComments > 0 ? ` · ${openComments} open` : ''}
+          {t('app.counts', { rounds: diffs.length, comments: comments.length })}
+          {openComments > 0 ? t('app.countsOpen', { count: openComments }) : ''}
         </span>
         {client.isStatic && (
           <span
             className="badge"
-            title={
-              'This page was written with `sbnn export`. The diff is frozen and ' +
-              'comments are kept in this browser.'
-            }
+            title={t('app.exportedTitle')}
           >
-            exported
-            {client.exportedAt && (
-              <span className="exported-at"> {new Date(client.exportedAt).toLocaleString()}</span>
-            )}
+            {t('app.exported')}
+            {client.exportedAt && <span className="exported-at"> {dateTime(client.exportedAt)}</span>}
           </span>
         )}
         <span className="spacer" />
-        <div className="toolbar-group">
+        <div className="toolbar-group" data-tour="review">
           {/* A disabled button swallows hover, so the tooltip that explains
               why it is disabled has to live on a span around it instead. */}
-          <span title="Copy the review prompt to paste into an agent">
+          <span title={t('app.copyPromptTitle')}>
             <button className="ghost" onClick={() => void copyPrompt()} disabled={comments.length === 0}>
               <Icon name={copied ? 'check' : 'content_copy'} />
-              {copied ? 'Copied' : 'Copy prompt'}
+              {copied ? t('app.copied') : t('app.copyPrompt')}
             </button>
           </span>
           {!client.isStatic && (
@@ -771,66 +805,111 @@ export function App() {
               disabled={submitting || diffs.length === 0}
               onClick={() => setReviewNote((note) => (note === null ? '' : null))}
               title={
-                hooks > 0
-                  ? `Submitting runs ${hooks} hook(s) on the sbnn server`
-                  : 'Tell whoever is waiting that the review is done'
+                hooks > 0 ? t('app.submitTitleHooks', { count: hooks }) : t('app.submitTitle')
               }
             >
               <Icon name="task_alt" />
-              {reviewed ? verdictLabel(reviewVerdict) : 'Submit review'}
+              {reviewed ? verdictLabel(reviewVerdict) : t('app.submitReview')}
             </button>
           )}
         </div>
         <span className="toolbar-divider" />
+        {/* A question mark rather than an icon: it is the key that opens the
+            same sheet, so the button teaches the shortcut by being it. */}
+        <button
+          className="ghost icon-only"
+          data-tour="help"
+          aria-haspopup="dialog"
+          aria-expanded={help}
+          aria-label={t('app.help')}
+          title={t('app.help')}
+          onClick={() => setHelp((open) => !open)}
+        >
+          ?
+        </button>
         <div className="settings-menu" ref={settingsRef}>
           <button
             className="ghost icon-only"
             aria-haspopup="true"
             aria-expanded={settingsOpen}
+            aria-label={t('settings.title')}
             onClick={() => setSettingsOpen((open) => !open)}
-            title="Settings"
+            title={t('settings.title')}
           >
             <Icon name="settings" />
           </button>
           {settingsOpen && (
             <div className="settings-panel" role="menu">
               <div className="settings-row">
-                <span className="settings-label">Theme</span>
+                <span className="settings-label">{t('settings.theme')}</span>
                 <div className="toggle sm">
                   <button
                     className={theme === 'auto' ? 'active' : ''}
+                    aria-pressed={theme === 'auto'}
+                    aria-label={t('settings.themeAuto')}
                     onClick={() => setTheme('auto')}
-                    title="Follow the system"
+                    title={t('settings.themeAuto')}
                   >
                     <Icon name="brightness_auto" small />
                   </button>
                   <button
                     className={theme === 'light' ? 'active' : ''}
+                    aria-pressed={theme === 'light'}
+                    aria-label={t('settings.themeLight')}
                     onClick={() => setTheme('light')}
-                    title="Light"
+                    title={t('settings.themeLight')}
                   >
                     <Icon name="light_mode" small />
                   </button>
                   <button
                     className={theme === 'dark' ? 'active' : ''}
+                    aria-pressed={theme === 'dark'}
+                    aria-label={t('settings.themeDark')}
                     onClick={() => setTheme('dark')}
-                    title="Dark"
+                    title={t('settings.themeDark')}
                   >
                     <Icon name="dark_mode" small />
                   </button>
                 </div>
               </div>
+              {/* The language sits beside the theme because it is the same
+                  kind of thing: how this reader wants the page, kept for this
+                  browser and nothing to do with the review. */}
+              <div className="settings-row">
+                <span className="settings-label">{t('settings.language')}</span>
+                <div className="toggle sm">
+                  <button
+                    className={languageSetting === 'auto' ? 'active' : ''}
+                    aria-pressed={languageSetting === 'auto'}
+                    onClick={() => setLanguageSetting('auto')}
+                    title={t('settings.languageAutoTitle')}
+                  >
+                    {t('settings.languageAuto')}
+                  </button>
+                  {LANGUAGES.map((lang) => (
+                    <button
+                      key={lang}
+                      lang={lang}
+                      className={languageSetting === lang ? 'active' : ''}
+                      aria-pressed={languageSetting === lang}
+                      onClick={() => setLanguageSetting(lang)}
+                    >
+                      {LANGUAGE_NAMES[lang]}
+                    </button>
+                  ))}
+                </div>
+              </div>
               {!client.isStatic && (
                 <div className="settings-row">
-                  <span className="settings-label">Notify on new diff</span>
+                  <span className="settings-label">{t('settings.notify')}</span>
                   <div className="toggle sm">
                     <button
                       className={notifyOn ? 'active' : ''}
                       aria-pressed={notifyOn}
                       onClick={() => void toggleNotify()}
-                      title="When this tab is in the background, mark its title and show a notification as a new diff arrives"
+                      title={t('settings.notifyTitle')}
                     >
-                      {notifyOn ? 'On' : 'Off'}
+                      {notifyOn ? t('settings.on') : t('settings.off')}
                     </button>
                   </div>
                 </div>
@@ -845,10 +924,10 @@ export function App() {
                       setSettingsOpen(false)
                       void closeReview()
                     }}
-                    title="Drop this review: its diffs, comments and hooks"
+                    title={t('settings.closeTitle')}
                   >
                     <Icon name="close" small />
-                    {closing ? 'Closing…' : 'Close review'}
+                    {closing ? t('settings.closing') : t('settings.closeReview')}
                   </button>
                 </>
               )}
@@ -858,20 +937,21 @@ export function App() {
       </header>
 
       {narrow && diffs.length > 0 && (
-        <nav className="tabs" aria-label="Panes">
+        <nav className="tabs" aria-label={t('tabs.label')}>
           <button
             className={pane === 'files' ? 'active' : ''}
             aria-pressed={pane === 'files'}
             onClick={() => setPane('files')}
           >
-            Files<span className="tab-count">{fileCount}</span>
+            {t('tabs.files')}
+            <span className="tab-count">{fileCount}</span>
           </button>
           <button
             className={pane === 'diff' ? 'active' : ''}
             aria-pressed={pane === 'diff'}
             onClick={() => setPane('diff')}
           >
-            Diff
+            {t('tabs.diff')}
             {activeComments.length > 0 && <span className="tab-count">{activeComments.length}</span>}
           </button>
           <button
@@ -882,10 +962,10 @@ export function App() {
             title={
               activeEntry && isPreviewable(activeEntry.file, !client.isStatic)
                 ? undefined
-                : 'This file has no preview'
+                : t('tabs.noPreview')
             }
           >
-            Preview
+            {t('tabs.preview')}
           </button>
         </nav>
       )}
@@ -893,7 +973,7 @@ export function App() {
       {reviewNote !== null && (
         <div className="review-form">
           <label className="field-label" htmlFor="sbnn-review-note">
-            Anything to say about the change as a whole? (optional)
+            {t('review.noteLabel')}
           </label>
           <textarea
             id="sbnn-review-note"
@@ -901,7 +981,7 @@ export function App() {
             autoFocus
             rows={3}
             value={reviewNote}
-            placeholder="Looks good apart from the two comments"
+            placeholder={t('review.notePlaceholder')}
             onChange={(ev) => setReviewNote(ev.target.value)}
             onKeyDown={(ev) => {
               if (ev.key === 'Escape') setReviewNote(null)
@@ -915,32 +995,30 @@ export function App() {
               className="verdict approve"
               disabled={submitting}
               onClick={() => void submitReview('approved')}
-              title="The change can go ahead; comments are worth reading, not blocking"
+              title={t('review.approveTitle')}
             >
-              Approve
+              {t('review.approve')}
             </button>
             <button
               disabled={submitting}
               onClick={() => void submitReview('commented')}
-              title="Say things without deciding either way"
+              title={t('review.commentTitle')}
             >
-              {submitting ? 'Submitting…' : `Comment (${openComments} open)`}
+              {submitting ? t('review.submitting') : t('review.comment', { count: openComments })}
             </button>
             <button
               className="verdict changes"
               disabled={submitting}
               onClick={() => void submitReview('changes-requested')}
-              title="The change should not go ahead as it is"
+              title={t('review.requestChangesTitle')}
             >
-              Request changes
+              {t('review.requestChanges')}
             </button>
             <button className="ghost" disabled={submitting} onClick={() => setReviewNote(null)}>
-              Cancel
+              {t('common.cancel')}
             </button>
             <span className="hint">
-              {hooks > 0
-                ? `${hooks} hook(s) will run on the sbnn server`
-                : 'Anything waiting with `sbnn wait` carries on'}
+              {hooks > 0 ? t('review.hooks', { count: hooks }) : t('review.wait')}
             </span>
           </div>
         </div>
@@ -948,8 +1026,9 @@ export function App() {
 
       {reviewed && reviewNote === null && (
         <div className="review-banner">
-          Review submitted{reviewedAt ? ` ${new Date(reviewedAt).toLocaleString()}` : ''}. Send
-          another diff to start the next round.
+          {reviewedAt
+            ? t('review.submittedAt', { date: dateTime(reviewedAt) })
+            : t('review.submitted')}
         </div>
       )}
 
@@ -960,10 +1039,10 @@ export function App() {
           <div
             className="help"
             role="dialog"
-            aria-label="Keyboard shortcuts"
+            aria-label={t('help.label')}
             onClick={(ev) => ev.stopPropagation()}
           >
-            <h2>Keys</h2>
+            <h2>{t('help.title')}</h2>
             <dl>
               {shortcuts.map((s) => (
                 <Fragment key={s.keys.join('+')}>
@@ -976,10 +1055,25 @@ export function App() {
                 </Fragment>
               ))}
             </dl>
-            <p className="hint">None of them fires while you are typing.</p>
+            <p className="hint">{t('help.typing')}</p>
+            {diffs.length > 0 && (
+              <div className="help-actions">
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    setHelp(false)
+                    setTourOpen(true)
+                  }}
+                >
+                  {t('help.tour')}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
+
+      {tourOpen && <Tour onClose={closeTour} />}
 
       {narrow ? (
         <div className="body">
@@ -995,7 +1089,7 @@ export function App() {
         <div className="body" ref={bodyRef}>
           {sidebar}
           <Divider
-            label="Resize the file list"
+            label={t('divider.sidebar')}
             onDrag={resizeSidebar}
             onReset={toggleSidebar}
             onNudge={(direction) =>
@@ -1004,7 +1098,7 @@ export function App() {
             handles={[
               {
                 icon: sidebarWidth === 0 ? 'chevron_right' : 'chevron_left',
-                title: sidebarWidth === 0 ? 'Show the file list' : 'Hide the file list',
+                title: sidebarWidth === 0 ? t('divider.showFiles') : t('divider.hideFiles'),
                 onClick: toggleSidebar,
               },
             ]}
@@ -1046,10 +1140,10 @@ function staticGroupName(): string {
 function verdictLabel(verdict: Verdict | null): string {
   switch (verdict) {
     case 'approved':
-      return 'Approved'
+      return translate('verdict.approved')
     case 'changes-requested':
-      return 'Changes requested'
+      return translate('verdict.changesRequested')
     default:
-      return 'Reviewed'
+      return translate('verdict.reviewed')
   }
 }

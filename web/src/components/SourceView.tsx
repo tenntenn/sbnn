@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ensureHighlightStyles, languageOf } from '../highlight'
 import { SOURCE_PREVIEW_LINES, sourceLines } from '../sourceLines'
 import { Code } from './Code'
+import { useT } from '../i18n'
 
 interface Props {
   path: string
@@ -20,6 +21,7 @@ interface Props {
  * anchor of a comment - which is the reason #23 exists.
  */
 export function SourceView({ path, content, onUserScroll }: Props) {
+  const t = useT()
   const language = useMemo(() => languageOf(path), [path])
   const lines = useMemo(() => sourceLines(content), [content])
   const [showAll, setShowAll] = useState(false)
@@ -46,10 +48,13 @@ export function SourceView({ path, content, onUserScroll }: Props) {
       {hidden > 0 && (
         <div className="source-more">
           <span className="hint">
-            {SOURCE_PREVIEW_LINES.toLocaleString()} of {lines.length.toLocaleString()} lines shown.
+            {t('preview.linesShown', {
+              shown: SOURCE_PREVIEW_LINES.toLocaleString(),
+              total: lines.length.toLocaleString(),
+            })}
           </span>
           <button className="ghost" onClick={() => setShowAll(true)}>
-            Show the remaining {hidden.toLocaleString()}
+            {t('preview.showRest', { count: hidden.toLocaleString() })}
           </button>
         </div>
       )}

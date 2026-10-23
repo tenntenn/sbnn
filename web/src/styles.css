@@ -368,6 +368,10 @@ a.icon-only.button {
 .settings-label {
   font-size: var(--text-xs);
   color: var(--fg-muted);
+  /* A label is a word or two, and Japanese has no spaces to break at: left
+     to wrap, a two-character label stands one character per line beside a
+     wide toggle. */
+  white-space: nowrap;
 }
 
 .settings-divider {
@@ -1123,12 +1127,16 @@ body.resizing iframe {
 
 /* A single "+" reads better as a small square than as a rectangle sized for
    a word. */
+/* An icon and a word rather than a lone "+", so the button says what it
+   does (#410). It stays one line and as low as before; the menu measures it
+   before placing it, so the extra width is centred on the release point. */
 .selection-add {
-  width: 26px;
   height: 26px;
-  padding: 0;
-  font-size: var(--text-lg);
+  padding: 0 var(--space-md);
+  gap: var(--space-xs);
+  font-size: var(--text-sm);
   line-height: 1;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1985,6 +1993,76 @@ a {
   border-bottom-width: var(--border-width-marker);
   border-radius: var(--radius-sm);
   background: var(--bg);
+}
+.help-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-lg);
+}
+
+/* The first-run tour (components/Tour.tsx). Above the help sheet, which can
+   be what reopened it. The dimming is the spotlight's own shadow, spread
+   over the whole window, so the target is the one thing left at full
+   brightness without anything being done to the target itself. */
+.tour {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+.tour-blocker {
+  position: absolute;
+  inset: 0;
+}
+.tour-dim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+}
+.tour-spot {
+  position: fixed;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 100vmax var(--scrim);
+  outline: var(--border-width-marker) solid var(--accent-border);
+  pointer-events: none;
+  transition:
+    top var(--motion-duration) var(--motion-ease),
+    left var(--motion-duration) var(--motion-ease),
+    width var(--motion-duration) var(--motion-ease),
+    height var(--motion-duration) var(--motion-ease);
+}
+.tour-card {
+  position: fixed;
+  width: min(22rem, calc(100vw - 2 * var(--space-lg)));
+  background: var(--bg-elevated);
+  color: var(--fg);
+  border: var(--border-width-hairline) solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg) var(--space-xl);
+  box-shadow: var(--shadow-overlay);
+}
+.tour-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-md);
+}
+.tour-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: var(--text-lg);
+}
+.tour-count {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tour-card p {
+  margin: var(--space-md) 0 var(--space-lg);
+  font-size: var(--text-md);
+  line-height: 1.6;
+}
+.tour-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
 }
 
 /* Everything between the pane and the header has to agree to be narrower

@@ -98,6 +98,7 @@ export function Divider({ onDrag, onReset, onNudge, label, handles }: Props) {
               type="button"
               className="divider-handle"
               title={handle.title}
+              aria-label={handle.title}
               onPointerDown={(ev) => ev.stopPropagation()}
               onClick={(ev) => {
                 ev.stopPropagation()

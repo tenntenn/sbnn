@@ -34,7 +34,9 @@ function rule(css: string, selector: string): string {
 function narrowDiffPane(app: string): string {
   const at = app.indexOf('const diffPane = narrow ? (')
   assert.notEqual(at, -1, 'App.tsx no longer builds diffPane the way this test reads it')
-  const end = app.indexOf('<p className="empty">Select a file.</p>', at)
+  // The empty branch is read by its catalog key: the sentence itself is in
+  // i18n.ts, in every language the page speaks.
+  const end = app.indexOf(`<p className="empty">{t('app.selectFile')}</p>`, at)
   assert.notEqual(end, -1, 'App.tsx no longer has the empty branch this test reads up to')
   return app.slice(at, end)
 }

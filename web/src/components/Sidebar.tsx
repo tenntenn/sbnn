@@ -15,6 +15,7 @@ import { filePath } from '../types'
 import { client } from '../client'
 import { readEnumSetting, writeSetting } from '../storage'
 import { Icon } from './Icon'
+import { dateTime, t as translate, tn, useT, type MessageKey } from '../i18n'
 import { sectionKey } from '../sectionKey'
 import {
   ROW_CHUNK,
@@ -113,6 +114,7 @@ export function Sidebar({
   onSetRead,
   onMarkAllUnread,
 }: Props) {
+  const t = useT()
   // What is waiting, per file and per round, counted once per change of the
   // comments rather than once per file (#402). The rounds whose counts did not
   // change keep their object, which is what lets SidebarRound stay put.
@@ -277,8 +279,10 @@ export function Sidebar({
       className={`sidebar${width === 0 ? ' collapsed' : ''}${width === null ? ' fill' : ''}`}
       style={width === null ? undefined : { width }}
       aria-hidden={width === 0}
+      aria-label={t('sidebar.label')}
+      data-tour="files"
     >
-      {diffs.length === 0 && <p className="empty">No diff yet.</p>}
+      {diffs.length === 0 && <p className="empty">{t('sidebar.empty')}</p>}
 
       {total > 0 && (
         <div className="file-search">
@@ -288,8 +292,8 @@ export function Sidebar({
             type="search"
             className="file-search-input"
             value={query}
-            placeholder="Search paths and lines ( / )"
-            aria-label="Search files by path and by what the diff lines say"
+            placeholder={t('sidebar.searchPlaceholder')}
+            aria-label={t('sidebar.searchLabel')}
             onChange={(ev) => onQuery(ev.target.value)}
             onKeyDown={(ev) => {
               if (ev.key === 'Escape') {
@@ -301,25 +305,27 @@ export function Sidebar({
           />
           {searching && (
             <span className="hint">
-              {found} of {total}
-              {results.lines > 0 && `, ${results.lines} line${results.lines === 1 ? '' : 's'}`}
+              {t('sidebar.found', { found, total })}
+              {results.lines > 0 && tn('sidebar.foundLines', results.lines)}
             </span>
           )}
           {diffs.length > 1 && (
-            <div className="toggle sm">
+            <div className="toggle sm" role="group" aria-label={t('sidebar.layoutLabel')}>
               <button
                 className={layout === 'list' ? 'active' : ''}
+                aria-pressed={layout === 'list'}
                 onClick={() => setLayout('list')}
-                title="Stack every round in one list"
+                title={t('sidebar.listTitle')}
               >
-                list
+                {t('sidebar.list')}
               </button>
               <button
                 className={layout === 'tabs' ? 'active' : ''}
+                aria-pressed={layout === 'tabs'}
                 onClick={() => setLayout('tabs')}
-                title="Show one round at a time"
+                title={t('sidebar.tabsTitle')}
               >
-                tabs
+                {t('sidebar.tabs')}
               </button>
             </div>
           )}
@@ -332,17 +338,17 @@ export function Sidebar({
       {total > 0 && (
         <div className="file-search">
           <Icon name="check" small />
-          <span className="hint" style={{ flex: 1 }}>
-            {readCount} of {total} read
+          <span className="hint" style={{ flex: 1 }} title={t('sidebar.readTitle')}>
+            {t('sidebar.read', { read: readCount, total })}
           </span>
           {readCount > 0 && (
             <button
               className="ghost"
               onClick={onMarkAllUnread}
-              title="Clear every read mark in this review"
+              title={t('sidebar.markAllUnreadTitle')}
             >
               <Icon name="refresh" small />
-              Mark all unread
+              {t('sidebar.markAllUnread')}
             </button>
           )}
         </div>
@@ -359,7 +365,7 @@ export function Sidebar({
               <button type="button"
                 role="tab"
                 aria-selected={diff.id === activeTab}
-                title={new Date(diff.createdAt).toLocaleString()}
+                title={dateTime(diff.createdAt)}
                 style={TAB_BODY}
                 onClick={() => {
                   setTab(diff.id)
@@ -369,20 +375,22 @@ export function Sidebar({
               >
                 {diff.title}
                 {searching && tabbed.length > 1 && (
-                  <span className="hint" title="files matching in this round">
+                  <span className="hint" title={t('sidebar.tabMatches')}>
                     {shown(diff).length}
                   </span>
                 )}
                 {roundComments(diff) > 0 && (
-                  <span className="badge sm warn">{roundComments(diff)}</span>
+                  <span className="badge sm warn" title={t('sidebar.openComments')}>
+                    {roundComments(diff)}
+                  </span>
                 )}
               </button>
               {!client.isStatic && diff.id === activeTab && (
                 <button type="button"
                   className="tab-remove"
                   style={TAB_REMOVE}
-                  aria-label="Remove this round"
-                  title="Remove this round"
+                  aria-label={t('sidebar.removeRound')}
+                  title={t('sidebar.removeRound')}
                   onClick={() => removeRound(diff)}
                 >
                   <Icon name="close" small />
@@ -395,12 +403,11 @@ export function Sidebar({
 
       {results.truncated && (
         <p className="empty">
-          Stopped reading lines after {MAX_SCANNED_LINES.toLocaleString()}; paths are still
-          searched in full. Narrow the search to see the rest.
+          {t('sidebar.truncated', { max: MAX_SCANNED_LINES.toLocaleString() })}
         </p>
       )}
 
-      {searching && found === 0 && <p className="empty">Nothing matches that.</p>}
+      {searching && found === 0 && <p className="empty">{t('sidebar.noMatch')}</p>}
 
       {diffs.map((diff) => {
         const files = shown(diff)
@@ -429,14 +436,15 @@ export function Sidebar({
 
       {status && status.groups.some((g) => g.name !== group) && (
         <div className="groups">
-          <div className="groups-title">Groups</div>
+          <div className="groups-title">{t('sidebar.groups')}</div>
           <ul>
             {status.groups.map((g) => (
               <li key={g.name}>
                 <a className={g.name === group ? 'active' : ''} href={g.url}>
                   {g.name}
                   <span className="hint">
-                    {g.diffs} round(s){g.unresolved > 0 ? `, ${g.unresolved} open` : ''}
+                    {t('group.rounds', { count: g.diffs })}
+                    {g.unresolved > 0 ? t('group.open', { count: g.unresolved }) : ''}
                   </span>
                 </a>
               </li>
@@ -500,13 +508,14 @@ const SidebarRound = memo(function SidebarRound({
   onJump,
   onSetRead,
 }: RoundProps) {
+  const t = useT()
   return (
     <div className="diff-round" hidden={hidden}>
       <div className="diff-round-header" hidden={tabs}>
         {!tabs ? (
           <button
             className="diff-round-title as-button"
-            title={new Date(diff.createdAt).toLocaleString()}
+            title={t('sidebar.roundToggle', { date: dateTime(diff.createdAt) })}
             aria-expanded={!shut}
             onClick={() => onToggle(diff.id)}
           >
@@ -515,17 +524,22 @@ const SidebarRound = memo(function SidebarRound({
             </span>
             {diff.title}
             <span className="hint">{files.length}</span>
-            {open > 0 && <span className="badge sm warn">{open}</span>}
+            {open > 0 && (
+              <span className="badge sm warn" title={t('sidebar.openComments')}>
+                {open}
+              </span>
+            )}
           </button>
         ) : (
-          <span className="diff-round-title" title={new Date(diff.createdAt).toLocaleString()}>
+          <span className="diff-round-title" title={dateTime(diff.createdAt)}>
             {diff.title}
           </span>
         )}
         {!client.isStatic && (
           <button
             className="ghost danger"
-            title="Remove this round"
+            title={t('sidebar.removeRound')}
+            aria-label={t('sidebar.removeRound')}
             onClick={() => onRemove(diff)}
           >
             <Icon name="close" small />
@@ -728,6 +742,7 @@ const SidebarFile = memo(function SidebarFile({
   onJump,
   onSetRead,
 }: FileProps) {
+  const t = useT()
   const key = sectionKey(diffId, file.id)
   // A folded file is still listed - the point is that it is out
   // of the way, not out of sight.
@@ -748,8 +763,8 @@ const SidebarFile = memo(function SidebarFile({
           role="button"
           tabIndex={0}
           aria-pressed={read}
-          aria-label={read ? `Mark ${filePath(file)} unread` : `Mark ${filePath(file)} read`}
-          title={read ? 'Mark as unread' : 'Mark as read'}
+          aria-label={t(read ? 'sidebar.markUnread' : 'sidebar.markRead', { path: filePath(file) })}
+          title={t(read ? 'sidebar.markUnreadTitle' : 'sidebar.markReadTitle')}
           style={{ display: 'inline-flex', opacity: read ? 1 : 0.25 }}
           onClick={(ev) => {
             ev.stopPropagation()
@@ -764,7 +779,7 @@ const SidebarFile = memo(function SidebarFile({
         >
           <Icon name="check" small />
         </span>
-        <span className={`dot status-${file.status}`} title={file.status} />
+        <span className={`dot status-${file.status}`} title={t(`status.${file.status}` as MessageKey)} />
         <span className="file-path"
           title={filePath(file)}
           style={read ? { opacity: 0.55 } : undefined}
@@ -774,25 +789,33 @@ const SidebarFile = memo(function SidebarFile({
           <bdi>{filePath(file)}</bdi>
         </span>
         {hit && (
-          <span className="hint" title="Go to this file">
+          <span className="hint" title={t('sidebar.goTo')}>
             {'—'} {matchSummary(hit)}
           </span>
         )}
         {folded && (
           <span className="badge sm" title={file.foldReason}>
-            folded
+            {t('sidebar.folded')}
           </span>
         )}
-        {file.isMarkdown && <span className="badge sm" title="Previewable with mo">md</span>}
-        {file.isImage && <span className="badge sm" title="Previewable as an image">img</span>}
+        {file.isMarkdown && <span className="badge sm" title={t('sidebar.mdTitle')}>md</span>}
+        {file.isImage && <span className="badge sm" title={t('sidebar.imgTitle')}>img</span>}
         {file.isNotebook && (
-          <span className="badge sm" title="Previewable as a Jupyter notebook">
+          <span className="badge sm" title={t('sidebar.ipynbTitle')}>
             ipynb
           </span>
         )}
-        {count > 0 && <span className="badge sm warn">{count}</span>}
-        <span className="stat add">+{file.additions}</span>
-        <span className="stat del">-{file.deletions}</span>
+        {count > 0 && (
+          <span className="badge sm warn" title={t('sidebar.openComments')}>
+            {count}
+          </span>
+        )}
+        <span className="stat add" title={t('sidebar.additions')}>
+          +{file.additions}
+        </span>
+        <span className="stat del" title={t('sidebar.deletions')}>
+          -{file.deletions}
+        </span>
       </button>
     </li>
   )
@@ -812,13 +835,15 @@ function roundSize(comments: Comment[], diffId: string): number {
  * destructive control - already asks, and counts what goes, so this asks
  * the same way. */
 export function removeRoundQuestion(title: string, comments: number): string {
-  if (comments === 0) return `Remove ${title}? This cannot be undone.`
-  return `Remove ${title}? ${comments} comment(s) on it will be deleted too.`
+  if (comments === 0) return translate('sidebar.removeQuestion', { title })
+  return translate('sidebar.removeQuestionComments', { title, count: comments })
 }
 
 /** reportRemoveFailure says so when the removal did not happen. The round
  * stays on screen either way, and silence there reads as success. */
 function reportRemoveFailure(title: string): (err: unknown) => void {
   return (err) =>
-    window.alert(`Could not remove ${title}: ${err instanceof Error ? err.message : String(err)}`)
+    window.alert(
+      translate('sidebar.removeFailed', { title, error: err instanceof Error ? err.message : String(err) }),
+    )
 }

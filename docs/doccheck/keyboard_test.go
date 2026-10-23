@@ -13,6 +13,11 @@ import (
 // added both and only the sheet was guarded (#355): the README paragraph could
 // be deleted with every suite green. These checks hold the paragraph to the
 // shortcut entry, so one edit cannot satisfy one half and leave the other.
+//
+// Since the UI was translated (#408) an entry names a message key rather than
+// carrying its sentence, and the sentence lives in web/src/i18n.ts. The README
+// is English, so it is held to the English catalog, which is the first one in
+// that file.
 
 // keyNames are the words shortcuts.ts uses for keys in prose. A key named in
 // the entry's description is part of the route the entry teaches, so the README
@@ -27,20 +32,26 @@ type gutterShortcut struct {
 }
 
 var (
-	shortcutEntry = regexp.MustCompile(`(?s)\{\s*keys:\s*\[([^\]]*)\],\s*what:\s*'((?:[^'\\]|\\.)*)',?\s*\}`)
+	shortcutEntry = regexp.MustCompile(`(?s)row\(\s*\[([^\]]*)\],\s*'([\w.]+)'\s*\)`)
 	quoted        = regexp.MustCompile(`'([^']*)'`)
 )
 
 // parseGutterShortcut finds the shortcuts.ts entry whose keys are Enter and
-// Space, the keys of the line gutter.
-func parseGutterShortcut(src string) (gutterShortcut, bool) {
+// Space, the keys of the line gutter, and reads its sentence out of catalog,
+// the source of i18n.ts. The first match is the English catalog's.
+func parseGutterShortcut(src, catalog string) (gutterShortcut, bool) {
 	for _, m := range shortcutEntry.FindAllStringSubmatch(src, -1) {
 		var keys []string
 		for _, k := range quoted.FindAllStringSubmatch(m[1], -1) {
 			keys = append(keys, k[1])
 		}
 		if len(keys) == 2 && keys[0] == "Enter" && keys[1] == "Space" {
-			return gutterShortcut{keys: keys, what: m[2]}, true
+			message := regexp.MustCompile(`'` + regexp.QuoteMeta(m[2]) + `':\s*'((?:[^'\\]|\\.)*)'`)
+			what := message.FindStringSubmatch(catalog)
+			if what == nil {
+				return gutterShortcut{}, false
+			}
+			return gutterShortcut{keys: keys, what: what[1]}, true
 		}
 	}
 	return gutterShortcut{}, false
@@ -97,13 +108,18 @@ func keyboardProblems(readme string, sc gutterShortcut) []string {
 }
 
 const testShortcut = `
-  {
-    keys: ['Enter', 'Space'],
-    what: 'Comment on a line: Tab to its line number, then press. Shift extends the range',
-  },`
+  row(['Enter', 'Space'], 'key.commentLine'),`
+
+const testCatalog = `
+const en = {
+  'key.commentLine': 'Comment on a line: Tab to its line number, then press. Shift extends the range',
+}
+const ja = {
+  'key.commentLine': '行にコメント',
+}`
 
 func TestKeyboardParagraphAgainstShortcuts(t *testing.T) {
-	sc, ok := parseGutterShortcut(testShortcut)
+	sc, ok := parseGutterShortcut(testShortcut, testCatalog)
 	if !ok {
 		t.Fatal("test fixture does not parse")
 	}
@@ -150,17 +166,19 @@ func TestKeyboardParagraphAgainstShortcuts(t *testing.T) {
 
 func TestParseGutterShortcut(t *testing.T) {
 	cases := []struct {
-		name string
-		src  string
-		ok   bool
+		name    string
+		src     string
+		catalog string
+		ok      bool
 	}{
-		{name: "present", src: testShortcut, ok: true},
-		{name: "other entries only", src: "{ keys: ['j'], what: 'Next file' },", ok: false},
-		{name: "empty", src: "", ok: false},
+		{name: "present", src: testShortcut, catalog: testCatalog, ok: true},
+		{name: "other entries only", src: "row(['j'], 'key.nextFile'),", catalog: testCatalog, ok: false},
+		{name: "no sentence for the key", src: testShortcut, catalog: "", ok: false},
+		{name: "empty", src: "", catalog: testCatalog, ok: false},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, ok := parseGutterShortcut(tt.src); ok != tt.ok {
+			if _, ok := parseGutterShortcut(tt.src, tt.catalog); ok != tt.ok {
 				t.Errorf("ok = %v, want %v", ok, tt.ok)
 			}
 		})
@@ -174,9 +192,13 @@ func TestREADMEKeyboardPathMatchesShortcuts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading web/src/shortcuts.ts: %v", err)
 	}
-	sc, ok := parseGutterShortcut(string(src))
+	catalog, err := os.ReadFile(filepath.Join(repoRoot(t), "web", "src", "i18n.ts"))
+	if err != nil {
+		t.Fatalf("reading web/src/i18n.ts: %v", err)
+	}
+	sc, ok := parseGutterShortcut(string(src), string(catalog))
 	if !ok {
-		t.Fatal("web/src/shortcuts.ts has no entry with keys Enter and Space; this test is looking in the wrong place")
+		t.Fatal("web/src/shortcuts.ts has no entry with keys Enter and Space, or i18n.ts has no sentence for it; this test is looking in the wrong place")
 	}
 	if !strings.Contains(sc.what, "Tab") {
 		t.Fatalf("the shortcuts.ts entry no longer names Tab (%q); #318 is about telling the reader how to reach the line number", sc.what)
