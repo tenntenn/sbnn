@@ -224,6 +224,8 @@ const en = {
 
   // Commenting from the preview.
   'selection.commentOn': 'Comment on {range}',
+  'selection.add': 'Comment',
+  'selection.addTitle': 'Add a comment on {range}',
   'selection.hint': 'Selected in the preview; the comment covers the lines it touches',
 
   // The preview pane.
@@ -538,6 +540,8 @@ const ja: Record<MessageKey, string> = {
   'comment.sendHint': '⌘/Ctrl + Enter',
 
   'selection.commentOn': '{range} にコメント',
+  'selection.add': 'コメント',
+  'selection.addTitle': '{range} にコメントを追加',
   'selection.hint': 'プレビューで選択した範囲です。コメントは選択にかかる行全体が対象になります',
 
   'preview.tree': '作業ツリー',

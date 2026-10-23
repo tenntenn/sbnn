@@ -3,6 +3,7 @@ import { setHeldPreviewRange } from '../previewHold'
 import { client } from '../client'
 import { isMac, isSelectingPress } from '../selectionPress'
 import { CommentForm } from './CommentThread'
+import { CommentIcon } from './CommentIcon'
 import { SLOT_CLASS } from '../previewComments'
 import { useT } from '../i18n'
 
@@ -568,13 +569,17 @@ export function PreviewSelection({ group, onChanged }: Props) {
       }}
     >
       {!capture.drafting ? (
+        // A bare "+" floating over the text read as anything - zoom, expand,
+        // another selection - but not as "comment on this" (#410). The
+        // bubble and the word say what it does; the name says on what.
         <button
           className="ghost selection-add"
-          title={t('selection.commentOn', { range: label })}
-          aria-label={t('selection.commentOn', { range: label })}
+          title={t('selection.addTitle', { range: label })}
+          aria-label={t('selection.addTitle', { range: label })}
           onClick={() => setCapture((c) => (c ? { ...c, drafting: true } : c))}
         >
-          +
+          <CommentIcon small />
+          {t('selection.add')}
         </button>
       ) : (
         <CommentForm

@@ -1127,12 +1127,16 @@ body.resizing iframe {
 
 /* A single "+" reads better as a small square than as a rectangle sized for
    a word. */
+/* An icon and a word rather than a lone "+", so the button says what it
+   does (#410). It stays one line and as low as before; the menu measures it
+   before placing it, so the extra width is centred on the release point. */
 .selection-add {
-  width: 26px;
   height: 26px;
-  padding: 0;
-  font-size: var(--text-lg);
+  padding: 0 var(--space-md);
+  gap: var(--space-xs);
+  font-size: var(--text-sm);
   line-height: 1;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   justify-content: center;
