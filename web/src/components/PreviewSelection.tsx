@@ -5,6 +5,7 @@ import { isMac, isSelectingPress } from '../selectionPress'
 import { CommentForm } from './CommentThread'
 import { CommentIcon } from './CommentIcon'
 import { SLOT_CLASS } from '../previewComments'
+import { REMOVED_CLASS } from '../richDiff'
 import { useT } from '../i18n'
 
 interface Props {
@@ -71,12 +72,14 @@ function highlights(): { set(name: string, value: Highlight): void; delete(name:
   return registry ?? null
 }
 
-/** inComment says whether node is inside a comment drawn into the preview.
- * The one place that knows it: the comments are not the document, so nothing
- * in them is selected text, a click on the document or a source mark. */
+/** inComment says whether node is inside a comment drawn into the preview,
+ * or inside what a hunk removed, which the change marks draw into it too
+ * (see richDiff.ts) and which is on no line of the file either. The one place
+ * that knows it: neither is the document, so nothing in them is selected text,
+ * a click on the document or a source mark. */
 function inComment(node: Node | null): boolean {
   const el = node instanceof Element ? node : (node?.parentElement ?? null)
-  return el?.closest(`.${SLOT_CLASS}`) != null
+  return el?.closest(`.${SLOT_CLASS}, .${REMOVED_CLASS}`) != null
 }
 
 /** sourceMarks are the marks of root that say which source line the document

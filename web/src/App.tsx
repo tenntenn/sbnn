@@ -22,6 +22,7 @@ import { plainKey, shortcuts, stepToComment, typingInto } from './shortcuts'
 import { announceNewDiffs, clearUnread, newDiffIds, requestNotifyPermission, storedNotify, storeNotify } from './notify'
 import { applyTheme, storedTheme, type Theme } from './theme'
 import { sectionKey } from './sectionKey'
+import { MARKS_OFF_CLASS } from './richDiff'
 import { shareComments, shareDiffs } from './share'
 import {
   LANGUAGE_NAMES,
@@ -63,6 +64,7 @@ const SPLIT_KEY = 'sbnn.split'
 const PREVIEW_KIND_KEY = 'sbnn.preview.renderer'
 const VIEW_MODE_KEY = 'sbnn.viewmode'
 const SYNC_SCROLL_KEY = 'sbnn.sync'
+const CHANGE_MARKS_KEY = 'sbnn.preview.changes'
 // Read marks are per review rather than per reader, so they hang off the
 // group name instead of living in one global setting: two reviews open in two
 // tabs keep their own place.
@@ -100,6 +102,13 @@ function storedViewModeDefault(): ViewMode | null {
 
 function storedSyncScroll(): boolean {
   return readBoolSetting(SYNC_SCROLL_KEY, true)
+}
+
+// The change marks are on unless this browser was told otherwise: they are
+// what the preview is for when reading a change, and turning them off is one
+// click away in the preview's toolbar.
+function storedChangeMarks(): boolean {
+  return readBoolSetting(CHANGE_MARKS_KEY, true)
 }
 
 export function App() {
@@ -167,6 +176,7 @@ export function App() {
   // the reader says so, and the reader says so simply by scrolling the
   // preview themselves.
   const [syncScroll, setSyncScroll] = useState(storedSyncScroll)
+  const [changeMarks, setChangeMarks] = useState(storedChangeMarks)
   const bodyRef = useRef<HTMLDivElement>(null)
   const diffScrollRef = useRef<HTMLDivElement>(null)
   const previewScrollRef = useRef<HTMLDivElement>(null)
@@ -246,6 +256,10 @@ export function App() {
   useEffect(() => {
     writeBoolSetting(SYNC_SCROLL_KEY, syncScroll)
   }, [syncScroll])
+
+  useEffect(() => {
+    writeBoolSetting(CHANGE_MARKS_KEY, changeMarks)
+  }, [changeMarks])
 
   useEffect(() => {
     writeStringSet(READ_KEY_PREFIX + group, readKeys)
@@ -716,6 +730,8 @@ export function App() {
         active
         comments={comments}
         onChanged={onChanged}
+        changeMarks={changeMarks}
+        onChangeMarks={setChangeMarks}
       />
     ) : (
       <p className="empty">{t('app.selectFile')}</p>
@@ -734,6 +750,8 @@ export function App() {
       onSetKind={setPreviewKind}
       comments={comments}
       onChanged={onChanged}
+      changeMarks={changeMarks}
+      onChangeMarks={setChangeMarks}
     />
   )
 
@@ -779,7 +797,10 @@ export function App() {
   )
 
   return (
-    <div className={`app${narrow ? ' narrow' : ''}`}>
+    // The change marks are hidden by a class here rather than left out of the
+    // previews, so the switch does not render every preview again (see
+    // MARKS_OFF_CLASS).
+    <div className={`app${narrow ? ' narrow' : ''}${changeMarks ? '' : ` ${MARKS_OFF_CLASS}`}`}>
       <header className="topbar">
         <span className="brand">sbnn</span>
         <span className="group">{group}</span>

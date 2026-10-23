@@ -67,6 +67,26 @@ export function renderMarkdown(source: string, assets?: PreviewAssets): string {
 }
 
 /**
+ * removedMarked renders what a hunk removed (see richDiff.ts). It is plain
+ * marked, with none of renderBlocks' line marks: removed Markdown is not on
+ * any line of the file the preview shows, and a mark in it would offer a
+ * comment a line it is not on.
+ */
+const removedMarked = new Marked(MARKED_OPTIONS)
+
+/**
+ * renderRemovedMarkdown renders a run of removed lines for the preview's
+ * change marks. It goes through the same sanitiser as the rest of the
+ * preview, since a removed line comes from the diff as much as an added one.
+ * Its images are looked up the way the preview's are, which for a picture the
+ * change took out usually means the plate saying it is not in the review.
+ */
+export function renderRemovedMarkdown(source: string, assets?: PreviewAssets): string {
+  const html = removedMarked.parse(source)
+  return resolvePreviewImages(sanitize(typeof html === 'string' ? html : ''), assets)
+}
+
+/**
  * PreviewAsset is one image of a previewed file, as sbnn resolved it. The
  * live page gets a URL of the server; an exported page gets a data URL. When
  * there is no url there is a status saying why, and both pages say the same

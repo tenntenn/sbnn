@@ -1497,6 +1497,63 @@ a {
   margin-top: 0;
 }
 
+/* The change marks (#430, see richDiff.ts). A block holding an added line and
+   what a hunk removed are tinted with the diff pane's own add and delete
+   colours, and carry a bar out in the preview's left padding, so the text
+   itself stays where the unmarked document has it. flow-root keeps the
+   margins of the block inside the tint instead of collapsing through it. */
+.markdown > .rich-added,
+.markdown > .rich-removed {
+  display: flow-root;
+  margin: 0 calc(-1 * var(--space-md));
+  padding: 0 var(--space-md);
+  border-left: 3px solid transparent;
+}
+.markdown > .rich-added {
+  background: var(--add-bg);
+  border-left-color: var(--add-strong);
+}
+.markdown > .rich-removed {
+  margin-block: var(--space-md);
+  background: var(--del-bg);
+  border-left-color: var(--del-strong);
+  color: var(--fg-muted);
+}
+/* Struck through on the content rather than the wrapper: a decoration
+   propagates to everything inside the box it is set on, and no descendant
+   can take it off again, which would strike the caption out too. */
+.markdown > .rich-removed > * {
+  text-decoration: line-through;
+  text-decoration-color: var(--del-strong);
+}
+/* The caption is the element's accessible name, so it says the same thing in
+   the page's language to a reader who sees it and one who hears it. */
+.markdown > .rich-removed::before {
+  content: attr(aria-label);
+  display: block;
+  padding-top: var(--space-xs);
+  font-size: 0.75em;
+  font-weight: 600;
+}
+.rich-marks-off .markdown > .rich-removed {
+  display: none;
+}
+.rich-marks-off .markdown > .rich-added {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border-left: 0;
+  background: none;
+}
+.change-marks-glyph {
+  display: inline-block;
+  width: 16px;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+}
+
 /* The comments on a file are drawn into its preview under the block holding
    the line they end on. They are the diff pane's own thread, so they only
    need to sit flush with the text instead of in a line number gutter. */

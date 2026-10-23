@@ -317,6 +317,13 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   itself, as a rule and a line saying how many lines are not there. Nothing
   is written into a notebook that way: it is JSON, and sbnn's own sentence in
   the middle of it would be the reason it could not be shown at all.
+- sbnn's own Markdown preview shows what the diff changed, like GitHub's rich
+  diff: a block holding an added line is tinted green with a bar in the
+  margin, and what a hunk removed is rendered too, in red and struck through,
+  just above where it was. It works on a rebuilt preview and on an exported
+  page; the **±** switch in the preview toolbar hides the marks, and the choice
+  is remembered per browser. The removed text is not part of the file, so it
+  cannot be commented on.
 - Every other text file — a `.go`, a config file, a script with no extension
   at all — gets a preview too: the whole file as its own numbered lines,
   syntax coloured by the same rules that colour the diff. It is the same

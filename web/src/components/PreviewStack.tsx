@@ -8,6 +8,7 @@ import { sectionKey } from '../sectionKey'
 import { hashForKey } from '../urlState'
 import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
+import { ChangeMarksToggle } from './ChangeMarksToggle'
 import type { ScrollFraction } from './DiffStack'
 import { client } from '../client'
 import { useLazyMount, type FindPrefetch } from '../useLazyMount'
@@ -39,6 +40,11 @@ interface Props {
   onSetKind: (kind: PreviewKind) => void
   comments: Comment[]
   onChanged: () => void
+  /** changeMarks is whether the previews show what the diff changed (see
+   * richDiff.ts). The page hides them with a class of its own, so this is
+   * only the switch. */
+  changeMarks: boolean
+  onChangeMarks: (on: boolean) => void
 }
 
 const NO_COMMENTS: Comment[] = []
@@ -159,6 +165,8 @@ export function PreviewStack({
   onSetKind,
   comments,
   onChanged,
+  changeMarks,
+  onChangeMarks,
 }: Props) {
   const t = useT()
   const [activated, setActivated] = useState<Set<string>>(() => new Set())
@@ -367,6 +375,9 @@ export function PreviewStack({
           </div>
         )}
         <span className="spacer" />
+        {/* mo draws in a frame sbnn cannot mark, so the switch is only
+            offered where it does something. */}
+        {kind === 'preview' && <ChangeMarksToggle on={changeMarks} onChange={onChangeMarks} />}
         {/* A disabled button swallows hover, so the tooltip explaining why
             lives on a span around it instead. */}
         <span

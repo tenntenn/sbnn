@@ -24,6 +24,11 @@ export type PreviewResult =
       path: string
       source: string
       complete: boolean
+      /** markdown is the Markdown html was rendered from, for a Markdown
+       * preview. The change marks find a partial preview's hunks in it,
+       * since such a preview does not number its lines the way the file
+       * does (see richChanges). */
+      markdown?: string
     }
   | {
       /** Text, not HTML: the page turns it into rows itself, so that
@@ -230,6 +235,7 @@ function createLiveClient(): SbnnClient {
         path: file.path,
         source: file.source,
         complete: file.complete,
+        markdown: file.content,
       }
     },
     async previewNotebook(group, diffId, fileId) {
@@ -545,6 +551,7 @@ function createStaticClient(data: StaticPayload): SbnnClient {
         path: entry.path ?? '',
         source: entry.source,
         complete: entry.complete,
+        markdown: entry.content,
       }
     },
     async previewMarkdown(group, diffId, fileId) {

@@ -26,7 +26,9 @@ export interface BlockRange {
  */
 export function blockRanges(html: string): BlockRange[] {
   const out: BlockRange[] = []
-  for (const m of html.matchAll(/<div data-ln="(\d+)-(\d+)">/g)) {
+  // A wrapper may carry a class after its lines: the change marks put one on
+  // a block holding an added line (see richDiff.ts).
+  for (const m of html.matchAll(/<div data-ln="(\d+)-(\d+)"[^>]*>/g)) {
     out.push({ start: Number(m[1]), end: Number(m[2]) })
   }
   return out

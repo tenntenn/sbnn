@@ -269,6 +269,10 @@ const en = {
   'preview.linesShown': '{shown} of {total} lines shown.',
   'preview.showRest': 'Show the remaining {count}',
   'preview.notInReview': 'not in this review',
+  'preview.removed': 'Removed',
+  'preview.marks': 'Show what the diff changed in the preview',
+  'preview.marksOn': 'Showing what the diff added (green) and removed (red); click to hide',
+  'preview.marksOff': 'Show what the diff added (green) and removed (red)',
 
   'asset.tooLarge': 'too large to show here ({size})',
   'asset.overBudget': 'left out to keep this page loadable ({size})',
@@ -340,7 +344,7 @@ const en = {
     "One section per file. Its header folds it away and switches between split and unified; j and k step from file to file.",
   'tour.preview.title': 'The preview',
   'tour.preview.body':
-    'Markdown, notebooks, images and source files are rendered here, and follow the diff as you scroll.',
+    'Markdown, notebooks, images and source files are rendered here, and follow the diff as you scroll. In Markdown, what the diff added is marked green and what it removed is shown in red where it was; ± in the toolbar turns the marks off.',
   'tour.panes.title': 'Making room',
   'tour.panes.body':
     '< puts the diff away and > puts the preview away, giving the other the whole width; the same button brings it back. Drag the bar between them to resize, or double-click it to go back to the default widths. The < beside the file list puts the list away the same way.',
@@ -603,6 +607,10 @@ const ja: Record<MessageKey, string> = {
   'preview.linesShown': '{total} 行中 {shown} 行を表示しています。',
   'preview.showRest': '残りの {count} 行を表示',
   'preview.notInReview': 'このレビュー外',
+  'preview.removed': '削除',
+  'preview.marks': 'diff による変更をプレビューに表示する',
+  'preview.marksOn': 'diff で追加された部分(緑)と削除された部分(赤)を表示しています。クリックすると隠します',
+  'preview.marksOff': 'diff で追加された部分(緑)と削除された部分(赤)を表示する',
 
   'asset.tooLarge': '大きすぎるため表示できません({size})',
   'asset.overBudget': 'ページを読み込める大きさに保つため省略しました({size})',
@@ -669,7 +677,7 @@ const ja: Record<MessageKey, string> = {
     'ファイルごとに 1 つのセクションがあります。見出しから、折りたたみや、左右に並べるか 1 列で表示するかの切り替えができ、j と k でファイル間を移動できます。',
   'tour.preview.title': 'プレビュー',
   'tour.preview.body':
-    'Markdown、notebook、画像、ソースファイルをここに描画し、diff のスクロールに追従します。',
+    'Markdown、notebook、画像、ソースファイルをここに描画し、diff のスクロールに追従します。Markdown では diff で追加された部分を緑で示し、削除された部分も元の位置に赤で表示します。ツールバーの ± で表示を切り替えられます。',
   'tour.panes.title': '表示幅を切り替える',
   'tour.panes.body':
     '< で diff を、> でプレビューを隠し、もう一方を全幅で表示します。隠した側は同じ場所のボタンで戻せます。間のバーはドラッグで幅を変えられ、ダブルクリックで既定の幅に戻ります。ファイル一覧の横の < も同じように一覧を隠します。',
