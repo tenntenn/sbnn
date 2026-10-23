@@ -212,6 +212,7 @@ func commentJSONKeys(t *testing.T) (always, conditional []string) {
 		Body:      "Rename this.\n\n```suggestion\nfoo := 1\n```",
 		Question:  true,
 		Snippet:   "bar := 1",
+		ReplyTo:   "cmt-0",
 		Resolved:  true,
 		CreatedAt: time.Unix(0, 0).UTC(),
 		UpdatedAt: time.Unix(0, 0).UTC(),

@@ -893,6 +893,11 @@ type AddCommentRequest struct {
 	// replacement text: it is appended to Body as a fenced suggestion
 	// block, which is where a suggestion actually lives.
 	Suggestion string `json:"suggestion"`
+	// ReplyTo makes the comment a reply to the comment with this ID, in
+	// the thread that comment is in. A reply takes its anchor from the
+	// thread, so it needs none of DiffID, FileID, Path, Side, StartLine,
+	// EndLine or Snippet; any of them given must agree with the thread.
+	ReplyTo string `json:"replyTo,omitempty"`
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
@@ -907,6 +912,10 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	body := model.WithSuggestion(req.Body, req.Suggestion)
 	if strings.TrimSpace(body) == "" {
 		http.Error(w, "a comment needs a body or a suggestion", http.StatusBadRequest)
+		return
+	}
+	if req.ReplyTo != "" {
+		s.addReply(w, name, req, body)
 		return
 	}
 	// The side is folded and trimmed so the API agrees with the CLI:
@@ -1048,6 +1057,85 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
+// addReply stores a reply to the comment req.ReplyTo, with body as its text.
+//
+// The reply goes on the lines of its thread. Anything the request says about
+// where it goes is checked against the thread rather than used, so that a
+// caller who named both a comment and a place, and got one of them wrong, is
+// told so instead of having the reply land somewhere it did not mean.
+func (s *Server) addReply(w http.ResponseWriter, group string, req AddCommentRequest, body string) {
+	root, ok := s.store.ThreadRoot(group, req.ReplyTo)
+	if !ok {
+		http.Error(w, fmt.Sprintf("no comment %q in group %q to reply to", req.ReplyTo, group), http.StatusNotFound)
+		return
+	}
+	if msg := replyDisagrees(req, root); msg != "" {
+		http.Error(w, fmt.Sprintf("comment %s is on %s%s, but the reply names %s: leave the place out, it is the thread's",
+			req.ReplyTo, root.Path, lineRange(root), msg), http.StatusBadRequest)
+		return
+	}
+	if req.Question {
+		http.Error(w, "a reply cannot be a question: whether a thread asks something is said by its first comment",
+			http.StatusBadRequest)
+		return
+	}
+	if len(model.Suggestions(body)) > 0 {
+		switch {
+		case root.StartLine <= 0:
+			http.Error(w, "a suggestion replaces the lines a comment names, and this thread is about the whole file",
+				http.StatusBadRequest)
+			return
+		case root.Side == "old":
+			http.Error(w, "a suggestion replaces lines of the new file, and this thread is on the old one",
+				http.StatusBadRequest)
+			return
+		}
+	}
+	c, err := s.store.AddComment(&model.Comment{
+		Group:   group,
+		Author:  req.Author,
+		Body:    body,
+		ReplyTo: req.ReplyTo,
+	})
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ErrNoComment) {
+			// Deleted between the look-up above and now.
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	s.notifyComments(group)
+	writeJSON(w, http.StatusOK, c)
+}
+
+// replyDisagrees names the part of where a reply says it goes that is not
+// where its thread is, or returns "" when everything it names agrees.
+func replyDisagrees(req AddCommentRequest, root *model.Comment) string {
+	switch {
+	case req.DiffID != "" && req.DiffID != root.DiffID:
+		return "diff " + req.DiffID
+	case req.FileID != "" && req.FileID != root.FileID:
+		return "file " + req.FileID
+	case req.Path != "" && req.Path != root.Path:
+		return req.Path
+	case req.Side != "" && !strings.EqualFold(strings.TrimSpace(req.Side), root.Side):
+		return "the " + req.Side + " side"
+	}
+	if req.StartLine == 0 && req.EndLine == 0 {
+		return ""
+	}
+	end := req.EndLine
+	if end == 0 {
+		end = req.StartLine
+	}
+	if req.StartLine != root.StartLine || end != root.EndLine {
+		return "line " + lineSpec(req.StartLine, end)
+	}
+	return ""
+}
+
 // UpdateCommentRequest is the body of PATCH .../comments/{id}.
 type UpdateCommentRequest struct {
 	Body     *string `json:"body,omitempty"`
@@ -1101,6 +1189,16 @@ func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
 	var req UpdateCommentRequest
 	if !decodeBody(w, r, maxBodySize, "the comment", &req) {
 		return
+	}
+	if req.Question != nil && *req.Question {
+		// A reply carries no question of its own; the thread asks or it
+		// does not, on its first comment. Refused rather than ignored, so a
+		// client that meant it hears why nothing changed.
+		if c, ok := s.store.Comment(name, r.PathValue("id")); ok && c.IsReply() {
+			http.Error(w, "a reply cannot be a question: mark the first comment of the thread instead",
+				http.StatusBadRequest)
+			return
+		}
 	}
 	c, found := s.store.UpdateComment(name, r.PathValue("id"), CommentPatch{
 		Body:     req.Body,
@@ -1342,7 +1440,7 @@ func (s *Server) notifyReview(g *model.Group) {
 		"type":       "review",
 		"group":      g.Name,
 		"reviewedAt": g.ReviewedAt,
-		"comments":   len(openComments(g)),
+		"comments":   model.OpenThreads(g.Comments),
 		"verdict":    g.ReviewVerdict,
 	})
 	if err != nil {

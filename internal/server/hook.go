@@ -30,7 +30,10 @@ type ReviewEvent struct {
 	// Verdict is what the reviewer decided about the change as a whole. It
 	// is here so that a hook can act on the decision without counting
 	// comments or reading the prose in Prompt.
-	Verdict  model.Verdict    `json:"verdict"`
+	Verdict model.Verdict `json:"verdict"`
+	// Comments are the open threads, flat: each comment that opens one,
+	// and its replies after it carrying "replyTo". SBNN_COMMENTS counts
+	// the threads, not the entries.
 	Comments []*model.Comment `json:"comments"`
 	Prompt   string           `json:"prompt"`
 }
@@ -123,7 +126,7 @@ func (s *Server) hookEnv(event ReviewEvent) []string {
 		"SBNN_URL=" + event.URL,
 		"SBNN_SERVER=" + s.BaseURL(),
 		"SBNN_PORT=" + strconv.Itoa(s.opts.Port),
-		"SBNN_COMMENTS=" + strconv.Itoa(len(event.Comments)),
+		"SBNN_COMMENTS=" + strconv.Itoa(model.OpenThreads(event.Comments)),
 		"SBNN_REVIEW_NOTE=" + event.Note,
 		"SBNN_VERDICT=" + string(event.Verdict),
 		"SBNN_BLOCKING=" + blocking,

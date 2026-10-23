@@ -271,6 +271,9 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   travels through `sbnn comments` as the fenced block itself, so an agent can
   apply it verbatim. A comment can carry prose, several suggestions, or both.
 - Comments can be resolved, edited and deleted, and they survive a reload.
+- **Reply** under a comment answers it in place, with the same editor. The
+  replies stay under the comment they answer, an agent's as much as yours, and
+  resolving or deleting the comment does it to the whole thread.
 - **Copy prompt** puts every open comment on the clipboard, ready for a coding
   agent.
 - Split and unified views can be switched per file; new, deleted and binary
@@ -479,6 +482,18 @@ EOF
 An entry that leaves `"line"` out is the same whole-file comment a bare path
 makes.
 
+A comment is answered where it stands with `--reply-to` and the comment's ID —
+`Comment ID` in `sbnn comments`, `id` in its JSON. The reply goes in that
+comment's thread, on its lines, so it names no path:
+
+```console
+$ sbnn comment --reply-to c3 -m "Yes: the backend drops the first connection" --author claude
+```
+
+That is how an agent answers a question it was asked: the reviewer reads the
+answer next to the line, and `sbnn comments` shows the question as answered.
+A reply to a reply joins the same thread, as on GitHub.
+
 ### Finishing a review
 
 **Submit review** in the header says "I am done looking". That is the moment
@@ -557,7 +572,13 @@ $ sbnn comments --clear                      # ... and drop the open ones as wel
 `--clear` empties the group whether or not the comments were addressed, so a
 remark nobody has answered yet goes with it. `--resolved-only` is the one to
 reach for between rounds: it removes the comments marked as resolved and
-leaves the rest for the next pass.
+leaves the rest for the next pass. Either way a comment and its replies go or
+stay together, and every count sbnn prints — open comments, `SBNN_COMMENTS`,
+the sidebar — counts such a thread once.
+
+Replies come out under the comment they answer, as `### Reply from <author>`
+in the Markdown and as entries carrying `replyTo` in the JSON, which stays one
+flat list in the order the comments were written.
 
 Neither touches the diffs, so the diff of the round you just handled stays
 beside its fixed version. Send the next round with `--replace` to drop the

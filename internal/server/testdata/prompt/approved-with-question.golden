@@ -6,6 +6,8 @@ The reviewer approved the change; anything below is worth reading but does not b
 
 ## 1. handler.go:12-14
 
+Comment ID: c1
+
 Diff: handler: return 404 for unknown ids
 
 This one is a question: answer it.
@@ -17,6 +19,8 @@ for i := 0; i < 3; i++ {
 Was the retry loop deliberate?
 
 ## 2. handler.go:40 (old)
+
+Comment ID: c2
 
 Diff: handler: return 404 for unknown ids
 
@@ -32,4 +36,4 @@ This branch is now unreachable.
 
 The change is approved, so none of this blocks it. Act on what is worth acting on, say what you are leaving and why, and carry on.
 
-A comment marked as a question is asking for an answer, not for a change. Answer it in your reply, in words, and change the code only if your own answer says it should change. Leaving a question unanswered is the one thing that makes the reviewer ask it again.
+A comment marked as a question is asking for an answer, not for a change. Answer it in words - as a reply to it where you can, with `sbnn comment --reply-to <its comment ID> -m "..."`, so the answer sits next to the line - and change the code only if your own answer says it should change. Leaving a question unanswered is the one thing that makes the reviewer ask it again.

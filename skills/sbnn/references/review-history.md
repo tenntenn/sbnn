@@ -19,6 +19,11 @@ sbnn reviews --comments --format jsonl | jq -r 'select(.suggestions) | .path'
 sbnn reviews --comments | cut -f3 | cut -d: -f1 | sort | uniq -c | sort -rn
 ```
 
+A reply is a record of its own, right after the comment it answers, carrying
+`replyTo` with that comment's `id`; the key is missing on a comment that
+opened a thread. `--stats` counts threads, not replies, so filter with
+`select(.replyTo | not)` when you count comments yourself.
+
 Worth doing before you hand over a change of the same shape: if the last ten
 reviews of this repository were mostly about error messages and test names,
 check yours before asking. Say what you found and what you changed because of

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -455,12 +456,10 @@ func (s *Store) Summary(baseURL string) []GroupSummary {
 		for _, d := range g.Diffs {
 			sum.Files += len(d.Files)
 		}
-		for _, c := range g.Comments {
-			sum.Comments++
-			if !c.Resolved {
-				sum.Unresolved++
-			}
-		}
+		// A thread is one comment however many replies it holds, the way
+		// the page and the prompt count it.
+		sum.Comments = len(model.Threads(g.Comments))
+		sum.Unresolved = model.OpenThreads(g.Comments)
 		if g.Name == DefaultGroup {
 			out = append([]GroupSummary{sum}, out...)
 			continue
@@ -747,13 +746,35 @@ func (s *Store) FindFileByPath(group, diffID, path string) (*model.Diff, *model.
 	return nil, nil, false
 }
 
+// ErrNoComment is the error of a reply to a comment the group does not hold.
+var ErrNoComment = errors.New("no such comment")
+
 // AddComment stores a review comment.
+//
+// A comment with ReplyTo set is a reply. It joins the thread of the comment
+// it names - the first comment of that thread, when it names a reply, since
+// threads are flat - and takes that comment's anchor and state, whatever it
+// was given: a reply is about the lines its thread is about, and is open
+// exactly while its thread is.
 func (s *Store) AddComment(c *model.Comment) (*model.Comment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := s.group(c.Group, false)
 	if g == nil {
 		return nil, fmt.Errorf("unknown group %q", c.Group)
+	}
+	if c.IsReply() {
+		root := threadRoot(g, c.ReplyTo)
+		if root == nil {
+			return nil, fmt.Errorf("%w %q in group %q", ErrNoComment, c.ReplyTo, c.Group)
+		}
+		c.ReplyTo = root.ID
+		c.DiffID, c.FileID, c.Path, c.Side = root.DiffID, root.FileID, root.Path, root.Side
+		c.StartLine, c.EndLine, c.Snippet = root.StartLine, root.EndLine, root.Snippet
+		c.Resolved = root.Resolved
+		// A thread asks one thing. Whether it is a question is said once,
+		// on the comment that opens it.
+		c.Question = false
 	}
 	if d := g.FindDiff(c.DiffID); d == nil {
 		return nil, fmt.Errorf("unknown diff %q", c.DiffID)
@@ -766,6 +787,72 @@ func (s *Store) AddComment(c *model.Comment) (*model.Comment, error) {
 	return clone(c), nil
 }
 
+// findComment returns the comment of g with the given ID, or nil.
+func findComment(g *model.Group, id string) *model.Comment {
+	for _, c := range g.Comments {
+		if c.ID == id {
+			return c
+		}
+	}
+	return nil
+}
+
+// threadRoot returns the comment that opens the thread the comment id is in:
+// the comment itself, or the one it replies to. It is nil when g holds no
+// such comment. A reply whose thread has gone - which only a hand edit of the
+// session file can make - stands for its own thread.
+func threadRoot(g *model.Group, id string) *model.Comment {
+	c := findComment(g, id)
+	if c == nil || !c.IsReply() {
+		return c
+	}
+	if root := findComment(g, c.ReplyTo); root != nil {
+		return root
+	}
+	return c
+}
+
+// ThreadRoot returns a copy of the comment that opens the thread the comment
+// id is in, which is what a reply to id is anchored to.
+func (s *Store) ThreadRoot(group, id string) (*model.Comment, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	g := s.group(group, false)
+	if g == nil {
+		return nil, false
+	}
+	root := threadRoot(g, id)
+	if root == nil {
+		return nil, false
+	}
+	return clone(root), true
+}
+
+// Comment returns a copy of one comment of a group.
+func (s *Store) Comment(group, id string) (*model.Comment, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	g := s.group(group, false)
+	if g == nil {
+		return nil, false
+	}
+	c := findComment(g, id)
+	if c == nil {
+		return nil, false
+	}
+	return clone(c), true
+}
+
+// setThreadResolved makes the replies of root carry its state. The caller
+// must hold the lock.
+func setThreadResolved(g *model.Group, root *model.Comment) {
+	for _, c := range g.Comments {
+		if c.ReplyTo == root.ID {
+			c.Resolved = root.Resolved
+		}
+	}
+}
+
 // CommentPatch carries the fields of a comment that can be edited. A nil
 // field is left alone.
 type CommentPatch struct {
@@ -775,6 +862,11 @@ type CommentPatch struct {
 }
 
 // UpdateComment edits a comment in place.
+//
+// Resolving is done to a thread, never to one comment of it: resolving or
+// reopening a reply does it to the thread the reply is in, and the replies
+// follow the comment that opened it. Question belongs to that comment too,
+// and is left alone on a reply.
 func (s *Store) UpdateComment(group, id string, patch CommentPatch) (*model.Comment, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -782,27 +874,37 @@ func (s *Store) UpdateComment(group, id string, patch CommentPatch) (*model.Comm
 	if g == nil {
 		return nil, false
 	}
-	for _, c := range g.Comments {
-		if c.ID != id {
-			continue
-		}
-		if patch.Body != nil {
-			c.Body = *patch.Body
-		}
-		if patch.Resolved != nil {
-			c.Resolved = *patch.Resolved
-		}
-		if patch.Question != nil {
-			c.Question = *patch.Question
-		}
-		c.UpdatedAt = time.Now()
-		s.persist(&logRecord{Op: opComment, Group: group, Comment: c})
-		return clone(c), true
+	c := findComment(g, id)
+	if c == nil {
+		return nil, false
 	}
-	return nil, false
+	now := time.Now()
+	if patch.Resolved != nil {
+		root := threadRoot(g, id)
+		root.Resolved = *patch.Resolved
+		root.UpdatedAt = now
+		setThreadResolved(g, root)
+		// One record for the whole thread: replaying the record of a
+		// comment that opens a thread carries its state to the replies.
+		s.persist(&logRecord{Op: opComment, Group: group, Comment: root})
+		if patch.Body == nil && (patch.Question == nil || c.IsReply()) {
+			return clone(c), true
+		}
+	}
+	if patch.Body != nil {
+		c.Body = *patch.Body
+	}
+	if patch.Question != nil && !c.IsReply() {
+		c.Question = *patch.Question
+	}
+	c.UpdatedAt = now
+	s.persist(&logRecord{Op: opComment, Group: group, Comment: c})
+	return clone(c), true
 }
 
-// DeleteComment removes a single comment.
+// DeleteComment removes a single comment. Removing the comment that opens a
+// thread removes its replies with it, in the same record: an answer to
+// nothing is not worth keeping, and nothing would draw it.
 func (s *Store) DeleteComment(group, id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -810,24 +912,27 @@ func (s *Store) DeleteComment(group, id string) bool {
 	if g == nil {
 		return false
 	}
-	found := false
+	target := findComment(g, id)
+	if target == nil {
+		return false
+	}
+	var gone []string
 	comments := g.Comments[:0]
 	for _, c := range g.Comments {
-		if c.ID == id {
-			found = true
+		if c.ID == id || (!target.IsReply() && c.ReplyTo == id) {
+			gone = append(gone, c.ID)
 			continue
 		}
 		comments = append(comments, c)
 	}
 	g.Comments = comments
-	if found {
-		s.persist(&logRecord{Op: opDelComments, Group: group, IDs: []string{id}})
-	}
-	return found
+	s.persist(&logRecord{Op: opDelComments, Group: group, IDs: gone})
+	return true
 }
 
-// ClearComments drops the comments of a group and returns how many were
-// removed. When resolvedOnly is set, unresolved comments are kept.
+// ClearComments drops the comments of a group and returns how many threads
+// were removed, a comment and its replies counting once. When resolvedOnly
+// is set, the threads still open are kept, replies and all.
 func (s *Store) ClearComments(group string, resolvedOnly bool) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -835,20 +940,32 @@ func (s *Store) ClearComments(group string, resolvedOnly bool) int {
 	if g == nil {
 		return 0
 	}
-	var gone []string
+	gone := map[string]bool{}
+	removed := 0
+	for _, t := range model.Threads(g.Comments) {
+		if resolvedOnly && !t.Root.Resolved {
+			continue
+		}
+		removed++
+		gone[t.Root.ID] = true
+		for _, r := range t.Replies {
+			gone[r.ID] = true
+		}
+	}
+	if removed == 0 {
+		return 0
+	}
+	ids := make([]string, 0, len(gone))
 	comments := g.Comments[:0]
 	for _, c := range g.Comments {
-		if !resolvedOnly || c.Resolved {
-			gone = append(gone, c.ID)
+		if gone[c.ID] {
+			ids = append(ids, c.ID)
 			continue
 		}
 		comments = append(comments, c)
 	}
 	g.Comments = comments
-	removed := len(gone)
-	if removed > 0 {
-		s.persist(&logRecord{Op: opDelComments, Group: group, IDs: gone})
-	}
+	s.persist(&logRecord{Op: opDelComments, Group: group, IDs: ids})
 	return removed
 }
 

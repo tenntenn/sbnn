@@ -34,12 +34,12 @@ type PromptOptions struct {
 // and bringing the other renderer along.
 func Prompt(g *model.Group, opts PromptOptions) string {
 	var b strings.Builder
-	comments := make([]*model.Comment, 0, len(g.Comments))
-	for _, c := range g.Comments {
-		if c.Resolved && !opts.IncludeResolved {
+	threads := make([]model.Thread, 0, len(g.Comments))
+	for _, t := range model.Threads(g.Comments) {
+		if t.Root.Resolved && !opts.IncludeResolved {
 			continue
 		}
-		comments = append(comments, c)
+		threads = append(threads, t)
 	}
 
 	fmt.Fprintf(&b, "# Review comments (sbnn group %q)\n\n", g.Name)
@@ -51,20 +51,23 @@ func Prompt(g *model.Group, opts PromptOptions) string {
 	if note := strings.TrimSpace(g.ReviewNote); note != "" {
 		fmt.Fprintf(&b, "The reviewer wrote:\n\n%s\n\n", note)
 	}
-	if len(comments) == 0 {
+	if len(threads) == 0 {
 		b.WriteString("No open review comments.\n")
 		return b.String()
 	}
-	questions := 0
-	for _, c := range comments {
-		if c.Question {
+	// A question somebody else has answered is not waiting on the reader
+	// any more, so it is not counted among the things to answer.
+	questions, replies := 0, 0
+	for _, t := range threads {
+		if t.Root.Question && !answered(t) {
 			questions++
 		}
+		replies += len(t.Replies)
 	}
 	if g.ReviewVerdict == model.VerdictApproved {
-		fmt.Fprintf(&b, "%d comment(s) came with the approval%s.\n", len(comments), asking(questions))
+		fmt.Fprintf(&b, "%d comment(s) came with the approval%s.\n", len(threads), asking(questions))
 	} else {
-		fmt.Fprintf(&b, "%d comment(s) to address%s.\n", len(comments), asking(questions))
+		fmt.Fprintf(&b, "%d comment(s) to address%s.\n", len(threads), asking(questions))
 	}
 
 	titles := map[string]string{}
@@ -72,8 +75,15 @@ func Prompt(g *model.Group, opts PromptOptions) string {
 		titles[d.ID] = d.Title
 	}
 
-	for i, c := range comments {
+	// Only the comment that opens a thread is numbered: "address comment 3"
+	// has to mean the same thing however many replies the threads before it
+	// grew. The ID is printed so that the reader can reply to it.
+	for i, t := range threads {
+		c := t.Root
 		fmt.Fprintf(&b, "\n## %d. %s%s\n", i+1, c.Path, lineRange(c))
+		if c.ID != "" {
+			fmt.Fprintf(&b, "\nComment ID: %s\n", c.ID)
+		}
 		if title := titles[c.DiffID]; title != "" {
 			fmt.Fprintf(&b, "\nDiff: %s\n", title)
 		}
@@ -81,7 +91,11 @@ func Prompt(g *model.Group, opts PromptOptions) string {
 			fmt.Fprintf(&b, "\nFrom: %s\n", c.Author)
 		}
 		if c.Question {
-			b.WriteString("\nThis one is a question: answer it.\n")
+			if answered(t) {
+				b.WriteString("\nThis one is a question, and it has been answered below.\n")
+			} else {
+				b.WriteString("\nThis one is a question: answer it.\n")
+			}
 		}
 		if c.Resolved {
 			b.WriteString("\nStatus: resolved\n")
@@ -90,16 +104,12 @@ func Prompt(g *model.Group, opts PromptOptions) string {
 			fence := fenceFor(snippet)
 			fmt.Fprintf(&b, "\n%s\n%s\n%s\n", fence, snippet, fence)
 		}
-		// The body is Markdown and may carry suggestion blocks, so it goes
-		// out as it is rather than quoted line by line.
-		if body := strings.TrimRight(c.Body, "\n"); body != "" {
-			fmt.Fprintf(&b, "\n%s\n", body)
-		}
-		if n := len(model.Suggestions(c.Body)); n > 0 {
-			fmt.Fprintf(&b, "\nThe suggestion block above replaces %s.\n", lineRangeText(c))
-			if n > 1 {
-				fmt.Fprintf(&b, "(%d suggestion blocks: apply them in order.)\n", n)
-			}
+		writeCommentBody(&b, c)
+		// A reply is on the lines of its thread, so its snippet would only
+		// repeat the one above.
+		for _, r := range t.Replies {
+			fmt.Fprintf(&b, "\n### Reply from %s\n", replyAuthor(r))
+			writeCommentBody(&b, r)
 		}
 	}
 
@@ -113,14 +123,57 @@ func Prompt(g *model.Group, opts PromptOptions) string {
 				"names, verbatim. When a comment is not worth acting on, say why instead of " +
 				"changing the code.\n")
 		}
+		if replies > 0 {
+			b.WriteString("\nA comment with replies under it is a conversation: read it to the " +
+				"end, because the newest reply is where it stands now.\n")
+		}
 		if questions > 0 {
 			b.WriteString("\nA comment marked as a question is asking for an answer, not for a " +
-				"change. Answer it in your reply, in words, and change the code only if your " +
-				"own answer says it should change. Leaving a question unanswered is the one " +
-				"thing that makes the reviewer ask it again.\n")
+				"change. Answer it in words - as a reply to it where you can, with " +
+				"`sbnn comment --reply-to <its comment ID> -m \"...\"`, so the answer sits " +
+				"next to the line - and change the code only if your own answer says it " +
+				"should change. Leaving a question unanswered is the one thing that makes " +
+				"the reviewer ask it again.\n")
 		}
 	}
 	return b.String()
+}
+
+// writeCommentBody writes what a comment says, and what its suggestion
+// blocks replace.
+func writeCommentBody(b *strings.Builder, c *model.Comment) {
+	// The body is Markdown and may carry suggestion blocks, so it goes out
+	// as it is rather than quoted line by line.
+	if body := strings.TrimRight(c.Body, "\n"); body != "" {
+		fmt.Fprintf(b, "\n%s\n", body)
+	}
+	if n := len(model.Suggestions(c.Body)); n > 0 {
+		fmt.Fprintf(b, "\nThe suggestion block above replaces %s.\n", lineRangeText(c))
+		if n > 1 {
+			fmt.Fprintf(b, "(%d suggestion blocks: apply them in order.)\n", n)
+		}
+	}
+}
+
+// answered reports whether a question thread has a reply from someone other
+// than whoever asked it. A follow-up from the asker is more of the question,
+// not an answer to it.
+func answered(t model.Thread) bool {
+	for _, r := range t.Replies {
+		if r.Author != t.Root.Author {
+			return true
+		}
+	}
+	return false
+}
+
+// replyAuthor names who wrote a reply. The browser leaves a comment's author
+// empty, and that is the reviewer.
+func replyAuthor(c *model.Comment) string {
+	if c.Author == "" {
+		return "the reviewer"
+	}
+	return c.Author
 }
 
 // lineRangeText names the lines a suggestion replaces, e.g. "path:12-18".

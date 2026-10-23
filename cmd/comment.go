@@ -29,6 +29,7 @@ var (
 	commentDiffID      string
 	commentBulk        bool
 	commentJSONOut     bool
+	commentReplyTo     string
 )
 
 // DefaultAuthor labels comments written from the command line, so that the
@@ -36,7 +37,7 @@ var (
 const DefaultAuthor = "agent"
 
 var commentCmd = &cobra.Command{
-	Use:   "comment [path[:line[-line]]]",
+	Use:   "comment [path[:line[-line]]] | --reply-to <id>",
 	Short: "Leave a review comment from the command line",
 	Long: `Leave a review comment on a diff that was already sent to sbnn.
 
@@ -81,6 +82,19 @@ Many at once, for a whole self review:
 An entry that leaves "line" out is the same whole-file comment a bare path
 makes on the command line.
 
+A comment can be answered where it stands. --reply-to takes the ID of the
+comment to answer - the "Comment ID" that sbnn comments prints, or "id" in its
+JSON - and puts the reply in that comment's thread, on its lines:
+
+  $ sbnn comment --reply-to c3 -m "Yes: the backend drops the first connection" --author claude
+
+A reply needs no path: it goes where its thread is, and a path or line given
+next to --reply-to has to name that same place, or the reply is refused rather
+than put somewhere else. Replying to a reply joins the same thread, since a
+thread is one comment and the answers under it. A reply cannot be a
+--question; mark the comment that opens the thread instead. In a --json array
+an entry answers a comment with "replyTo" in place of "path".
+
 Each entry carries its own text, so --message, --suggest and --suggest-file
 are refused next to --json: the array is already on stdin, and --suggest -
 would be reading the same stdin the array comes from. Of the rest, --author,
@@ -110,6 +124,8 @@ func init() {
 	f.StringVar(&commentDiffID, "diff", "", "Diff ID (default: the newest diff carrying the path)")
 	f.BoolVar(&commentBulk, "json", false, "Read a JSON array of comments from stdin")
 	f.BoolVar(&commentJSONOut, "json-output", false, "Print the stored comments as JSON")
+	f.StringVar(&commentReplyTo, "reply-to", "",
+		"Reply to the comment with this ID, on its lines, instead of naming a place")
 
 	// --json takes every comment from stdin, so nothing else may read stdin or
 	// claim to hold the one comment's text. Marked in pairs rather than as one
@@ -118,6 +134,11 @@ func init() {
 	commentCmd.MarkFlagsMutuallyExclusive("json", "message")
 	commentCmd.MarkFlagsMutuallyExclusive("json", "suggest")
 	commentCmd.MarkFlagsMutuallyExclusive("json", "suggest-file")
+	// An entry of the array names what it answers itself, with "replyTo".
+	commentCmd.MarkFlagsMutuallyExclusive("json", "reply-to")
+	// A thread is a question or it is not, and that is said once, on the
+	// comment that opens it.
+	commentCmd.MarkFlagsMutuallyExclusive("reply-to", "question")
 }
 
 func runComment(cmd *cobra.Command, args []string) error {
@@ -137,6 +158,8 @@ func runComment(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("--json reads every comment from stdin, so %q is one too many", args[0])
 		}
 		requests, err = readBulkComments(os.Stdin)
+	} else if commentReplyTo != "" {
+		requests, err = replyComment(args, cmd.Flags().Changed("side"))
 	} else {
 		if len(args) != 1 {
 			return fmt.Errorf("say what to comment on, as path, path:line or path:line-line")
@@ -176,14 +199,18 @@ func addComments(ctx context.Context, adder commentAdder, group string, requests
 		added, err := adder.AddComment(ctx, group, req)
 		if err != nil {
 			if len(requests) > 1 {
-				err = fmt.Errorf("comment %d of %d (%s%s): %w",
-					i+1, len(requests), req.Path, requestLines(req), err)
+				err = fmt.Errorf("comment %d of %d (%s): %w",
+					i+1, len(requests), requestPlace(req), err)
 			}
 			return reportStored(out, errOut, stored, len(requests), err)
 		}
 		stored = append(stored, added)
 		if !commentJSONOut {
-			fmt.Fprintf(errOut, "sbnn: %s on %s%s\n", added.ID, added.Path, lineRangeOf(added))
+			if added.IsReply() {
+				fmt.Fprintf(errOut, "sbnn: %s replies to %s on %s%s\n", added.ID, added.ReplyTo, added.Path, lineRangeOf(added))
+			} else {
+				fmt.Fprintf(errOut, "sbnn: %s on %s%s\n", added.ID, added.Path, lineRangeOf(added))
+			}
 		}
 	}
 	if commentJSONOut {
@@ -215,6 +242,15 @@ func reportStored(out, errOut io.Writer, stored []*model.Comment, total int, cau
 // writes the prompt.
 func requestLines(req server.AddCommentRequest) string {
 	return lineSuffix(req.StartLine, req.EndLine)
+}
+
+// requestPlace names what a request is about, for an error: its place, or the
+// comment it replies to when it names no place.
+func requestPlace(req server.AddCommentRequest) string {
+	if req.ReplyTo != "" && req.Path == "" {
+		return "reply to " + req.ReplyTo
+	}
+	return req.Path + requestLines(req)
 }
 
 func lineRangeOf(c *model.Comment) string {
@@ -267,6 +303,42 @@ func singleComment(spec string) ([]server.AddCommentRequest, error) {
 	}}, nil
 }
 
+// replyComment builds the request for --reply-to. A place given beside it is
+// passed along for the server to check against the thread, and --side only
+// when it was typed: its default would otherwise contradict every thread on
+// the old side.
+func replyComment(args []string, sideGiven bool) ([]server.AddCommentRequest, error) {
+	req := server.AddCommentRequest{
+		ReplyTo: commentReplyTo,
+		DiffID:  commentDiffID,
+		Author:  commentAuthor,
+		Body:    commentBody,
+	}
+	if len(args) == 1 {
+		path, start, end, err := parseLineSpec(args[0])
+		if err != nil {
+			return nil, err
+		}
+		req.Path, req.StartLine, req.EndLine = path, start, end
+	}
+	if sideGiven {
+		side, err := normalizeSide(commentSide)
+		if err != nil {
+			return nil, err
+		}
+		req.Side = side
+	}
+	suggestion, err := suggestionText()
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(commentBody) == "" && suggestion == "" {
+		return nil, fmt.Errorf("say something with -m, or propose something with --suggest")
+	}
+	req.Suggestion = suggestion
+	return []server.AddCommentRequest{req}, nil
+}
+
 // suggestionText resolves --suggest and --suggest-file.
 func suggestionText() (string, error) {
 	switch {
@@ -304,6 +376,9 @@ type bulkComment struct {
 	Question *bool  `json:"question"`
 	Author   string `json:"author"`
 	DiffID   string `json:"diffId"`
+	// ReplyTo answers the comment with this ID, in its thread and on its
+	// lines, which is why an entry that has it needs no path.
+	ReplyTo string `json:"replyTo"`
 }
 
 // flexLines accepts "12", "12-18" and 12 alike.
@@ -370,8 +445,16 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 	}
 	requests := make([]server.AddCommentRequest, 0, len(entries))
 	for i, e := range entries {
+		if e.ReplyTo != "" {
+			req, err := bulkReply(i, e)
+			if err != nil {
+				return nil, err
+			}
+			requests = append(requests, req)
+			continue
+		}
 		if e.Path == "" {
-			return nil, fmt.Errorf("comment %d has no path", i+1)
+			return nil, fmt.Errorf("comment %d has no path, and replies to no comment", i+1)
 		}
 		start, end := e.Line.Start, e.Line.End
 		if start == 0 {
@@ -424,6 +507,41 @@ func readBulkComments(r io.Reader) ([]server.AddCommentRequest, error) {
 		})
 	}
 	return requests, nil
+}
+
+// bulkReply builds the request for an entry of --json that answers a comment.
+// A place it names as well is passed along for the server to check.
+func bulkReply(i int, e bulkComment) (server.AddCommentRequest, error) {
+	if strings.TrimSpace(e.Body) == "" && strings.TrimSpace(e.Suggestion) == "" {
+		return server.AddCommentRequest{}, fmt.Errorf("comment %d (reply to %s) says nothing", i+1, e.ReplyTo)
+	}
+	if e.Question != nil && *e.Question {
+		return server.AddCommentRequest{}, fmt.Errorf("comment %d (reply to %s) is a question: "+
+			"a reply cannot be one, mark the comment that opens the thread instead", i+1, e.ReplyTo)
+	}
+	start, end := e.Line.Start, e.Line.End
+	if start == 0 {
+		start, end = e.StartLine, e.EndLine
+	}
+	author := e.Author
+	if author == "" {
+		author = commentAuthor
+	}
+	diffID := e.DiffID
+	if diffID == "" {
+		diffID = commentDiffID
+	}
+	return server.AddCommentRequest{
+		ReplyTo:    e.ReplyTo,
+		DiffID:     diffID,
+		Path:       e.Path,
+		Author:     author,
+		Side:       strings.ToLower(strings.TrimSpace(e.Side)),
+		StartLine:  start,
+		EndLine:    end,
+		Body:       e.Body,
+		Suggestion: e.Suggestion,
+	}, nil
 }
 
 // suggestionNeedsLines refuses a suggestion on a comment that names no

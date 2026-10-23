@@ -277,7 +277,7 @@ func printReviews(w io.Writer, records []history.Record) error {
 			rec.ReviewedAt.Local().Format("2006-01-02 15:04"),
 			rec.Group,
 			rec.Verdict.String(),
-			len(rec.Comments),
+			rec.Threads(),
 			suggestionCount(rec),
 			rec.Files, rec.Additions, rec.Deletions,
 			waited(rec),

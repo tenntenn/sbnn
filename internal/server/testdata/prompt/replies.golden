@@ -1,0 +1,59 @@
+# Review comments (sbnn group "api")
+
+The reviewer asked for changes; the change should not go ahead as it is.
+
+2 comment(s) to address, 1 of them a question.
+
+## 1. handler.go:12-14
+
+Comment ID: c1
+
+Diff: handler: return 404 for unknown ids
+
+This one is a question, and it has been answered below.
+
+```
+for i := 0; i < 3; i++ {
+```
+
+Was the retry loop deliberate?
+
+### Reply from claude
+
+Yes: the backend drops the first connection after a deploy.
+
+### Reply from the reviewer
+
+Then say so in a comment, and bound it:
+
+```suggestion
+for i := 0; i < maxRetries; i++ {
+```
+
+The suggestion block above replaces handler.go:12-14.
+
+## 2. handler.go:40
+
+Comment ID: c2
+
+Diff: handler: return 404 for unknown ids
+
+This one is a question: answer it.
+
+```
+return errNotFound
+```
+
+Why a 404 here?
+
+### Reply from the reviewer
+
+I mean rather than a 410.
+
+---
+
+Address every comment above. A suggestion block replaces the lines it names, verbatim. When a comment is not worth acting on, say why instead of changing the code.
+
+A comment with replies under it is a conversation: read it to the end, because the newest reply is where it stands now.
+
+A comment marked as a question is asking for an answer, not for a change. Answer it in words - as a reply to it where you can, with `sbnn comment --reply-to <its comment ID> -m "..."`, so the answer sits next to the line - and change the code only if your own answer says it should change. Leaving a question unanswered is the one thing that makes the reviewer ask it again.

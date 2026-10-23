@@ -134,6 +134,11 @@ Review comments:
 
   $ sbnn comment main.go:42 -m "Should this be a 404?" --author claude
 
+  Either side answers a comment in its thread, by the ID sbnn comments
+  prints, rather than starting a new one on the same lines:
+
+  $ sbnn comment --reply-to c3 -m "Yes, it should" --author claude
+
 Reviewing without a browser:
   A reviewer that is not a person leaves its comments the same way and ends
   the round itself, which is what the Submit button does.

@@ -70,6 +70,19 @@ func mutate(t *testing.T, s *Store, step string) {
 		if _, err := s.AddComment(c); err != nil {
 			t.Fatal(err)
 		}
+	case "reply to comment", "reply to the newest comment":
+		g, _ := s.Group(DefaultGroup)
+		to := g.Comments[0].ID
+		if step == "reply to the newest comment" {
+			to = g.Comments[len(g.Comments)-1].ID
+		}
+		if _, err := s.AddComment(&model.Comment{Group: DefaultGroup, Author: "claude", Body: "answer", ReplyTo: to}); err != nil {
+			t.Fatal(err)
+		}
+	case "reopen thread from its last comment":
+		g, _ := s.Group(DefaultGroup)
+		reopen := false
+		s.UpdateComment(DefaultGroup, g.Comments[len(g.Comments)-1].ID, CommentPatch{Resolved: &reopen})
 	case "edit comment":
 		s.UpdateComment(DefaultGroup, firstCommentID(t, s, DefaultGroup), CommentPatch{Body: &body, Resolved: &resolved})
 	case "delete comment":
@@ -109,7 +122,12 @@ func TestEveryMutationIsOnDiskWhenItReturns(t *testing.T) {
 	steps := []string{
 		"add diff",
 		"add comment",
+		"reply to comment",
 		"add comment",
+		"reply to the newest comment",
+		"reply to the newest comment",
+		"edit comment",
+		"reopen thread from its last comment",
 		"edit comment",
 		"add hook",
 		"record hook run",
@@ -119,6 +137,7 @@ func TestEveryMutationIsOnDiskWhenItReturns(t *testing.T) {
 		"delete comment",
 		"clear resolved comments",
 		"add comment",
+		"reply to comment",
 		"clear comments",
 		"delete hooks",
 		"delete diff",

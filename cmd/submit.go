@@ -93,12 +93,7 @@ func runSubmit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	open := 0
-	for _, cm := range g.Comments {
-		if !cm.Resolved {
-			open++
-		}
-	}
+	open := model.OpenThreads(g.Comments)
 	switch {
 	case submitQuiet:
 	case jsonOutput:

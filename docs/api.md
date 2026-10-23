@@ -446,6 +446,10 @@ HTTP/1.1 404 Not Found
 
 The comments of a group, oldest first. → array of [`Comment`](#comment)
 
+The list is flat: a reply is an entry of its own, after the comment it
+answers, naming it in `replyTo`. A client that does not know about replies
+reads them as comments on the same lines, which is what they are.
+
 ### `POST /_/api/groups/{group}/comments`
 
 Leave a comment. → [`AddCommentRequest`](#addcommentrequest) →
@@ -458,8 +462,28 @@ the diff when it is not given.
 | status | when |
 | --- | --- |
 | 200 | stored |
-| 400 | an unusable `side`, a line range that cannot exist, a `fileId` naming no file of its diff, an empty body |
+| 400 | an unusable `side`, a line range that cannot exist, a `fileId` naming no file of its diff, an empty body; for a reply, a place that is not its thread's, `question`, or a suggestion on a thread with no new-side lines |
+| 404 | `replyTo` names no comment of this group |
 | 413 | past 1 MB |
+
+**A reply** sets `replyTo` to the id of the comment it answers and needs
+nothing else but a `body`:
+
+```console
+$ curl -X POST -H 'Content-Type: application/json' localhost:6280/_/api/groups/api/comments -d '{
+  "replyTo": "c1", "author": "claude", "body": "Yes: notes.md sits next to it."
+}'
+{ "id": "c2", "replyTo": "c1", "path": "docs/guide.md", "startLine": 3, "...": "the anchor of c1" }
+```
+
+It joins the thread `replyTo` is in — the thread's first comment, when
+`replyTo` names a reply, since threads are one level deep — and takes that
+comment's `diffId`, `fileId`, `path`, `side`, `startLine`, `endLine`,
+`snippet` and `resolved`. Any of the place fields sent along must agree with
+the thread's, or the reply is refused rather than put somewhere else. A reply
+is never a `question`: whether a thread asks something is said by its first
+comment. A comment in another group is not found, since a reply is on the
+lines of its own group's diff.
 
 ```console
 $ curl -X POST -H 'Content-Type: application/json' localhost:6280/_/api/groups/api/comments -d '{
@@ -493,6 +517,10 @@ Change a comment. → [`UpdateCommentRequest`](#updatecommentrequest) →
 Every field is a pointer: omit one and it is left alone. `404 no such comment`
 for an unknown id.
 
+`resolved` is the state of a thread, not of one comment: set on the first
+comment or on any reply, it resolves or reopens the thread, and every reply
+in it answers with the same `resolved`. `question: true` on a reply is `400`.
+
 ```console
 $ curl -X PATCH -d '{"resolved":true}' localhost:6280/_/api/groups/api/comments/c1
 { "id": "c1", "...": "the whole comment, with resolved true and updatedAt moved" }
@@ -500,12 +528,15 @@ $ curl -X PATCH -d '{"resolved":true}' localhost:6280/_/api/groups/api/comments/
 
 ### `DELETE /_/api/groups/{group}/comments/{id}`
 
-Drop one comment. `204` with no body, or `404 no such comment`.
+Drop one comment. `204` with no body, or `404 no such comment`. Dropping the
+first comment of a thread drops its replies with it; dropping a reply drops
+only the reply.
 
 ### `DELETE /_/api/groups/{group}/comments`
 
 Clear the comments of a group and say how many went. `?resolved=true` keeps
-what is still open.
+what is still open. A thread goes or stays whole, and `removed` counts
+threads: a comment and its replies are one.
 
 ```console
 $ curl -X DELETE 'localhost:6280/_/api/groups/api/comments?resolved=true'
@@ -532,6 +563,8 @@ $ curl 'localhost:6280/_/api/groups/api/prompt'
 
 ## 1. docs/guide.md:3
 
+Comment ID: c1
+
 Diff: Guide update
 
 From: agent
@@ -555,6 +588,11 @@ Address every comment above. A suggestion block replaces the lines it names, ver
 
 `?instruction=false` stops after the last comment, leaving off the closing
 paragraph.
+
+Only the comment that opens a thread is numbered and counted. Its replies
+follow it, each under `### Reply from <author>` (`the reviewer` for one
+written in the browser), and a question with a reply from anyone but its
+asker reads as answered and drops out of the count of questions.
 
 ### `POST /_/api/groups/{group}/review`
 
@@ -793,7 +831,7 @@ Two kinds of event, told apart by `type`:
 | `type` | payload | id |
 | --- | --- | --- |
 | `change` | `{"type":"change","group":"<name>"}` — a diff, comment or hook moved. `group` is empty when every group went at once. A change that touched nothing but comments adds `"scope":"comments"`, which tells a page it need not fetch the diffs again. No `scope` means anything may have changed. | none |
-| `review` | `{"type":"review","group","reviewedAt","comments","verdict"}` — a review was submitted. `comments` is how many are still open. | a counter |
+| `review` | `{"type":"review","group","reviewedAt","comments","verdict"}` — a review was submitted. `comments` is how many threads are still open, replies not counted. | a counter |
 
 A `:` ping goes out every 25 seconds so an idle connection is not collected.
 
@@ -880,8 +918,8 @@ directions.
 | `url` | string | the review page for this group |
 | `diffs` | number | rounds |
 | `files` | number | files across them |
-| `comments` | number | |
-| `unresolved` | number | |
+| `comments` | number | threads: a comment and its replies count once |
+| `unresolved` | number | open threads |
 | `reviewedAt` | time | omitted when never reviewed |
 | `reviewed` | bool | false again once a diff arrives after the last review |
 | `hooks` | number | |
@@ -983,9 +1021,10 @@ One file of a round. `internal/model`.
 | `startLine` | number | 0 for a comment about the file rather than a line |
 | `endLine` | number | |
 | `body` | string | Markdown |
-| `question` | bool | wants an answer, not a change. Omitted when false |
+| `question` | bool | wants an answer, not a change. Omitted when false, and always on a reply |
 | `snippet` | string | the lines commented on, as the diff wrote them |
-| `resolved` | bool | |
+| `replyTo` | string | the id of the comment opening the thread this one answers. Omitted on a comment that opens one |
+| `resolved` | bool | the thread's: a reply carries the state of the comment it answers |
 | `createdAt` | time | |
 | `updatedAt` | time | |
 | `suggestions` | array | the suggestion blocks parsed out of `body`, added by `MarshalJSON`. Omitted when there are none |
@@ -1074,8 +1113,9 @@ written to the session file on every review and shown on one line by
 | `endLine` | number | |
 | `body` | string | |
 | `snippet` | string | filled in from the diff when empty |
-| `question` | bool | |
+| `question` | bool | refused on a reply |
 | `suggestion` | string | appended to `body` as a fenced suggestion block |
+| `replyTo` | string | makes it a reply to that comment, on its thread's lines. Omitted otherwise |
 
 #### `UpdateCommentRequest`
 
@@ -1126,8 +1166,8 @@ omitted one is left alone.
 | `name` | string | |
 | `lastActivity` | time | as in [`GroupSummary`](#groupsummary). Omitted when there is none |
 | `diffs` | number | |
-| `comments` | number | |
-| `unresolved` | number | |
+| `comments` | number | threads |
+| `unresolved` | number | open threads |
 | `hooks` | number | |
 | `reason` | string | why it was kept: `recent`, `open-comments`, `hooks` or `not-listed`. Omitted for a closed review |
 
@@ -1196,10 +1236,12 @@ One submitted review. `internal/history`.
 #### `history.Comment`
 
 A comment inside a `Record`. Not `model.Comment`: a review record keeps what
-was said, not the ids of a round that may be gone.
+was said, not the round it was said in. The `id` is kept only so that a reply
+can say which comment it answers.
 
 | field | type | notes |
 | --- | --- | --- |
+| `id` | string | what the comment was called in its round, so `replyTo` can name it. Unique only within the record. Omitted by records written before replies |
 | `path` | string | |
 | `author` | string | omitted when empty |
 | `side` | string | |
@@ -1208,6 +1250,7 @@ was said, not the ids of a round that may be gone.
 | `body` | string | |
 | `suggestions` | array | omitted when there are none |
 | `question` | bool | omitted when false |
+| `replyTo` | string | the `id` of the comment this one answers, which comes before it. Omitted on a comment that opens a thread |
 | `resolved` | bool | |
 | `createdAt` | time | |
 
@@ -1218,8 +1261,9 @@ The tally over the reviews returned. `internal/history`.
 | field | type | notes |
 | --- | --- | --- |
 | `reviews` | number | |
-| `comments` | number | |
-| `suggestions` | number | |
+| `comments` | number | threads; replies are not counted here, nor in `resolved`, `silent` or the tallies |
+| `replies` | number | |
+| `suggestions` | number | in replies too |
 | `resolved` | number | |
 | `files` | number | |
 | `additions` | number | |
