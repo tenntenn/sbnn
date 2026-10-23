@@ -84,9 +84,9 @@ sbnn --clear --target <topic>         # close it: diffs, comments and hooks
 
 Two exceptions, both of which mean "do not clear":
 
-- You are sending the **next round** of a review you already started. Then
-  the group stays; clear the handled comments and send the new diff with
-  `--replace` instead (step 7).
+- You are sending the **next round** of a review you already started, or the
+  same diff again. Then the group stays; clear the handled comments and send
+  the diff with `--replace` instead (step 7).
 - The group holds **comments the human wrote that you have not addressed**.
   Say what is in there and ask before throwing it away.
 
@@ -131,6 +131,23 @@ lined up with one PR.
 sbnn prints the review URL and returns immediately; the server keeps running in
 the background. Running `sbnn` again adds another diff to the same page rather
 than starting a second server.
+
+**Sending the same diff again? Use `--replace`.** Plain `sbnn` never swaps a
+diff out: it adds one more beside what the group already shows. So whenever
+the diff you are about to send is the one the group already holds — sent
+again because you are not sure the first one arrived, regenerated after a
+fix, or its next version — send it with `--replace`, which drops the diffs
+the group held before (and the comments on them) once the new one is in:
+
+```
+git diff | sbnn --target <topic> --replace
+```
+
+Without it the human sees the same change twice, side by side, and has to
+work out which copy is current. Check first that no comment on the old diff
+is still unaddressed (step 7 says how). Send without `--replace` only when the
+new diff shows something the group does not already show, such as the next
+commit of a series read in order.
 
 **Fold away what nobody reads line by line.** A diff that arrives with a
 lock file and a directory of build output in it costs the human attention
