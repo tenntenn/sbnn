@@ -3,11 +3,13 @@ import { createPortal } from 'react-dom'
 import type { Comment, FileDiff, PreviewFormat, PreviewKind, Status } from '../types'
 import { filePath, hunksOf, previewFormatOf } from '../types'
 import { client, type PreviewResult } from '../client'
-import { assetTrouble, resolvePreviewLinks, type PreviewLinkTargets } from '../markdown'
+import { assetTrouble, renderRemovedMarkdown, resolvePreviewLinks, type PreviewLinkTargets } from '../markdown'
+import { markChanges, richChanges } from '../richDiff'
 import { Icon } from './Icon'
 import { MoIcon } from './MoIcon'
 import { SourceView } from './SourceView'
 import { CommentThread } from './CommentThread'
+import { ChangeMarksToggle } from './ChangeMarksToggle'
 import { PREVIEW_COMMENT_ID_PREFIX, blockRanges, diffSlots, placeComments } from '../previewComments'
 import { newSlot, resolveTargets } from '../previewSlots'
 import { language, rich, useT } from '../i18n'
@@ -46,6 +48,11 @@ interface Props {
    * a Markdown preview that can say which line is which. */
   comments?: Comment[]
   onChanged?: () => void
+  /** changeMarks and onChangeMarks put the change marks switch in this
+   * header. Only the narrow layout passes them: the wide one has it in the
+   * preview pane's toolbar, once for every file. */
+  changeMarks?: boolean
+  onChangeMarks?: (on: boolean) => void
 }
 
 /** formatOf is previewFormatOf with this page's answer to whether there is
@@ -194,6 +201,8 @@ export function PreviewFileSection({
   onUserScroll,
   comments,
   onChanged,
+  changeMarks,
+  onChangeMarks,
 }: Props) {
   const t = useT()
   const [preview, setPreview] = useState<PreviewResult | null>(null)
@@ -304,13 +313,29 @@ export function PreviewFileSection({
   //
   // The language is a dependency because the pass writes words of its own -
   // why a link leads nowhere - and those follow the page's language.
+  //
+  // The change marks go on before the links are resolved, so that a link in
+  // what a hunk removed is pointed at this page the same way. They are always
+  // in the HTML of a Markdown preview, and the switch that hides them is a
+  // class further up the page: turning them off and on again therefore leaves
+  // this string, and the comment threads drawn into it, alone.
   const lang = language()
-  const previewHTML = useMemo(
-    () =>
-      preview?.kind === 'html' ? resolvePreviewLinks(preview.html, filePath(file), linkTargets) : '',
+  const previewHTML = useMemo(() => {
+    if (preview?.kind !== 'html') return ''
+    // A file the diff added is all added, and a preview painted green from top
+    // to bottom says nothing the header's status does not.
+    const html =
+      format === 'markdown' && file.status !== 'added'
+        ? markChanges(
+            preview.html,
+            richChanges(hunksOf(file), preview.markdown, preview.complete),
+            (md) => renderRemovedMarkdown(md),
+            t('preview.removed'),
+          )
+        : preview.html
+    return resolvePreviewLinks(html, filePath(file), linkTargets)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [preview, file, linkTargets, lang],
-  )
+  }, [preview, file, format, linkTargets, lang])
 
   // The object itself has to be stable, not only the string in it: React
   // writes innerHTML again whenever it is handed a new object, which would
@@ -502,6 +527,9 @@ export function PreviewFileSection({
           </>
         )}
         <span className="spacer" />
+        {format === 'markdown' && renderHere && changeMarks !== undefined && onChangeMarks && (
+          <ChangeMarksToggle on={changeMarks} onChange={onChangeMarks} />
+        )}
         {!client.isStatic && (
           <span title={t('preview.reload')}>
             <button
