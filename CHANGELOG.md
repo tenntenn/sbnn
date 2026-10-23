@@ -6,6 +6,14 @@ into the release pull request it opens, and that is what lands here. Entries
 under `## Unreleased` are written by hand, and anything about a persisted
 format belongs under [Format changes](#format-changes) as well.
 
+## [v0.0.2](https://github.com/tenntenn/sbnn/compare/v0.0.1...v0.0.2) - 2026-10-23
+
+- Pin every action, check the pins with pinact, and document the repository's security settings by @tenntenn in https://github.com/tenntenn/sbnn/pull/427
+- Check action pins with pinact and document the repository's security settings by @tenntenn in https://github.com/tenntenn/sbnn/pull/429
+- Show the change inside the Markdown preview, like GitHub's rich diff (#430) by @tenntenn in https://github.com/tenntenn/sbnn/pull/432
+- Leave the exporter's own paths out of an exported page by @tenntenn in https://github.com/tenntenn/sbnn/pull/433
+- Tell the user about a newer release, and update the binary with sbnn update (#431) by @tenntenn in https://github.com/tenntenn/sbnn/pull/434
+
 ## [v0.0.1](https://github.com/tenntenn/sbnn/commits/v0.0.1) - 2026-10-23
 
 - Add sa: a stdin-driven local diff review server by @tenntenn in https://github.com/tenntenn/sbnn/pull/1
