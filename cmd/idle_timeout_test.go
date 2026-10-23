@@ -151,7 +151,7 @@ func TestBackgroundServerStopsOnceItHoldsNothing(t *testing.T) {
 // The flag has to be on the command line of the spawned server: it is a
 // different process, so a value only this one holds never reaches it.
 func TestSpawnedServerArgsCarryTheIdleTimeout(t *testing.T) {
-	args := backgroundServerArgs([]string{"--history-file", "off"})
+	args := backgroundServerArgs([]string{"--history-file", "off"}, "/repo")
 	i := slices.Index(args, "--idle-timeout")
 	if i < 0 {
 		t.Fatalf("args = %v, want --idle-timeout among them", args)

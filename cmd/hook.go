@@ -70,7 +70,7 @@ makes it useful and worth being deliberate about.`,
 func init() {
 	f := hookCmd.Flags()
 	f.StringVarP(&target, "target", "t", "", "Group name (default \"default\", or $SBNN_TARGET)")
-	f.IntVarP(&port, "port", "p", DefaultPort, "Server port")
+	f.IntVarP(&port, "port", "p", 0, portFlagHelp)
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
 	f.StringVar(&hookCommand, "on-review", "", "Shell command to run when a review is submitted")
 	f.StringVar(&hookURL, "on-review-url", "", "URL to POST to when a review is submitted")
@@ -143,9 +143,9 @@ func runHook(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	c := client.New(addr(), 5*time.Second)
-	if _, err := c.Status(ctx); err != nil {
-		return fmt.Errorf("no sbnn server found on %s", c.Addr)
+	c, _, err := connect(ctx, cmd, 5*time.Second)
+	if err != nil {
+		return err
 	}
 
 	switch action {

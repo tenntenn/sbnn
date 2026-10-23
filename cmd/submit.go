@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tenntenn/sbnn/internal/client"
 	"github.com/tenntenn/sbnn/internal/model"
 )
 
@@ -60,7 +59,7 @@ something open to address.`,
 func init() {
 	f := submitCmd.Flags()
 	f.StringVarP(&target, "target", "t", "", "Group name (default \"default\", or $SBNN_TARGET)")
-	f.IntVarP(&port, "port", "p", DefaultPort, "Server port")
+	f.IntVarP(&port, "port", "p", 0, portFlagHelp)
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
 	f.StringVarP(&submitNote, "note", "m", "", "What the review says as a whole")
 	f.StringVar(&submitVerdict, "verdict", "",
@@ -84,9 +83,9 @@ func runSubmit(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	c := client.New(addr(), 10*time.Second)
-	if _, err := c.Status(ctx); err != nil {
-		return fmt.Errorf("no sbnn server found on %s", c.Addr)
+	c, _, err := connect(ctx, cmd, 10*time.Second)
+	if err != nil {
+		return err
 	}
 
 	g, err := c.SubmitReview(ctx, group, submitNote, verdict)

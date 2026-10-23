@@ -17,6 +17,7 @@ import (
 
 	"github.com/tenntenn/sbnn/internal/client"
 	"github.com/tenntenn/sbnn/internal/mo"
+	"github.com/tenntenn/sbnn/internal/repository"
 	"github.com/tenntenn/sbnn/internal/server"
 	"github.com/tenntenn/sbnn/version"
 )
@@ -186,8 +187,10 @@ func Execute() {
 func init() {
 	f := rootCmd.Flags()
 	f.StringVarP(&target, "target", "t", "", "Group name the diff is added to (default \"default\", or $SBNN_TARGET)")
-	f.IntVarP(&port, "port", "p", DefaultPort, "Server port")
+	f.IntVarP(&port, "port", "p", 0, portFlagHelp)
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
+	f.StringVar(&repositoryFlag, "repository", "", "Repository the server belongs to (set by sbnn on the server it starts)")
+	f.MarkHidden("repository")
 	f.StringVar(&title, "title", "", "Title of the diff (defaults to a generated name)")
 	f.StringArrayVar(&labelFlags, "label", nil,
 		"key=value kept with the diff, repeatable once per key; spaces around the key and the value are dropped, and a repeated key is an error")
@@ -202,7 +205,8 @@ func init() {
 	f.BoolVar(&doRestart, "restart", false, "Restart the running server, keeping the session")
 	rootCmd.MarkFlagsMutuallyExclusive("shutdown", "restart")
 	f.BoolVar(&doClear, "clear", false, "Close the review: drop the diffs, comments and hooks of the group")
-	f.BoolVar(&clearAll, "all", false, "Close every review on the server; only meaningful with --clear, and refused without it")
+	f.BoolVar(&clearAll, "all", false,
+		"With --clear, close every review on the server; with --status, list the server of every repository. Refused without either")
 	f.BoolVar(&replaceDiffs, "replace", false,
 		"Once the new diff is added, drop the diffs the group already held (and the comments on them); hooks and the other comments stay. An empty diff replaces nothing: sbnn says so on stderr and still exits 0")
 	f.BoolVar(&assumeYes, "yes", false, "Skip the confirmation of --clear")
@@ -232,8 +236,8 @@ func moRunner() *mo.Runner {
 	return mo.New(moBin, moPort, moBind)
 }
 
-// validateClearFlags rejects --all on its own. clearAll is read inside
-// runClear and nowhere else, so sbnn --all used to fall through to the
+// validateClearFlags rejects --all on its own. clearAll is read by runClear
+// and runStatusAll and nowhere else, so sbnn --all used to fall through to the
 // ordinary "read stdin, add a diff, print the URL" path with the flag
 // ignored - a success message for something the user did not ask for, when
 // what they meant closes every review on the server.
@@ -241,17 +245,20 @@ func moRunner() *mo.Runner {
 // This is a hand check rather than cobra's "required together" pairing, which
 // reads "if one is given both are required" and would make plain sbnn
 // --clear, the ordinary way to close one review, an error.
-func validateClearFlags(doClear, clearAll bool) error {
-	if clearAll && !doClear {
-		return errors.New("--all only works with --clear (did you mean --clear --all?)")
+func validateClearFlags(doClear, showStatus, clearAll bool) error {
+	if clearAll && !doClear && !showStatus {
+		return errors.New("--all only works with --clear or --status (did you mean --clear --all?)")
 	}
 	return nil
 }
 
 func run(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
-	if err := validateClearFlags(doClear, clearAll); err != nil {
+	if err := validateClearFlags(doClear, showStatus, clearAll); err != nil {
 		return err
+	}
+	if cmd.Flags().Changed("repository") && !foreground {
+		return errRepositoryFlag
 	}
 
 	group, err := groupName(target)
@@ -268,15 +275,17 @@ func run(cmd *cobra.Command, _ []string) error {
 
 	switch {
 	case foreground:
-		return runServer(ctx)
+		return runServer(ctx, cmd)
+	case showStatus && clearAll:
+		return runStatusAll(ctx)
 	case showStatus:
-		return runStatus(ctx)
+		return runStatus(ctx, cmd)
 	case doShutdown:
-		return runShutdown(ctx)
+		return runShutdown(ctx, cmd)
 	case doRestart:
-		return runRestart(ctx)
+		return runRestart(ctx, cmd)
 	case doClear:
-		return runClear(ctx, group)
+		return runClear(ctx, cmd, group)
 	}
 
 	labels, err := parseLabels(labelFlags)
@@ -289,8 +298,12 @@ func run(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	ref, err := resolveServer(cmd, true)
+	if err != nil {
+		return err
+	}
 	c := client.New(addr(), uploadTimeout(len(content)))
-	st, started, err := ensureServer(ctx, c)
+	st, started, err := ensureServer(ctx, c, ref)
 	if err != nil {
 		return err
 	}
@@ -403,13 +416,20 @@ func shouldOpen(started bool) bool {
 	}
 }
 
-// ensureServer returns the status of the running server, starting one when
-// needed. started reports whether this invocation started it.
-func ensureServer(ctx context.Context, c *client.Client) (status *server.Status, started bool, err error) {
+// ensureServer returns the status of the server of ref, starting one when
+// needed. started reports whether this invocation started it. A server that
+// answers but belongs to another repository is refused, not added to.
+func ensureServer(ctx context.Context, c *client.Client, ref serverRef) (status *server.Status, started bool, err error) {
 	if st, err := probe(ctx, c, 500*time.Millisecond); err == nil {
+		if err := ref.check(st); err != nil {
+			return nil, false, err
+		}
 		return st, false, nil
 	}
-	st, err := spawnServer(ctx, c)
+	if err := ref.checkSpawn(); err != nil {
+		return nil, false, err
+	}
+	st, err := spawnServer(ctx, c, ref.repo)
 	if err != nil {
 		return nil, false, err
 	}
@@ -421,12 +441,27 @@ func probe(ctx context.Context, c *client.Client, timeout time.Duration) (*serve
 	return probeClient.Status(ctx)
 }
 
-func runStatus(ctx context.Context) error {
+// runStatus describes the server of the repository sbnn runs in, or the one
+// --port names. It never refuses a server for belonging to another
+// repository: saying whose it is, is what it is for.
+func runStatus(ctx context.Context, cmd *cobra.Command) error {
+	ref, err := resolveServer(cmd, false)
+	if err != nil {
+		return err
+	}
+	if ref.port == 0 {
+		if jsonOutput {
+			return writeJSON(map[string]any{"repository": ref.repo, "status": "not running"})
+		}
+		fmt.Printf("%s  not running: no server was ever started for it (sbnn --status --all lists the servers there are)\n",
+			repository.Describe(ref.repo))
+		return nil
+	}
 	c := client.New(addr(), 2*time.Second)
 	st, err := c.Status(ctx)
 	if err != nil {
 		if jsonOutput {
-			return writeJSON(map[string]any{"url": c.BaseURL(), "status": "not running"})
+			return writeJSON(map[string]any{"url": c.BaseURL(), "repository": ref.repo, "status": "not running"})
 		}
 		fmt.Printf("%s  not running\n", c.BaseURL())
 		return nil
@@ -435,6 +470,7 @@ func runStatus(ctx context.Context) error {
 		return writeJSON(st)
 	}
 	fmt.Printf("%s  running (pid %d, sbnn %s)\n", st.URL, st.PID, st.Version)
+	fmt.Printf("  repository: %s\n", statusRepository(st))
 	if st.MoAvailable {
 		fmt.Printf("  mo preview: %s\n", st.MoURL)
 	} else {
@@ -447,10 +483,27 @@ func runStatus(ctx context.Context) error {
 	return nil
 }
 
-func runShutdown(ctx context.Context) error {
+// runShutdown stops the server of the repository sbnn runs in. With --port it
+// stops whichever server is on that port, even another repository's:
+// stopping a server loses nothing, since its session stays on disk, and it is
+// the way out when a server sits on a port that is kept for someone else.
+func runShutdown(ctx context.Context, cmd *cobra.Command) error {
+	ref, err := resolveServer(cmd, false)
+	if err != nil {
+		return err
+	}
+	if ref.port == 0 {
+		return ref.errNoServer("")
+	}
 	c := client.New(addr(), 2*time.Second)
-	if _, err := c.Status(ctx); err != nil {
-		return fmt.Errorf("no sbnn server found on %s", c.Addr)
+	st, err := c.Status(ctx)
+	if err != nil {
+		return ref.errNoServer(c.Addr)
+	}
+	if !ref.explicit {
+		if err := ref.check(st); err != nil {
+			return err
+		}
 	}
 	if err := c.Shutdown(ctx); err != nil {
 		return err
@@ -462,9 +515,28 @@ func runShutdown(ctx context.Context) error {
 	return nil
 }
 
-func runRestart(ctx context.Context) error {
+// runRestart restarts the server of the repository sbnn runs in, or the one
+// on --port. The new server belongs to the repository the old one did, so a
+// restart run from anywhere keeps the server it restarted as it was; only a
+// server that belonged to none, from an older sbnn, takes the repository of
+// the directory the restart was run in.
+func runRestart(ctx context.Context, cmd *cobra.Command) error {
+	ref, err := resolveServer(cmd, true)
+	if err != nil {
+		return err
+	}
 	c := client.New(addr(), 2*time.Second)
-	if _, err := c.Status(ctx); err == nil {
+	running := false
+	if st, err := c.Status(ctx); err == nil {
+		running = true
+		if !ref.explicit {
+			if err := ref.check(st); err != nil {
+				return err
+			}
+		}
+		if st.Repository != nil {
+			ref.repo = *st.Repository
+		}
 		if err := c.Shutdown(ctx); err != nil {
 			return err
 		}
@@ -472,9 +544,14 @@ func runRestart(ctx context.Context) error {
 			return err
 		}
 	}
+	if !running {
+		if err := ref.checkSpawn(); err != nil {
+			return err
+		}
+	}
 	// The session lives in the state file, so the new server comes back with
 	// the same diffs and comments.
-	st, err := spawnServer(ctx, c)
+	st, err := spawnServer(ctx, c, ref.repo)
 	if err != nil {
 		return err
 	}
@@ -485,13 +562,12 @@ func runRestart(ctx context.Context) error {
 	return nil
 }
 
-func runClear(ctx context.Context, group string) error {
-	c := client.New(addr(), 2*time.Second)
+func runClear(ctx context.Context, cmd *cobra.Command, group string) error {
 	// The status already carries what is about to be lost, which is what the
 	// confirmation is built from - no new endpoint needed.
-	st, err := c.Status(ctx)
+	c, st, err := connect(ctx, cmd, 2*time.Second)
 	if err != nil {
-		return fmt.Errorf("no sbnn server found on %s", c.Addr)
+		return err
 	}
 	if clearAll {
 		ok, err := askBeforeClear(clearAllQuestion(st.Groups))

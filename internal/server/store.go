@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/tenntenn/sbnn/internal/model"
+	"github.com/tenntenn/sbnn/internal/repository"
 )
 
 // DefaultGroup is the group diffs land in when no --target is given. It is
@@ -69,6 +70,9 @@ type Store struct {
 	dirty bool
 	// compactMin is the log size below which the snapshot is left alone.
 	compactMin int
+	// repository is the repository the session belongs to, nil while it
+	// belongs to none in particular.
+	repository *string
 }
 
 // NewStore returns a store persisting to path. An empty path disables
@@ -88,6 +92,11 @@ type persisted struct {
 	Groups []*model.Group `json:"groups"`
 	// Rounds is how many rounds each group has held.
 	Rounds map[string]int `json:"rounds,omitempty"`
+	// Repository is the repository the session belongs to: its root, or ""
+	// for the diffs sent from outside any repository. A session written
+	// before servers belonged to a repository has none, and takes the
+	// repository of the first server that loads it.
+	Repository *string `json:"repository,omitempty"`
 }
 
 const persistVersion = 2
@@ -155,6 +164,7 @@ func (s *Store) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.snapBytes, s.logBytes = sess.snapBytes, sess.logBytes
+	s.repository = p.Repository
 	// A snapshot with no newline after it is the file an older sbnn wrote, and
 	// a log tail that was cut short is a write the server never answered. Both
 	// leave the file unfit to append to, so the next mutation rewrites it.
@@ -273,6 +283,42 @@ func (s *Store) PersistError() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.persistErr
+}
+
+// Repository returns the repository the session belongs to, nil when it
+// belongs to none in particular.
+func (s *Store) Repository() *string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.repository
+}
+
+// BindRepository ties the session to the repository of the server holding
+// it, and refuses a session that already belongs to another one: loading it
+// would put one repository's reviews on the server of another, which is the
+// mixing a server per repository exists to end. A session that belongs to no
+// repository yet - written by an older sbnn, or new - is taken over, and the
+// next write records whose it is. A nil repo leaves the session as it is.
+func (s *Store) BindRepository(repo *string) error {
+	if repo == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.repository != nil {
+		if *s.repository != *repo {
+			return fmt.Errorf("session file %s belongs to the server of %s, not of %s: "+
+				"start this server from that repository, or on another port",
+				s.path, repository.Describe(*s.repository), repository.Describe(*repo))
+		}
+		return nil
+	}
+	r := *repo
+	s.repository = &r
+	// Only a whole snapshot carries the repository, so the next change
+	// writes one rather than appending to a file that does not say it.
+	s.dirty = true
+	return nil
 }
 
 // roundsSoFar guesses how many rounds a group loaded from an older session

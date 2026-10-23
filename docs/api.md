@@ -36,8 +36,13 @@ review log — are recorded under "Format changes" in
 
 ## Reaching the server
 
-The server listens on `localhost:6280` by default (`--port`, `--bind`). Every
-endpoint is under `http://localhost:6280`.
+Each repository has a server of its own, on a port of its own: the first one
+sbnn starts gets `localhost:6280`, the next `6281`, and so on, and the port a
+repository was given is kept in `servers.json` in the state directory so its
+URLs stay the same across restarts. `sbnn --status` prints the server of the
+repository it runs in, and `sbnn --status --all --json` lists every one with
+its `port` and `url`. The examples below use `localhost:6280`; every endpoint
+is under the `url` of the server you mean.
 
 There is **no authentication**. sbnn binds loopback, and a page on another site
 that tries to change something is refused by
@@ -47,7 +52,9 @@ port can drive the review.
 
 `GET /_/api/status` is also how a client finds out whether a server is running
 at all: `internal/client` calls it before everything else and reports "no sbnn
-server found on ..." when it does not answer.
+server found on ..." when it does not answer. Its `repository` says whose
+server it is, which is how the CLI refuses a `--port` that names another
+repository's server.
 
 ## Conventions
 
@@ -163,7 +170,8 @@ $ curl localhost:6280/_/api/status
   "moProxyUrl": "http://127.0.0.1:37133",
   "moAvailable": false,
   "moError": "mo is not installed: install mo with `brew install k1LoW/tap/mo`, or download a binary from https://github.com/k1LoW/mo/releases",
-  "groups": []
+  "groups": [],
+  "repository": "/Users/me/src/project"
 }
 ```
 
@@ -860,6 +868,7 @@ directions.
 | `moError` | string | why not, when it cannot. Omitted when it can |
 | `groups` | array | [`GroupSummary`](#groupsummary) |
 | `sessionError` | string | why the session is not reaching disk. Omitted while it is |
+| `repository` | string | the repository the server belongs to: the root of its main working tree, or `""` for the server of the diffs sent from outside any repository. Omitted by a server started before servers belonged to a repository |
 
 #### `GroupSummary`
 

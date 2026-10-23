@@ -56,7 +56,7 @@ a pipeline can carry on by itself:
 func init() {
 	f := waitCmd.Flags()
 	f.StringVarP(&target, "target", "t", "", "Group name (default \"default\", or $SBNN_TARGET)")
-	f.IntVarP(&port, "port", "p", DefaultPort, "Server port")
+	f.IntVarP(&port, "port", "p", 0, portFlagHelp)
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
 	f.DurationVar(&waitTimeout, "timeout", 0, "Give up after this long (0 waits forever)")
 	f.StringVar(&waitFormat, "format", "prompt", "Output format: prompt, markdown or json")
@@ -84,9 +84,9 @@ func runWait(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	c := client.New(addr(), 10*time.Second)
-	if _, err := c.Status(ctx); err != nil {
-		return fmt.Errorf("no sbnn server found on %s", c.Addr)
+	c, _, err := connect(ctx, cmd, 10*time.Second)
+	if err != nil {
+		return err
 	}
 
 	// --timeout bounds the wait. Printing the review afterwards is not part

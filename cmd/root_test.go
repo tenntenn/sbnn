@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/tenntenn/sbnn/internal/server"
 )
 
@@ -35,7 +37,7 @@ func TestValidateClearFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateClearFlags(tt.doClear, tt.clearAll)
+			err := validateClearFlags(tt.doClear, false, tt.clearAll)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("validateClearFlags(%v, %v) = nil; want an error", tt.doClear, tt.clearAll)
@@ -303,7 +305,7 @@ func TestClearCancelledIsAnError(t *testing.T) {
 			os.Stdin = answers
 			stdinIsTerminal = func() bool { return true }
 
-			err = runClear(context.Background(), "default")
+			err = runClear(context.Background(), &cobra.Command{}, "default")
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("runClear = %v; want %v", err, tt.wantErr)
 			}
