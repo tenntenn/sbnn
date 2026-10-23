@@ -1,11 +1,29 @@
 name: release
 
-# tagpr pushes the tag when its release pull request is merged (see
-# tagpr.yml), and that push is what builds the binaries. Nothing here decides
-# what the version is: the tag does.
+# Builds the binaries for a tag and attaches them to its GitHub release.
+# Nothing here decides what the version is: the tag does.
+#
+# tagpr.yml calls this with the tag it pushed when its release pull request
+# was merged; a tag tagpr pushes with GITHUB_TOKEN would not start this on its
+# own. A tag pushed by hand does, through the push trigger, and an existing
+# tag can be built again from the Actions tab.
 on:
   push:
     tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: The tag to build and release.
+        required: true
+        type: string
+  # By hand, for a tag whose release has no binaries yet - one cut before
+  # tagpr.yml called this, or one whose build failed.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to build and release, such as v0.0.1.
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -24,6 +42,8 @@ jobs:
           # from is reachable from the checkout.
           fetch-depth: 0
           persist-credentials: false
+          # The tag the caller names, or the one that was pushed.
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
