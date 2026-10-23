@@ -159,7 +159,14 @@ Starting and stopping:
   $ sbnn --shutdown                 # stop the server
   $ sbnn --restart                  # restart it, keeping the session
   $ sbnn --clear                    # close a review: its diffs, comments, hooks
-  $ sbnn --clear --all              # close every review on the server`,
+  $ sbnn --clear --all              # close every review on the server
+  $ sbnn prune --dry-run            # what a prune would close and remove
+  $ sbnn prune                      # close reviews left alone for 7 days
+
+  Nothing else closes a review that was forgotten. sbnn prune keeps the ones
+  still holding open comments or hooks unless told --force, and also removes
+  what servers that are no longer running left in the state and cache
+  directories.`,
 	Args:         cobra.NoArgs,
 	RunE:         run,
 	SilenceUsage: true,
@@ -214,7 +221,7 @@ func init() {
 	f.StringVar(&historyPath, "history-file", "",
 		historyFileHelp("Where submitted reviews are written down"))
 
-	rootCmd.AddCommand(commentCmd, commentsCmd, exportCmd, hookCmd, reviewsCmd, skillCmd, submitCmd, waitCmd)
+	rootCmd.AddCommand(commentCmd, commentsCmd, exportCmd, hookCmd, pruneCmd, reviewsCmd, skillCmd, submitCmd, waitCmd)
 }
 
 func addr() string {

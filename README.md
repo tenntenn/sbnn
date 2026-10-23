@@ -130,6 +130,8 @@ $ sbnn --clear -t api    # close that review: its diffs, comments and hooks
 $ sbnn --clear --all     # close every review the server holds
 $ sbnn --restart         # restart, keeping the session
 $ sbnn --shutdown        # stop the server
+$ sbnn prune --dry-run   # what a prune would close and remove
+$ sbnn prune             # close the reviews left alone for a week
 ```
 
 **Close** in the header does the same for the review you are looking at, once
@@ -148,6 +150,33 @@ sets the stretch, and `--idle-timeout 0` keeps the server resident:
 $ git diff | sbnn --idle-timeout 4h   # stay up longer
 $ git diff | sbnn --idle-timeout 0    # stay up until told to stop
 ```
+
+That leaves the reviews nobody closed. An agent that sends a diff and moves on
+leaves its review on the server for good, and a few months of that is a
+sidebar of reviews nobody will open again. `sbnn prune` closes the reviews
+nothing has happened to for a week — no diff sent, no comment written or
+edited, no review submitted, no hook registered or run. `--older-than` takes
+another age or a date (`30d`, `36h`, `2026-01-31`), the way
+`sbnn reviews --since` does.
+
+```console
+$ sbnn prune --dry-run           # what would be closed, what is kept and why
+$ sbnn prune --older-than 30d    # close what has been left for a month
+```
+
+An old review is still kept while it holds a comment nobody resolved or a hook
+waiting for the review, and prune says which it kept and why; `--force` closes
+those as well. Like `--clear --all`, it lists what it is about to close and
+asks first, unless you pass `--yes` or nobody is at the terminal.
+
+Prune also clears up after servers that are no longer running. The state
+directory keeps a `session-<port>.json` and a `server-<port>.log` for every
+port a server ever ran on; prune removes both for a port where no sbnn server
+answers, once every review in that session would be closed by the same rule.
+A running server's files are never touched, and neither is `reviews.jsonl`,
+the log `sbnn reviews` reads. The Markdown previews sbnn rebuilt from diffs go
+once no server and no remaining session holds their review; closing a review,
+or replacing a round with `--replace`, removes its previews straight away.
 
 ### Groups
 
@@ -741,6 +770,7 @@ to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
 | `sbnn submit` | End the round, as the Submit button does | `--note` (`-m`), `--verdict` (`approved`, `commented`, `changes-requested`), `--approve`, `--request-changes`, `--exit-code`, `--quiet` |
 | `sbnn wait` | Block until the review is submitted, then print it | `--timeout`, `--format`, `--json`, `--exit-code`, `--quiet` |
 | `sbnn hook` | Run something when a review is submitted | `--on-review`, `--on-review-url`, `--clear`, `--json` |
+| `sbnn prune` | Close reviews left alone for a while, and remove what stopped servers left behind | `--older-than`, `--force`, `--dry-run`, `--yes`, `--json` |
 | `sbnn reviews` | Read the log of submitted reviews | `--since`, `--stats`, `--top`, `--limit`, `--comments`, `--all`, `--file`, `--history-file`, `--format` (`text`, `json`, `jsonl`) |
 | `sbnn export [file]` | Write the review as one self-contained HTML page | `--fragment`, `--page-title`, `--title` |
 | `sbnn skill` | Print or install the agent skill | `--list`, `--install`, `--force`, `--refresh` |
