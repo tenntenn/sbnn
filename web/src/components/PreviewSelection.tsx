@@ -4,6 +4,7 @@ import { client } from '../client'
 import { isMac, isSelectingPress } from '../selectionPress'
 import { CommentForm } from './CommentThread'
 import { SLOT_CLASS } from '../previewComments'
+import { useT } from '../i18n'
 
 interface Props {
   group: string
@@ -278,6 +279,7 @@ function caretPoint(selection: Selection): Point | null {
  * off that preview's own element.
  */
 export function PreviewSelection({ group, onChanged }: Props) {
+  const t = useT()
   const [capture, setCapture] = useState<Capture | null>(null)
   const menu = useRef<HTMLDivElement>(null)
   // The document level listeners below are attached once and read the
@@ -568,8 +570,8 @@ export function PreviewSelection({ group, onChanged }: Props) {
       {!capture.drafting ? (
         <button
           className="ghost selection-add"
-          title={`Comment on ${label}`}
-          aria-label={`Comment on ${label}`}
+          title={t('selection.commentOn', { range: label })}
+          aria-label={t('selection.commentOn', { range: label })}
           onClick={() => setCapture((c) => (c ? { ...c, drafting: true } : c))}
         >
           +
@@ -579,7 +581,7 @@ export function PreviewSelection({ group, onChanged }: Props) {
           label={label}
           seed={capture.text}
           canSuggest
-          hint="Selected in the preview; the comment covers the lines it touches"
+          hint={t('selection.hint')}
           onSubmit={submit}
           onCancel={clear}
         />

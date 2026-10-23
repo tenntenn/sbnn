@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import { applyDocumentLanguage } from './i18n'
 import { applyPageTitle } from './pageTitle'
 import { startURLState } from './urlState'
 import './styles.css'
@@ -8,6 +9,9 @@ import './styles.css'
 // Before anything is drawn, so a tab restored in the background is already
 // named even if React never gets around to rendering it.
 applyPageTitle()
+// index.html and the exported page both say lang="en"; the language the
+// page is about to speak is known now, before the first word is drawn.
+applyDocumentLanguage()
 
 const root = document.getElementById('root')
 if (root) {

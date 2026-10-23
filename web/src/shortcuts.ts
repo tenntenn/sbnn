@@ -1,3 +1,5 @@
+import { t, type MessageKey } from './i18n'
+
 /**
  * The keys the review page answers to.
  *
@@ -15,30 +17,39 @@
  */
 export interface Shortcut {
   keys: string[]
-  what: string
+  /** what is the line the overlay prints, in the page's current language. */
+  readonly what: string
+}
+
+/** row keeps the catalog key and reads the sentence when it is asked for, so
+ * a row read after the reader switched language says it in the new one. */
+function row(keys: string[], key: MessageKey): Shortcut {
+  return {
+    keys,
+    get what() {
+      return t(key)
+    },
+  }
 }
 
 export const shortcuts: Shortcut[] = [
-  { keys: ['j'], what: 'Next file' },
-  { keys: ['k'], what: 'Previous file' },
-  { keys: ['/'], what: 'Search paths and lines' },
-  { keys: ['n'], what: 'Next comment' },
-  { keys: ['p'], what: 'Previous comment' },
-  { keys: ['f'], what: 'Fold or unfold this file' },
-  { keys: ['v'], what: 'Split or unified' },
-  { keys: ['s'], what: 'Follow the diff with the preview' },
+  row(['j'], 'key.nextFile'),
+  row(['k'], 'key.previousFile'),
+  row(['/'], 'key.search'),
+  row(['n'], 'key.nextComment'),
+  row(['p'], 'key.previousComment'),
+  row(['f'], 'key.fold'),
+  row(['v'], 'key.viewMode'),
+  row(['s'], 'key.sync'),
   // Handled by the gutter cell itself rather than by the page, because it
   // needs the line that has focus. Listed all the same: the overlay is where
   // a reader looks to find out what the keyboard can do, and tabbing until
   // something happens is not a route anybody finds on purpose - which is why
   // the sentence names the Tab that gets there.
-  {
-    keys: ['Enter', 'Space'],
-    what: 'Comment on a line: Tab to its line number, then press. Shift extends the range',
-  },
-  { keys: ['r'], what: 'Submit review' },
-  { keys: ['?'], what: 'This list' },
-  { keys: ['Esc'], what: 'Close what is open' },
+  row(['Enter', 'Space'], 'key.commentLine'),
+  row(['r'], 'key.submit'),
+  row(['?'], 'key.help'),
+  row(['Esc'], 'key.escape'),
 ]
 
 /**

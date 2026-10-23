@@ -8,6 +8,7 @@ import { Code } from './Code'
 import { CommentForm, CommentThread } from './CommentThread'
 import { Icon } from './Icon'
 import { foldLabel } from '../foldLabel'
+import { t, useT, type MessageKey } from '../i18n'
 
 interface Props {
   group: string
@@ -123,6 +124,7 @@ export function DiffFileSection({
   viewMode,
   onSetViewMode,
 }: Props) {
+  const t = useT()
   // A new or deleted file has only one side, so side by side makes no sense
   // for it and the toggle stays locked on unified. A narrow screen has no
   // room for two columns either.
@@ -282,7 +284,7 @@ export function DiffFileSection({
 
   const selectionLabel = selection
     ? `${filePath(file)}:${selection.start}${selection.end > selection.start ? `-${selection.end}` : ''}` +
-      `${selection.side === 'old' ? ' (old)' : ''}`
+      `${selection.side === 'old' ? t('diff.old') : ''}`
     : ''
 
   const renderExtras = (side: Side, line: number) => {
@@ -299,7 +301,7 @@ export function DiffFileSection({
             label={selectionLabel}
             seed={currentText(file, selection)}
             canSuggest={selection.side === 'new'}
-            hint="Drag across the line numbers, or shift-click one, to cover more lines"
+            hint={t('diff.rangeHint')}
             onSubmit={submitComment}
             onCancel={() => setSelection(null)}
           />
@@ -315,12 +317,12 @@ export function DiffFileSection({
           className="diff-title"
           onClick={() => onSetFolded(!folded)}
           aria-expanded={!folded}
-          title={folded ? 'Show this file' : 'Fold this file away'}
+          title={folded ? t('diff.show') : t('diff.fold')}
         >
           <span className="disclosure">
             <Icon name={folded ? 'chevron_right' : 'expand_more'} small />
           </span>
-          <span className={`status status-${file.status}`}>{file.status}</span>
+          <span className={`status status-${file.status}`}>{t(`status.${file.status}` as MessageKey)}</span>
           <span className="path">
             {file.status === 'renamed' || file.status === 'copied'
               ? `${file.oldPath} → ${file.newPath}`
@@ -337,38 +339,38 @@ export function DiffFileSection({
               setDraftingFile((open) => !open)
             }}
             aria-expanded={draftingFile}
-            title="Comment on this file as a whole, without pointing at a line"
+            title={t('diff.commentOnFileTitle')}
           >
-            comment on file
+            {t('diff.commentOnFile')}
           </button>
           {locked ? (
             <span
               className="hint"
               title={
                 narrow
-                  ? 'Side by side needs a wider window'
-                  : 'A file without an old side is always shown unified'
+                  ? t('diff.unifiedNarrow')
+                  : t('diff.unifiedOneSide')
               }
             >
-              unified
+              {t('diff.unified')}
             </span>
           ) : (
             <div className="toggle">
               <button
                 className={mode === 'split' ? 'active' : ''}
                 onClick={() => onSetViewMode('split')}
-                title="Old and new side by side"
+                title={t('diff.splitTitle')}
               >
                 <Icon name="view_column" small />
-                split
+                {t('diff.split')}
               </button>
               <button
                 className={mode === 'unified' ? 'active' : ''}
                 onClick={() => onSetViewMode('unified')}
-                title="Old and new lines in one column"
+                title={t('diff.unifiedTitle')}
               >
                 <Icon name="table_rows" small />
-                unified
+                {t('diff.unified')}
               </button>
             </div>
           )}
@@ -385,7 +387,7 @@ export function DiffFileSection({
               label={filePath(file)}
               seed=""
               canSuggest={false}
-              hint="This one is about the file, not about a line of it"
+              hint={t('diff.fileHint')}
               onSubmit={submitFileComment}
               onCancel={() => setDraftingFile(false)}
             />
@@ -395,14 +397,18 @@ export function DiffFileSection({
 
       {folded ? (
         <p className="empty">
-          {foldLabel(foldedByReader === true, file.foldReason)} · {file.additions + file.deletions}{' '}
-          changed lines
+          {t('diff.foldedLines', {
+            label: foldLabel(foldedByReader === true, file.foldReason),
+            count: file.additions + file.deletions,
+          })}
         </p>
       ) : file.isBinary ? (
-        <p className="empty">Binary file — no diff to show.</p>
+        <p className="empty">{t('diff.binary')}</p>
       ) : hunks.length === 0 ? (
         <p className="empty">
-          No content change{file.oldMode && file.newMode ? ` (mode ${file.oldMode} → ${file.newMode})` : ''}.
+          {file.oldMode && file.newMode
+            ? t('diff.noContentMode', { old: file.oldMode, new: file.newMode })
+            : t('diff.noContent')}
         </p>
       ) : mode === 'unified' ? (
         <UnifiedTable
@@ -488,6 +494,10 @@ interface GutterProps {
  * that it can live in this file - :focus-visible would need styles.css,
  * which other work is sitting on. It follows focus, so it shows for a
  * pointer press too; the ring is the same one the buttons use.
+ *
+ * It reads the catalog without subscribing to it: a diff has thousands of
+ * these, and the section around them already re-renders on a change of
+ * language, which renders the table and every cell in it again.
  */
 function GutterCell({ side, line, className, onSelect, onPickLine, onDragOver }: GutterProps) {
   const [focused, setFocused] = useState(false)
@@ -499,7 +509,7 @@ function GutterCell({ side, line, className, onSelect, onPickLine, onDragOver }:
       className={className}
       role="button"
       tabIndex={0}
-      aria-label={`Comment on ${side} line ${line}`}
+      aria-label={t(side === 'old' ? 'diff.commentOld' : 'diff.commentNew', { line })}
       style={focused ? GUTTER_FOCUS : undefined}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
@@ -591,7 +601,7 @@ function UnifiedTable({
                       onClick={(ev) => onSelectLine(side, num, ev)}
                     >
                       <Code content={line.content} language={language} />
-                      {line.noNewline && <span className="hint"> (no newline at end of file)</span>}
+                      {line.noNewline && <span className="hint">{t('diff.noNewline')}</span>}
                     </td>
                   </tr>
                   {extras && (

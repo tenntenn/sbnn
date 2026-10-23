@@ -368,6 +368,10 @@ a.icon-only.button {
 .settings-label {
   font-size: var(--text-xs);
   color: var(--fg-muted);
+  /* A label is a word or two, and Japanese has no spaces to break at: left
+     to wrap, a two-character label stands one character per line beside a
+     wide toggle. */
+  white-space: nowrap;
 }
 
 .settings-divider {

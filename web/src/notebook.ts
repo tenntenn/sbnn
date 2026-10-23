@@ -1,5 +1,6 @@
 import { marked } from 'marked'
 import { escapeHTML, sanitize } from './markdown'
+import { t } from './i18n'
 
 const MARKED_OPTIONS = { async: false, gfm: true, breaks: false } as const
 
@@ -42,10 +43,10 @@ export function renderNotebook(source: string): string {
   try {
     doc = JSON.parse(source) as NotebookDoc
   } catch (err) {
-    return errorBlock(`This notebook is not valid JSON: ${err instanceof Error ? err.message : String(err)}`)
+    return errorBlock(t('notebook.invalid', { error: err instanceof Error ? err.message : String(err) }))
   }
   if (!Array.isArray(doc.cells)) {
-    return errorBlock('This notebook has no cells to show.')
+    return errorBlock(t('notebook.empty'))
   }
   return (doc.cells as NotebookCell[]).map(renderCell).join('')
 }

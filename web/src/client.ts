@@ -4,6 +4,7 @@ import { renderMarkdown, type PreviewAssets } from './markdown'
 import { renderNotebook } from './notebook'
 import { buildPrompt } from './prompt'
 import { suggestions } from './suggestion'
+import { t, type MessageKey } from './i18n'
 
 /** PreviewResult is an embedded mo page, HTML rendered here, or the text of
  * a source file for the page to draw as lines. */
@@ -274,19 +275,12 @@ function createLiveClient(): SbnnClient {
  */
 type StorageTrouble = 'unreachable' | 'unreadable' | 'unsaved'
 
-const storageTrouble: Record<StorageTrouble, { lead: string; advice: string }> = {
-  unreachable: {
-    lead: 'This page cannot reach browser storage, so your comments will not be saved.',
-    advice: ' Use "Copy prompt" before closing the tab to keep whatever you write here.',
-  },
-  unreadable: {
-    lead: 'Comments saved on this page earlier could not be read back, so this is the review as it was exported.',
-    advice: ' What you write from here on is saved again, over the entry that could not be read.',
-  },
-  unsaved: {
-    lead: 'This browser refused to save your comments (private window, blocked site data, or a full quota).',
-    advice: ' Use "Copy prompt" now to keep a copy: nothing you write here will survive this tab.',
-  },
+// Keys rather than sentences, so the banner speaks the page's language at the
+// moment it appears rather than the one it had when this module loaded.
+const storageTrouble: Record<StorageTrouble, { lead: MessageKey; advice: MessageKey }> = {
+  unreachable: { lead: 'storage.unreachable', advice: 'storage.unreachableAdvice' },
+  unreadable: { lead: 'storage.unreadable', advice: 'storage.unreadableAdvice' },
+  unsaved: { lead: 'storage.unsaved', advice: 'storage.unsavedAdvice' },
 }
 
 /**
@@ -308,7 +302,7 @@ const spoken: Record<StorageTrouble, boolean> = {
 function warnStorage(trouble: StorageTrouble, err: unknown): void {
   if (spoken[trouble]) return
   spoken[trouble] = true
-  console.error(`sbnn: ${storageTrouble[trouble].lead}`, err)
+  console.error(`sbnn: ${t(storageTrouble[trouble].lead)}`, err)
   showStorageBanner(trouble)
 }
 
@@ -351,17 +345,17 @@ function showStorageBanner(trouble: StorageTrouble): void {
   text.style.cssText = 'flex: 1'
   const lead = document.createElement('strong')
   lead.style.cssText = 'color: var(--danger-fg, #a40e26)'
-  lead.textContent = storageTrouble[trouble].lead
+  lead.textContent = t(storageTrouble[trouble].lead)
   const advice = document.createElement('span')
   // Each trouble carries its own advice: telling a reviewer whose writes are
   // still being saved that nothing will survive the tab is its own way of
   // losing their trust, and the next warning that matters.
-  advice.textContent = storageTrouble[trouble].advice
+  advice.textContent = t(storageTrouble[trouble].advice)
   text.append(lead, advice)
 
   const close = document.createElement('button')
   close.type = 'button'
-  close.textContent = 'Dismiss'
+  close.textContent = t('common.dismiss')
   close.style.cssText = [
     'flex: none',
     'padding: 0.125rem 0.5rem',
@@ -492,10 +486,10 @@ function createStaticClient(data: StaticPayload): SbnnClient {
       write(read().filter((c) => c.id !== id))
     },
     async deleteDiff() {
-      throw new Error('an exported page cannot drop a diff')
+      throw new Error(t('static.noDrop'))
     },
     async closeReview() {
-      throw new Error('an exported page has no review to close')
+      throw new Error(t('static.noClose'))
     },
     async prompt(group) {
       // The verdict decides what the comments mean, so an agent handed this
@@ -507,11 +501,11 @@ function createStaticClient(data: StaticPayload): SbnnClient {
       })
     },
     async submitReview() {
-      throw new Error('an exported page has no server to submit the review to')
+      throw new Error(t('static.noSubmit'))
     },
     async preview(_group, diffId, fileId) {
       const entry = data.previews?.[`${diffId}:${fileId}`]
-      if (!entry) throw new Error('this page carries no preview for that file')
+      if (!entry) throw new Error(t('static.noPreview'))
       return {
         kind: 'html',
         html: renderMarkdown(entry.content, entry.assets),
@@ -526,7 +520,7 @@ function createStaticClient(data: StaticPayload): SbnnClient {
     },
     async previewNotebook(_group, diffId, fileId) {
       const entry = data.previews?.[`${diffId}:${fileId}`]
-      if (!entry) throw new Error('this page carries no preview for that file')
+      if (!entry) throw new Error(t('static.noPreview'))
       return {
         kind: 'html',
         html: renderNotebook(entry.content),
@@ -540,7 +534,7 @@ function createStaticClient(data: StaticPayload): SbnnClient {
       // source here, so no section ever asks. It is still an error rather
       // than an empty string, because an empty file and a file this page
       // never carried are not the same answer.
-      throw new Error('an exported page carries no source text')
+      throw new Error(t('static.noSource'))
     },
     imageSrc(_group, diffId, fileId) {
       // An image the export left out carries a status instead of a data

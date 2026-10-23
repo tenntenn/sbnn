@@ -1,5 +1,6 @@
 import { useCallback, useRef, type ReactNode, type Ref } from 'react'
 import { Divider } from './Divider'
+import { useT } from '../i18n'
 
 interface Props {
   left: ReactNode
@@ -42,6 +43,7 @@ export function nudgeRatio(ratio: number, direction: -1 | 1): number {
 
 /** SplitPane shows the diff and the preview side by side, with a draggable divider. */
 export function SplitPane({ left, right, ratio, onRatioChange, leftRef, rightRef }: Props) {
+  const t = useT()
   const containerRef = useRef<HTMLDivElement>(null)
 
   const onDrag = useCallback(
@@ -75,24 +77,24 @@ export function SplitPane({ left, right, ratio, onRatioChange, leftRef, rightRef
         {left}
       </div>
       <Divider
-        label="Resize the diff and the preview"
+        label={t('divider.split')}
         onDrag={onDrag}
         onReset={() => onRatioChange(SPLIT_DEFAULT)}
         onNudge={(direction) => onRatioChange(nudgeRatio(ratio, direction))}
         handles={
           ratio === 0
-            ? [{ icon: 'chevron_right', title: 'Show the diff', onClick: () => onRatioChange(SPLIT_DEFAULT) }]
+            ? [{ icon: 'chevron_right', title: t('divider.showDiff'), onClick: () => onRatioChange(SPLIT_DEFAULT) }]
             : ratio === 1
               ? [
                   {
                     icon: 'chevron_left',
-                    title: 'Show the preview',
+                    title: t('divider.showPreview'),
                     onClick: () => onRatioChange(SPLIT_DEFAULT),
                   },
                 ]
               : [
-                  { icon: 'chevron_left', title: 'Hide the diff', onClick: () => onRatioChange(0) },
-                  { icon: 'chevron_right', title: 'Hide the preview', onClick: () => onRatioChange(1) },
+                  { icon: 'chevron_left', title: t('divider.hideDiff'), onClick: () => onRatioChange(0) },
+                  { icon: 'chevron_right', title: t('divider.hidePreview'), onClick: () => onRatioChange(1) },
                 ]
         }
       />

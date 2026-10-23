@@ -283,6 +283,11 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   (or whatever host an exported page is read in), and a choice is remembered
   per browser. The Markdown preview keeps mo's own theme — mo has its own
   switch, in the toolbar inside the preview.
+- Settings → **Language** picks **Auto / English / 日本語**. Auto follows the
+  browser's language list — whichever of the two comes first in it, English
+  if neither does — on exported pages too, and a choice is remembered per browser. The prompt
+  that **Copy prompt** puts on the clipboard stays English: it is written for
+  an agent, not for the page.
 - Settings → **Notify on new diff** (off by default, remembered per browser):
   while the tab is in the background, a newly arrived diff puts `(n)` in the
   tab title and raises a browser notification. The permission prompt appears

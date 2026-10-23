@@ -10,6 +10,7 @@ import { SourceView } from './SourceView'
 import { CommentThread } from './CommentThread'
 import { PREVIEW_COMMENT_ID_PREFIX, blockRanges, diffSlots, placeComments } from '../previewComments'
 import { newSlot, resolveTargets } from '../previewSlots'
+import { language, rich, useT } from '../i18n'
 
 interface Props {
   group: string
@@ -194,6 +195,7 @@ export function PreviewFileSection({
   comments,
   onChanged,
 }: Props) {
+  const t = useT()
   const [preview, setPreview] = useState<PreviewResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -299,10 +301,15 @@ export function PreviewFileSection({
   // linkTargets: the link between two files of the same review stopped being
   // a link and was drawn as a dead span labelled with the reviewer's own
   // absolute path (#339).
+  //
+  // The language is a dependency because the pass writes words of its own -
+  // why a link leads nowhere - and those follow the page's language.
+  const lang = language()
   const previewHTML = useMemo(
     () =>
       preview?.kind === 'html' ? resolvePreviewLinks(preview.html, filePath(file), linkTargets) : '',
-    [preview, file, linkTargets],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [preview, file, linkTargets, lang],
   )
 
   // The object itself has to be stable, not only the string in it: React
@@ -482,21 +489,21 @@ export function PreviewFileSection({
             <span
               className="badge"
               title={`${preview.path}\n${
-                preview.source === 'worktree' ? 'the working tree file' : 'rebuilt from the diff'
+                preview.source === 'worktree' ? t('preview.treeTitle') : t('preview.rebuiltTitle')
               }`}
             >
-              {preview.source === 'worktree' ? 'tree' : 'rebuilt'}
+              {preview.source === 'worktree' ? t('preview.tree') : t('preview.rebuilt')}
             </span>
             {!preview.complete && (
-              <span className="badge warn" title="A unified diff only carries the changed hunks">
-                partial
+              <span className="badge warn" title={t('preview.partialTitle')}>
+                {t('preview.partial')}
               </span>
             )}
           </>
         )}
         <span className="spacer" />
         {!client.isStatic && (
-          <span title="Reload the preview">
+          <span title={t('preview.reload')}>
             <button
               className="ghost icon-only"
               onClick={() => setReloadKey((k) => k + 1)}
@@ -520,7 +527,7 @@ export function PreviewFileSection({
           ) : (
             <button className="ghost" onClick={() => void openInMo()} disabled={openingMo}>
               <MoIcon small />
-              {openingMo ? 'Opening…' : 'mo'}
+              {openingMo ? t('preview.opening') : 'mo'}
               <Icon name="open_in_new" small />
             </button>
           ))}
@@ -531,10 +538,10 @@ export function PreviewFileSection({
       ) : (
         <div className="preview-body" ref={setBodyBox}>
           {!previewable ? (
-            <p className="empty">{filePath(file)} has no preview.</p>
+            <p className="empty">{t('preview.none', { path: filePath(file) })}</p>
           ) : format === 'image' ? (
             !active ? (
-              <p className="empty">Not loaded yet…</p>
+              <p className="empty">{t('preview.notLoaded')}</p>
             ) : imageTrouble !== null ? (
               <span className="preview-asset-missing" role="img" aria-label={`${filePath(file)} - ${imageTrouble}`}
                 title={`${filePath(file)} - ${imageTrouble}`}>
@@ -550,29 +557,31 @@ export function PreviewFileSection({
                   alt={filePath(file)}
                   onError={() => setImageFailed(true)}
                 />
-                {imageFailed && <p className="error">The image could not be loaded.</p>}
+                {imageFailed && <p className="error">{t('preview.imageFailed')}</p>}
               </div>
             ) : (
               <p className="empty">
-                {filePath(file)} is not in the working tree (it may have been deleted), so there is nothing to
-                preview.
+                {t('preview.notInTree', { path: filePath(file) })}
               </p>
             )
           ) : !active || loading ? (
             <p className="empty">
-              {format === 'markdown' && !renderHere ? 'Asking mo for a preview…' : 'Rendering…'}
+              {format === 'markdown' && !renderHere ? t('preview.askingMo') : t('preview.rendering')}
             </p>
           ) : error ? (
             <div className="preview-error">
               <p className="error">{error}</p>
               {format === 'markdown' && status && !status.moAvailable && (
                 <p className="hint">
-                  mo renders a richer preview than sbnn's own, and it is not installed here. Install it
-                  with <code>brew install k1LoW/tap/mo</code> or grab a binary from{' '}
-                  <a href="https://github.com/k1LoW/mo/releases" target="_blank" rel="noreferrer">
-                    the releases page
-                  </a>
-                  , then reload — or switch back to <strong>preview</strong>, which needs nothing.
+                  {rich('preview.moMissing', {
+                    command: <code>brew install k1LoW/tap/mo</code>,
+                    releases: (
+                      <a href="https://github.com/k1LoW/mo/releases" target="_blank" rel="noreferrer">
+                        {t('preview.releases')}
+                      </a>
+                    ),
+                    preview: <strong>{t('preview.preview')}</strong>,
+                  })}
                 </p>
               )}
             </div>
@@ -601,22 +610,25 @@ export function PreviewFileSection({
             <iframe
               className="preview-frame"
               src={preview.url}
-              title="Markdown preview"
+              title={t('preview.frameTitle')}
               ref={setFrame}
               style={frameHeight !== null ? { height: `${frameHeight}px` } : undefined}
             />
           ) : preview?.kind === 'frame' && preview.moUrl ? (
             <div className="preview-error">
-              <p className="error">The preview cannot be embedded here.</p>
+              <p className="error">{t('preview.cannotEmbed')}</p>
               <p className="hint">
-                <a href={preview.moUrl} target="_blank" rel="noreferrer">
-                  Open it in mo
-                </a>{' '}
-                instead.
+                {rich('preview.openInstead', {
+                  link: (
+                    <a href={preview.moUrl} target="_blank" rel="noreferrer">
+                      {t('preview.openItInMo')}
+                    </a>
+                  ),
+                })}
               </p>
             </div>
           ) : (
-            <p className="empty">No preview.</p>
+            <p className="empty">{t('preview.nothing')}</p>
           )}
           {Array.from(slots).map(([key, slot]) =>
             createPortal(

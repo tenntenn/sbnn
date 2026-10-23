@@ -4,6 +4,7 @@ import { client } from '../client'
 import { COMMENT_ID_PREFIX } from '../previewComments'
 import { renderComment } from '../markdown'
 import { insertSuggestion, originalLines, parseBody, suggestionBlock, suggestions } from '../suggestion'
+import { t, useT } from '../i18n'
 
 interface ThreadProps {
   group: string
@@ -31,7 +32,7 @@ export function CommentThread({ group, comments, onChanged, idPrefix }: ThreadPr
 function rangeLabel(c: Pick<Comment, 'path' | 'side' | 'startLine' | 'endLine'>): string {
   if (c.startLine <= 0) return c.path
   const lines = c.endLine > c.startLine ? `${c.startLine}-${c.endLine}` : `${c.startLine}`
-  return `${c.path}:${lines}${c.side === 'old' ? ' (old)' : ''}`
+  return `${c.path}:${lines}${c.side === 'old' ? t('diff.old') : ''}`
 }
 
 /**
@@ -62,9 +63,9 @@ function SuggestedChange({
   return (
     <div className="suggestion">
       <div className="suggestion-head">
-        <span>Suggested change — replaces {rangeLabel(comment)}</span>
+        <span>{t('comment.suggestedChange', { range: rangeLabel(comment) })}</span>
         <button className="ghost" onClick={() => void copy()}>
-          {copied ? 'Copied' : 'Copy'}
+          {copied ? t('common.copied') : t('common.copy')}
         </button>
       </div>
       <table className="suggestion-diff">
@@ -84,7 +85,7 @@ function SuggestedChange({
           {after.length === 0 && (
             <tr className="line">
               <td className="marker" />
-              <td className="code hint">(the lines are removed)</td>
+              <td className="code hint">{t('comment.linesRemoved')}</td>
             </tr>
           )}
         </tbody>
@@ -126,6 +127,7 @@ function CommentItem({
   onChanged: () => void
   idPrefix?: string
 }) {
+  const t = useT()
   const [editing, setEditing] = useState(false)
   const [body, setBody] = useState(comment.body)
   const [busy, setBusy] = useState(false)
@@ -153,10 +155,10 @@ function CommentItem({
         {comment.author && <span className="badge author">{comment.author}</span>}
         <span className="comment-range">{rangeLabel(comment)}</span>
         {!editing && suggestions(comment.body).length > 0 && (
-          <span className="badge">suggestion</span>
+          <span className="badge">{t('comment.suggestion')}</span>
         )}
-        {comment.question && <span className="badge question">question</span>}
-        {comment.resolved && <span className="badge">resolved</span>}
+        {comment.question && <span className="badge question">{t('comment.question')}</span>}
+        {comment.resolved && <span className="badge">{t('comment.resolved')}</span>}
       </div>
 
       {editing ? (
@@ -182,7 +184,7 @@ function CommentItem({
                 })
               }
             >
-              Save
+              {t('comment.save')}
             </button>
             <SuggestButton
               editorRef={editor}
@@ -198,7 +200,7 @@ function CommentItem({
                 setEditing(false)
               }}
             >
-              Cancel
+              {t('common.cancel')}
             </button>
           </div>
         </>
@@ -219,17 +221,17 @@ function CommentItem({
                 run(() => client.updateComment(group, comment.id, { resolved: !comment.resolved }))
               }
             >
-              {comment.resolved ? 'Reopen' : 'Resolve'}
+              {comment.resolved ? t('comment.reopen') : t('comment.resolve')}
             </button>
             <button className="ghost" disabled={busy} onClick={() => setEditing(true)}>
-              Edit
+              {t('comment.edit')}
             </button>
             <button
               className="ghost danger"
               disabled={busy}
               onClick={() => run(() => client.deleteComment(group, comment.id))}
             >
-              Delete
+              {t('comment.delete')}
             </button>
           </div>
         </>
@@ -255,7 +257,7 @@ function CommentEditor({ editorRef, value, onChange, onSubmit, onCancel, autoFoc
       className="comment-input"
       autoFocus={autoFocus}
       rows={Math.max(3, Math.min(16, value.split('\n').length + 1))}
-      placeholder="What should change here?"
+      placeholder={t('comment.placeholder')}
       value={value}
       onChange={(ev) => onChange(ev.target.value)}
       onKeyDown={(ev) => {
@@ -302,8 +304,8 @@ function SuggestButton({
   }
 
   return (
-    <button className="ghost" disabled={disabled} onClick={insert} title="Insert a suggestion block">
-      Suggest a change
+    <button className="ghost" disabled={disabled} onClick={insert} title={t('comment.suggestTitle')}>
+      {t('comment.suggest')}
     </button>
   )
 }
@@ -323,6 +325,7 @@ interface FormProps {
 
 /** CommentForm writes a new comment, suggestion blocks included. */
 export function CommentForm({ onSubmit, onCancel, label, seed, canSuggest, hint }: FormProps) {
+  const t = useT()
   const [body, setBody] = useState('')
   // Asking a question and asking for a change are different requests, and
   // the prose does not always tell them apart - "should this be a 404?" can
@@ -363,24 +366,24 @@ export function CommentForm({ onSubmit, onCancel, label, seed, canSuggest, hint 
       />
       <div className="comment-actions">
         <button disabled={busy || body.trim() === ''} onClick={() => void submit()}>
-          {question ? 'Ask' : 'Comment'}
+          {question ? t('comment.ask') : t('comment.comment')}
         </button>
         {canSuggest && (
           <SuggestButton editorRef={editor} seed={seed} disabled={busy} onInsert={setBody} />
         )}
-        <label className="switch" title="It wants an answer, not a change">
+        <label className="switch" title={t('comment.questionTitle')}>
           <input
             type="checkbox"
             checked={question}
             disabled={busy}
             onChange={(ev) => setQuestion(ev.target.checked)}
           />
-          Question
+          {t('comment.questionSwitch')}
         </label>
         <button className="ghost" disabled={busy} onClick={onCancel}>
-          Cancel
+          {t('common.cancel')}
         </button>
-        <span className="hint">⌘/Ctrl + Enter</span>
+        <span className="hint">{t('comment.sendHint')}</span>
       </div>
       {error && <div className="error inline">{error}</div>}
     </div>
