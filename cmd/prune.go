@@ -47,6 +47,8 @@ servers which are no longer running left behind.
 
 Nothing else ends a review an agent forgot to close: a group stays on the
 server until someone runs sbnn --clear. sbnn prune is the clean-up for that.
+It closes reviews on the server of the repository it runs in, or on the one
+--port names.
 
   $ sbnn prune --dry-run             # what would go, and what stays and why
   $ sbnn prune                       # close reviews left alone for 7 days
@@ -64,7 +66,9 @@ be closed, and the log of that server with it; a session file of a running
 server is never touched, and neither is the log of submitted reviews that
 sbnn reviews reads. Previews sbnn rebuilt from a diff are removed from the
 cache directory once no server and no remaining session file holds their
-review.
+review. A repository whose directory no longer exists, and whose server left
+no session file behind, is dropped from the map of which repository's server
+is on which port (servers.json), so that port can be given out again.
 
 Before closing anything it asks, listing what it is about to close; --yes, or
 a stdin that is not a terminal, skips the question.`,

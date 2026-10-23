@@ -82,13 +82,26 @@ a coding agent - can pipe it in:
   diff -u old.md new.md | sbnn
   cat change.patch | sbnn
 
-Single server, growing session:
-  sbnn runs in the background on port 6280. The first invocation starts it and
-  returns the shell right away; later invocations add their diff to the
-  running server instead of starting a new one, the same way mo does.
+A server per repository, growing session:
+  sbnn runs in the background, one server for each repository. The first
+  invocation in a repository starts its server and returns the shell right
+  away; later invocations there add their diff to the running server instead
+  of starting a new one, the same way mo does.
 
   $ git diff | sbnn                 # starts the server, shows the diff
   $ git diff --cached | sbnn        # adds another diff to the same page
+
+  The repository is found by walking up to .git, which sbnn reads rather than
+  runs. The worktrees of a repository share its server and are told apart by
+  --target; a submodule is a repository of its own, and diffs sent from
+  outside any repository get a server of their own too. The first server gets
+  port 6280 and the next ones 6281 and up, and the port a repository was given
+  is kept in servers.json in the state directory, so its URLs stay the same
+  after the server stops. Every command finds the server of the repository it
+  runs in; --port picks one by number, but a server that belongs to another
+  repository is refused, except to --status, --shutdown and --restart.
+
+  $ sbnn --status --all             # every server, and whose it is
 
 Groups:
   --target (-t) puts diffs into a named group with its own URL and its own
@@ -157,6 +170,7 @@ Exporting:
 
 Starting and stopping:
   $ sbnn --status                   # what is being reviewed
+  $ sbnn --status --all             # the server of every repository
   $ sbnn --shutdown                 # stop the server
   $ sbnn --restart                  # restart it, keeping the session
   $ sbnn --clear                    # close a review: its diffs, comments, hooks
@@ -164,10 +178,10 @@ Starting and stopping:
   $ sbnn prune --dry-run            # what a prune would close and remove
   $ sbnn prune                      # close reviews left alone for 7 days
 
-  Nothing else closes a review that was forgotten. sbnn prune keeps the ones
-  still holding open comments or hooks unless told --force, and also removes
-  what servers that are no longer running left in the state and cache
-  directories.`,
+  These act on the server of the repository sbnn runs in. Nothing else closes
+  a review that was forgotten. sbnn prune keeps the ones still holding open
+  comments or hooks unless told --force, and also removes what servers that
+  are no longer running left in the state and cache directories.`,
 	Args:         cobra.NoArgs,
 	RunE:         run,
 	SilenceUsage: true,

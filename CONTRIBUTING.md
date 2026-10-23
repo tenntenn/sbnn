@@ -134,6 +134,12 @@ server, and Vite's dev server for the UI. Vite proxies everything under `/_` to
 the sbnn server on `localhost:6280`, so the page you open from Vite talks to
 your local build with hot reloading in front of it.
 
+sbnn gives each repository a server of its own, and `go run . --foreground`
+starts the one of this checkout, on the port this repository was given. That
+is 6280 only if it was the first repository to get a server on your machine:
+`sbnn --status --all` shows which port it has, and if it is another one,
+point the `/_` proxy in `web/vite.config.ts` at it while you work.
+
 To exercise it the way a user would, pipe a diff in from another terminal:
 
 ```console

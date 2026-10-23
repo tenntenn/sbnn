@@ -41,6 +41,13 @@ these variables set: SBNN_GROUP, SBNN_URL, SBNN_SERVER, SBNN_PORT, SBNN_COMMENTS
 SBNN_REVIEW_NOTE, SBNN_VERDICT and SBNN_BLOCKING. The URL is sent the same
 thing as JSON, where the verdict is the "verdict" field.
 
+SBNN_SERVER and SBNN_PORT name the server the review was submitted on, which
+is the server of one repository. An sbnn run inside the hook finds that same
+server by itself when it runs in that repository; sbnn comments -p "$SBNN_PORT"
+names it outright. sbnn does not read SBNN_PORT on its own: a variable a hook
+was given would otherwise quietly point every sbnn the hook starts, in any
+repository, at this one server.
+
 SBNN_VERDICT is what the reviewer decided - approved, commented or
 changes-requested - and is empty when the review carried no verdict, so a
 hook that wants a default picks its own.

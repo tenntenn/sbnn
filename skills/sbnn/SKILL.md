@@ -146,8 +146,12 @@ know what GitHub or a stack is — it is only the shape that keeps one group
 lined up with one PR.
 
 sbnn prints the review URL and returns immediately; the server keeps running in
-the background. Running `sbnn` again adds another diff to the same page rather
-than starting a second server.
+the background. Each repository has a server of its own, found from the
+directory you run sbnn in, and every worktree of a repository shares it.
+Running `sbnn` again in the same repository adds another diff to the same page
+rather than starting a second server; running it in another repository talks
+to that repository's server, so run every sbnn command of one review from
+inside the repository it is about. `sbnn --status --all` lists every server.
 
 **Sending the same diff again? Use `--replace`.** Plain `sbnn` never swaps a
 diff out: it adds one more beside what the group already shows. So whenever
@@ -211,7 +215,7 @@ on.
 the same machine and they can open a browser there.
 
 **When you cannot be sure of that, do not hand over the URL.** Inside a phone
-app, a chat bot or a CI box, `http://localhost:6280/` reaches nobody, and the
+app, a chat bot or a CI box, a `http://localhost:...` URL reaches nobody, and the
 human is left opening a link that does not exist for them. Write the review
 out as a self-contained page and give them that instead:
 
@@ -261,8 +265,9 @@ in a loop:
   - `SBNN_SERVER` — the base URL of the sbnn server that started the hook.
   - `SBNN_PORT` — the port of that same server. These two are how the hook
     talks back to the server that started it: a hook that wants the comments
-    runs `sbnn comments --target "$SBNN_GROUP" --port "$SBNN_PORT"` rather
-    than assuming the review is on the default port.
+    runs `sbnn comments --target "$SBNN_GROUP" --port "$SBNN_PORT"`, which
+    reaches the right server whichever directory the hook runs in. sbnn does
+    not read `SBNN_PORT` by itself; pass it as `--port`.
   - `SBNN_COMMENTS` — how many comments the review left, as a number. It is a
     count, not the comments themselves; read those with `sbnn comments`.
   - `SBNN_REVIEW_NOTE` — what the reviewer said about the change as a whole,
