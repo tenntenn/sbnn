@@ -1,0 +1,88 @@
+diff --git a/README.md b/README.md
+index 3648998..4c042f7 100644
+--- a/README.md
++++ b/README.md
+@@ -11,4 +11,8 @@ $ shelf return <book>
+ 
+ ## Loans
+ 
+-A book is lent for two weeks.
++A book is lent for two weeks (`DefaultPeriod`). A book that is already
++out cannot be lent again until it is returned.
++
++Overdue books are listed with `shelf overdue`, and the member who has
++one gets a reminder every morning until it comes back.
+diff --git a/internal/loan/loan.go b/internal/loan/loan.go
+index 60bced6..e6ef04a 100644
+--- a/internal/loan/loan.go
++++ b/internal/loan/loan.go
+@@ -9,6 +9,9 @@ import (
+ // ErrOnLoan is returned when the book is already lent out.
+ var ErrOnLoan = errors.New("loan: book is already on loan")
+ 
++// DefaultPeriod is how long a book is lent for.
++const DefaultPeriod = 14 * 24 * time.Hour
++
+ // Loan is one book lent to one member.
+ type Loan struct {
+ 	BookID   string
+@@ -16,7 +19,22 @@ type Loan struct {
+ 	Due      time.Time
+ }
+ 
+-// Lend lends the book for two weeks.
+-func Lend(bookID, memberID string, now time.Time) (*Loan, error) {
+-	return &Loan{BookID: bookID, MemberID: memberID, Due: now.Add(14 * 24 * time.Hour)}, nil
++// Shelf remembers which books are out.
++type Shelf struct {
++	loans map[string]*Loan
++}
++
++// Lend lends the book for DefaultPeriod, or fails if it is already out.
++func (s *Shelf) Lend(bookID, memberID string, now time.Time) (*Loan, error) {
++	if _, ok := s.loans[bookID]; ok {
++		return nil, ErrOnLoan
++	}
++	l := &Loan{BookID: bookID, MemberID: memberID, Due: now.Add(DefaultPeriod)}
++	s.loans[bookID] = l
++	return l, nil
++}
++
++// Return puts the book back on the shelf.
++func (s *Shelf) Return(bookID string) {
++	delete(s.loans, bookID)
+ }
+diff --git a/internal/loan/loan_test.go b/internal/loan/loan_test.go
+new file mode 100644
+index 0000000..f42220e
+--- /dev/null
++++ b/internal/loan/loan_test.go
+@@ -0,0 +1,28 @@
++package loan
++
++import (
++	"errors"
++	"testing"
++	"time"
++)
++
++func TestLendTwice(t *testing.T) {
++	s := &Shelf{loans: map[string]*Loan{}}
++	now := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
++	if _, err := s.Lend("go-book", "alice", now); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := s.Lend("go-book", "bob", now); !errors.Is(err, ErrOnLoan) {
++		t.Fatalf("second Lend: got %v, want ErrOnLoan", err)
++	}
++}
++
++func TestReturn(t *testing.T) {
++	s := &Shelf{loans: map[string]*Loan{}}
++	now := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
++	s.Lend("go-book", "alice", now)
++	s.Return("go-book")
++	if _, err := s.Lend("go-book", "bob", now); err != nil {
++		t.Fatalf("Lend after Return: %v", err)
++	}
++}

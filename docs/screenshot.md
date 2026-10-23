@@ -29,23 +29,35 @@ conditions cannot be compared against the one it replaces.
 | colour scheme | `light` |
 | capture | the page only: no browser chrome, no `fullPage` |
 | settle | 2.5s after `domcontentloaded`, so every transition has finished |
-| fixture | three files - `internal/server/server.go` (modified), `internal/server/server_test.go` (added), `README.md` (modified) - and two comments: a suggestion from `reviewer` on `server.go:11`, and a question from `claude` on `README.md:16` |
+| fixture | [`docs/screenshot.diff`](screenshot.diff): three files of `shelf`, a made-up lending library that exists only for this picture - `README.md` (modified), `internal/loan/loan.go` (modified), `internal/loan/loan_test.go` (added) - and two comments: a suggestion from `reviewer` on `loan.go:12`, and a question from `claude` on `README.md:17` |
+| tour | marked as seen (`localStorage['sbnn.tour'] = 'done'`), or the first-run tour covers the page |
+| language | `localStorage['sbnn.language']` set to `en` for `docs/screenshot.png` and to `ja` for `docs/screenshot.ja.png`, with the comments written in that language |
+| selection | the paragraph under **Loans** in the README preview selected with a real mouse drag, so the preview's **Comment** button is on screen next to it: the picture shows that the preview takes comments as well as the diff |
+
+The fixture is made up on purpose. A picture of sbnn's own code ties the README
+to whatever that code looked like the day it was taken, and invites reading
+the picture as documentation of it.
 
 ## Taking it
 
 ```console
 $ go build -o /tmp/sbnn .                     # the committed web/dist, nothing else
-$ cd <fixture-dir>
-$ XDG_STATE_HOME=/tmp/shot/state XDG_CACHE_HOME=/tmp/shot/cache \
+$ mkdir -p /tmp/shot/fixture && cd /tmp/shot/fixture   # put the fixture's files here for the `tree` badge
+$ HOME=/tmp/shot XDG_STATE_HOME=/tmp/shot/state XDG_CACHE_HOME=/tmp/shot/cache \
     /tmp/sbnn --foreground --port <free-port> --history-file off &
-$ /tmp/sbnn --port <free-port> --no-open < fixture.diff
-$ /tmp/sbnn comment internal/server/server.go:11 --port <free-port> --author reviewer \
-    -m '...' --suggest '...'
-$ /tmp/sbnn comment README.md:16 --port <free-port> --author claude --question -m '...'
+$ /tmp/sbnn --port <free-port> --no-open < docs/screenshot.diff
+$ /tmp/sbnn comment internal/loan/loan.go:12 --port <free-port> --author reviewer \
+    -m 'Say how long it is in the comment too, so nobody has to do the arithmetic.' \
+    --suggest '// DefaultPeriod is how long a book is lent for: two weeks.'
+$ /tmp/sbnn comment README.md:17 --port <free-port> --author claude --question \
+    -m 'There is no `shelf overdue` command yet. Should I add it in this change, or drop the sentence?'
 ```
 
-then a headless Chromium at the conditions above, `page.screenshot()` into
-`docs/screenshot.png`.
+then a Chromium at the conditions above, the selection made, and the page
+captured into `docs/screenshot.png`; the same again with `ja` into
+`docs/screenshot.ja.png`, which `README.ja.md` shows. Without the fixture's
+files in the working directory the preview is reconstructed from the diff and
+its badge reads `reconstructed` instead of `tree`; nothing else changes.
 
 **Compare before replacing.** The noise floor is not zero: repeated shots from
 one binary come back either byte-identical or differing by around 1,200 pixels
@@ -73,6 +85,7 @@ of them, which is what ties the picture to the bundle.
 | `Resolve` | the comment's buttons |
 | `round(s)` | the group summary line |
 | `comment(s)` | the group summary line |
+| `Comment` | the button beside the selection in the preview |
 
 Add to this table when the picture is retaken and the new one shows a label the
 old one did not. Removing a row is the same admission the other way round.
