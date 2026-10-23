@@ -58,6 +58,7 @@ function comment(c: Partial<Comment>): Comment {
     body: c.body ?? '',
     snippet: c.snippet ?? '',
     question: c.question ?? false,
+    replyTo: c.replyTo,
     resolved: c.resolved ?? false,
     createdAt: c.createdAt ?? '',
     updatedAt: c.updatedAt ?? '',
@@ -102,6 +103,10 @@ test('the corpus keeps covering every verdict, the note and both closings', () =
     'to address',
     'The change is approved, so none of this blocks it',
     'Address every comment above',
+    'Comment ID:',
+    '### Reply from the reviewer',
+    'it has been answered below',
+    'is a conversation',
   ]) {
     assert.ok(all.includes(phrase), `no golden file contains ${JSON.stringify(phrase)}`)
   }

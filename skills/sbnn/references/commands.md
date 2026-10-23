@@ -28,6 +28,7 @@ list.
 | `sbnn comment ... --author <you>` | Say who is commenting — always pass it |
 | `sbnn comment ... --question` | Mark it as wanting an answer, not a change |
 | `sbnn comment ... --suggest "<text>"` | Propose a replacement for the commented lines |
+| `sbnn comment --reply-to <id> -m "..."` | Answer a comment in its thread, on its lines — no path needed |
 | `sbnn comment --json` | Post many comments at once, read from stdin |
 | `sbnn comments [-t <name>]` | Print open comments as Markdown |
 | `sbnn comments --format json` | Print them as JSON |

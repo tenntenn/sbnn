@@ -32,6 +32,12 @@ human has written them:
   $ sbnn comments --clear            # drop them before the next round
   $ sbnn comments --clear --resolved-only   # ... keeping what is still open
 
+A comment and the replies to it are one thread. The prompt numbers the
+comment, prints its ID for sbnn comment --reply-to, and puts the replies under
+it; the JSON is one flat list in which a reply carries "replyTo", the ID of the
+comment it answers. Resolving, clearing and every count treat the thread as
+one comment.
+
 It is meant to be combined with other commands, so it says what it found in
 its exit status as well:
 

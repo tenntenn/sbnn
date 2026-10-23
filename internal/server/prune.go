@@ -56,7 +56,7 @@ func PruneKeepReason(g *model.Group, before time.Time, force bool) string {
 	if force {
 		return ""
 	}
-	if len(openComments(g)) > 0 {
+	if model.OpenThreads(g.Comments) > 0 {
 		return KeepOpenComments
 	}
 	if len(g.Hooks) > 0 {
@@ -108,8 +108,8 @@ func describePruned(g *model.Group, reason string) PrunedGroup {
 		Name:         g.Name,
 		LastActivity: g.LastActivity(),
 		Diffs:        len(g.Diffs),
-		Comments:     len(g.Comments),
-		Unresolved:   len(openComments(g)),
+		Comments:     len(model.Threads(g.Comments)),
+		Unresolved:   model.OpenThreads(g.Comments),
 		Hooks:        len(g.Hooks),
 		Reason:       reason,
 	}

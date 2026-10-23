@@ -43,7 +43,9 @@ const (
 	opDelGroup = "delGroup"
 	// opDelAll removes every group.
 	opDelAll = "delAll"
-	// opComment adds Comment to Group, or replaces the one with its ID.
+	// opComment adds Comment to Group, or replaces the one with its ID. The
+	// record of a comment that opens a thread also sets the state of its
+	// replies, which carry the state of their thread.
 	opComment = "comment"
 	// opDelComments removes the comments IDs of Group.
 	opDelComments = "delComments"
@@ -174,6 +176,12 @@ func (s *Store) apply(rec *logRecord) error {
 			g.Comments = append(g.Comments, rec.Comment)
 		} else {
 			g.Comments[i] = rec.Comment
+		}
+		// Resolving a thread is logged as the record of its first comment
+		// alone, so the replies take its state here, as they did when the
+		// record was written.
+		if !rec.Comment.IsReply() {
+			setThreadResolved(g, rec.Comment)
 		}
 	case opDelComments:
 		if g == nil {

@@ -268,8 +268,9 @@ in a loop:
     runs `sbnn comments --target "$SBNN_GROUP" --port "$SBNN_PORT"`, which
     reaches the right server whichever directory the hook runs in. sbnn does
     not read `SBNN_PORT` by itself; pass it as `--port`.
-  - `SBNN_COMMENTS` — how many comments the review left, as a number. It is a
-    count, not the comments themselves; read those with `sbnn comments`.
+  - `SBNN_COMMENTS` — how many comments the review left open, as a number; a
+    comment and the replies to it count once. It is a count, not the
+    comments themselves; read those with `sbnn comments`.
   - `SBNN_REVIEW_NOTE` — what the reviewer said about the change as a whole,
     which is empty when they said nothing.
   - `SBNN_VERDICT` — the verdict of the review as a whole, spelled the way the
@@ -305,6 +306,13 @@ sbnn comment <path>:<line> -m "<question>" --question --author <you>
 read alike in prose — "should this be a 404?" can be either — so say which
 it is, and the reader is told plainly rather than guessing.
 
+To answer a comment rather than start a new one, reply to it by its ID. The
+reply lands in that comment's thread, on its lines, so you name no path:
+
+```
+sbnn comment --reply-to <comment id> -m "<answer>" --author <you> --target <topic>
+```
+
 `--suggest` appends the replacement to the comment as a ` ```suggestion `
 block, so the human sees it as a proposed change and can copy it:
 
@@ -325,7 +333,11 @@ sbnn comments --target <topic>
 ```
 
 This prints the open comments as Markdown, each with the file, the line
-range, the reviewed code and the comment body. For programmatic handling:
+range, its `Comment ID`, the reviewed code and the comment body. A comment can
+have replies — the human answering you, or answering their own question — and
+they follow it under `### Reply from <author>` ("the reviewer" for the human).
+Read a thread to its last reply before acting on it: that is where the
+conversation stands. For programmatic handling:
 
 ```
 sbnn comments --target <topic> --format json
@@ -337,7 +349,7 @@ and `updatedAt`. Line numbers refer to the side named by `side`, and `diffId`
 says which round the comment came from, which is how you tell an old comment
 from one left on the diff you just sent.
 
-Three more keys appear only when they are set, so read them with a default
+Four more keys appear only when they are set, so read them with a default
 instead of by subscript — a missing key is the normal case, not an error:
 
 - `author` — who left the comment. It is **missing** for the comments the
@@ -348,6 +360,11 @@ instead of by subscript — a missing key is the normal case, not an error:
   change rather than an answer.
 - `suggestions` — present only when the body carries a suggestion block;
   missing means there is nothing to apply.
+- `replyTo` — present only on a reply: the `id` of the comment that opens its
+  thread, which comes before it in the list. Missing means the entry opens a
+  thread. A reply carries its thread's place and `resolved`, so filtering on
+  either keeps a thread together; count the entries without `replyTo` when
+  you want to know how many comments there are.
 
 A comment may carry suggested replacements, written as fenced
 ` ```suggestion ` blocks inside the comment itself, the same convention
@@ -366,9 +383,21 @@ so explicitly in your reply to the user rather than silently skipping it.
 A comment marked as a **question** (`"question": true` — the key is absent on
 every other comment, and "This one is a question: answer it." in the Markdown
 output) is asking for an answer.
-Answer it in words in your reply, and change the code only if your own
-answer says it should change. Rewriting code in place of answering is the
-one response that leaves the reviewer having to ask again.
+Answer it in words, and change the code only if your own answer says it
+should change. Rewriting code in place of answering is the one response that
+leaves the reviewer having to ask again. Put the answer where the question
+is, as a reply to it, and repeat it briefly in your reply to the user:
+
+```
+sbnn comment --reply-to <its id> -m "<the answer>" --author <you> --target <topic>
+```
+
+The reviewer reads the answer next to the line they asked about, the next
+`sbnn comments` shows the question as answered, and the thread stays open
+until they resolve it. Reply the same way when you disagree with a comment or
+leave it alone on purpose, so the reason sits with the comment rather than
+only in the chat. A reply cannot be a `--question`; it is part of the thread
+the comment started.
 
 ### 7. Send the next round
 

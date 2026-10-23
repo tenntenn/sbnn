@@ -6,6 +6,8 @@ The reviewer asked for changes; the change should not go ahead as it is.
 
 ## 1. main.go:4
 
+Comment ID: c1
+
 Diff: first
 
 Status: resolved
@@ -17,6 +19,8 @@ var x = 1
 done
 
 ## 2. main.go:9
+
+Comment ID: c2
 
 Diff: first
 

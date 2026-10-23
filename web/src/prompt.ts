@@ -1,5 +1,6 @@
 import type { Comment, Diff, Verdict } from './types'
 import { suggestions } from './suggestion'
+import { threadsOf, type Thread } from './threads'
 
 /**
  * PromptReview is how the review ended, as far as the prompt is concerned.
@@ -41,7 +42,7 @@ export function buildPrompt(
   review: PromptReview = {},
   opts: PromptOptions = {},
 ): string {
-  const open = comments.filter((c) => opts.includeResolved || !c.resolved)
+  const open = threadsOf(comments).filter((t) => opts.includeResolved || !t.root.resolved)
   let out = `# Review comments (sbnn group ${JSON.stringify(group)})\n\n`
 
   // A round nobody has submitted yet says nothing about a verdict: there is
@@ -54,7 +55,10 @@ export function buildPrompt(
 
   if (open.length === 0) return out + 'No open review comments.\n'
 
-  const questions = open.filter((c) => c.question).length
+  // A question somebody else has answered is not waiting on the reader any
+  // more, so it is not counted among the things to answer.
+  const questions = open.filter((t) => t.root.question && !answered(t)).length
+  const replies = open.reduce((n, t) => n + t.replies.length, 0)
   // An approval that came with comments is not a list of things to do, and
   // saying it is sends an agent off to change code nobody asked it to.
   out +=
@@ -63,28 +67,32 @@ export function buildPrompt(
       : `${open.length} comment(s) to address${asking(questions)}.\n`
 
   const titles = new Map(diffs.map((d) => [d.id, d.title]))
-  open.forEach((c, i) => {
+  // Only the comment that opens a thread is numbered, and its id is printed
+  // so that the reader can reply to it.
+  open.forEach((t, i) => {
+    const c = t.root
     out += `\n## ${i + 1}. ${c.path}${lineRange(c)}\n`
+    if (c.id) out += `\nComment ID: ${c.id}\n`
     const title = titles.get(c.diffId)
     if (title) out += `\nDiff: ${title}\n`
     if (c.author) out += `\nFrom: ${c.author}\n`
-    if (c.question) out += '\nThis one is a question: answer it.\n'
+    if (c.question) {
+      out += answered(t)
+        ? '\nThis one is a question, and it has been answered below.\n'
+        : '\nThis one is a question: answer it.\n'
+    }
     if (c.resolved) out += '\nStatus: resolved\n'
     const snippet = c.snippet.replace(/\n+$/, '')
     if (snippet) {
       const fence = fenceFor(snippet)
       out += `\n${fence}\n${snippet}\n${fence}\n`
     }
-    // The body is Markdown and may carry suggestion blocks, so it goes out
-    // as it is rather than quoted line by line.
-    const body = c.body.replace(/\n+$/, '')
-    if (body) out += `\n${body}\n`
-    const blocks = suggestions(c.body)
-    if (blocks.length > 0) {
-      out += `\nThe suggestion block above replaces ${c.path}${lineRange(c)}.\n`
-      if (blocks.length > 1) {
-        out += `(${blocks.length} suggestion blocks: apply them in order.)\n`
-      }
+    out += commentBody(c)
+    // A reply is on the lines of its thread, so its snippet would only
+    // repeat the one above.
+    for (const r of t.replies) {
+      out += `\n### Reply from ${r.author || 'the reviewer'}\n`
+      out += commentBody(r)
     }
   })
 
@@ -97,15 +105,47 @@ export function buildPrompt(
         : 'Address every comment above. A suggestion block replaces the lines it ' +
           'names, verbatim. When a comment is not worth acting on, say why instead of ' +
           'changing the code.\n'
+    if (replies > 0) {
+      out +=
+        '\nA comment with replies under it is a conversation: read it to the ' +
+        'end, because the newest reply is where it stands now.\n'
+    }
     if (questions > 0) {
       out +=
         '\nA comment marked as a question is asking for an answer, not for a ' +
-        'change. Answer it in your reply, in words, and change the code only if your ' +
-        'own answer says it should change. Leaving a question unanswered is the one ' +
-        'thing that makes the reviewer ask it again.\n'
+        'change. Answer it in words - as a reply to it where you can, with ' +
+        '`sbnn comment --reply-to <its comment ID> -m "..."`, so the answer sits ' +
+        'next to the line - and change the code only if your own answer says it ' +
+        'should change. Leaving a question unanswered is the one thing that makes ' +
+        'the reviewer ask it again.\n'
     }
   }
   return out
+}
+
+/** commentBody writes what a comment says, and what its suggestion blocks
+ * replace. */
+function commentBody(c: Comment): string {
+  let out = ''
+  // The body is Markdown and may carry suggestion blocks, so it goes out as
+  // it is rather than quoted line by line.
+  const body = c.body.replace(/\n+$/, '')
+  if (body) out += `\n${body}\n`
+  const blocks = suggestions(c.body)
+  if (blocks.length > 0) {
+    out += `\nThe suggestion block above replaces ${c.path}${lineRange(c)}.\n`
+    if (blocks.length > 1) {
+      out += `(${blocks.length} suggestion blocks: apply them in order.)\n`
+    }
+  }
+  return out
+}
+
+/** answered says whether a question thread has a reply from someone other
+ * than whoever asked it; a follow-up from the asker is more of the question.
+ * The rule is server.answered. */
+function answered(t: Thread): boolean {
+  return t.replies.some((r) => (r.author ?? '') !== (t.root.author ?? ''))
 }
 
 /**

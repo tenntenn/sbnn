@@ -187,10 +187,78 @@ type Comment struct {
 	Question bool `json:"question,omitempty"`
 	// Snippet is the reviewed code, kept so that the comment stays
 	// meaningful once it is exported as a prompt.
-	Snippet   string    `json:"snippet"`
+	Snippet string `json:"snippet"`
+	// ReplyTo is the ID of the comment that opened the thread this one
+	// answers, and empty for a comment that opens a thread of its own.
+	//
+	// A reply is an ordinary comment otherwise: it carries the anchor of
+	// the comment it answers - diff, file, path, side, lines and snippet -
+	// so everything that finds comments by where they are finds the replies
+	// with them. Threads are flat, the way they are on GitHub: an answer to
+	// a reply names the first comment of the thread, not the reply.
+	ReplyTo string `json:"replyTo,omitempty"`
+	// Resolved is the state of the thread. A reply carries the state of the
+	// comment it answers rather than one of its own, so that a reader
+	// filtering on this field keeps or drops a thread whole.
 	Resolved  bool      `json:"resolved"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// IsReply reports whether the comment answers another one rather than
+// opening a thread.
+func (c *Comment) IsReply() bool {
+	return c.ReplyTo != ""
+}
+
+// Thread is a comment and the replies to it, in the order they were written.
+type Thread struct {
+	Root    *Comment
+	Replies []*Comment
+}
+
+// Threads gathers comments into threads, in the order their first comments
+// appear. A reply whose first comment is not among comments - a list someone
+// filtered, or a session file edited by hand - opens a thread of its own
+// rather than disappearing.
+func Threads(comments []*Comment) []Thread {
+	roots := make(map[string]bool, len(comments))
+	for _, c := range comments {
+		if !c.IsReply() {
+			roots[c.ID] = true
+		}
+	}
+	var threads []Thread
+	at := make(map[string]int, len(roots))
+	for _, c := range comments {
+		if c.IsReply() && roots[c.ReplyTo] {
+			continue
+		}
+		if !c.IsReply() {
+			at[c.ID] = len(threads)
+		}
+		threads = append(threads, Thread{Root: c})
+	}
+	for _, c := range comments {
+		if c.IsReply() && roots[c.ReplyTo] {
+			i := at[c.ReplyTo]
+			threads[i].Replies = append(threads[i].Replies, c)
+		}
+	}
+	return threads
+}
+
+// OpenThreads counts the threads still open among comments. It is what sbnn
+// means by "open comments" wherever it counts them: a question with three
+// answers under it is one thing for the reader to deal with, not four.
+func OpenThreads(comments []*Comment) int {
+	n := 0
+	for _, t := range Threads(comments) {
+		if !t.Root.Resolved {
+			n++
+		}
+	}
+	return n
 }
 
 // Suggestions returns the replacements proposed inside a comment body.

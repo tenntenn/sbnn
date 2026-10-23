@@ -1,0 +1,35 @@
+{
+  "doc": "Threads with replies. Only the comment that opens a thread is numbered and counted; its replies follow it under 'Reply from', the browser's own as 'the reviewer', with no snippet of their own and with the line a suggestion in one of them replaces. A question answered by someone else reads as answered and leaves the count; one followed up only by its asker is still open. A resolved thread goes with its replies, and the closing paragraph says how to read a conversation.",
+  "options": {},
+  "group": {
+    "name": "api",
+    "reviewedAt": "2026-03-04T05:06:07Z",
+    "reviewVerdict": "changes-requested",
+    "diffs": [{"id": "d1", "title": "handler: return 404 for unknown ids"}],
+    "comments": [
+      {"id": "c1", "diffId": "d1", "path": "handler.go", "side": "new",
+       "startLine": 12, "endLine": 14, "body": "Was the retry loop deliberate?",
+       "question": true, "snippet": "for i := 0; i < 3; i++ {"},
+      {"id": "c2", "diffId": "d1", "path": "handler.go", "side": "new",
+       "startLine": 40, "endLine": 40, "body": "Why a 404 here?",
+       "question": true, "snippet": "return errNotFound"},
+      {"id": "c3", "diffId": "d1", "path": "handler.go", "side": "new",
+       "startLine": 12, "endLine": 14, "author": "claude", "replyTo": "c1",
+       "body": "Yes: the backend drops the first connection after a deploy.",
+       "snippet": "for i := 0; i < 3; i++ {"},
+      {"id": "c4", "diffId": "d1", "path": "handler.go", "side": "new",
+       "startLine": 12, "endLine": 14, "replyTo": "c1",
+       "body": "Then say so in a comment, and bound it:\n\n```suggestion\nfor i := 0; i < maxRetries; i++ {\n```",
+       "snippet": "for i := 0; i < 3; i++ {"},
+      {"id": "c5", "diffId": "d1", "path": "handler.go", "side": "new",
+       "startLine": 40, "endLine": 40, "replyTo": "c2",
+       "body": "I mean rather than a 410.", "snippet": "return errNotFound"},
+      {"id": "c6", "diffId": "d1", "path": "main.go", "side": "new",
+       "startLine": 3, "endLine": 3, "body": "Typo.", "resolved": true,
+       "snippet": "// recieve"},
+      {"id": "c7", "diffId": "d1", "path": "main.go", "side": "new",
+       "startLine": 3, "endLine": 3, "author": "claude", "replyTo": "c6",
+       "body": "Fixed.", "resolved": true, "snippet": "// recieve"}
+    ]
+  }
+}

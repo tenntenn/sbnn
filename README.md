@@ -259,7 +259,7 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   line number is a stop in the tab order, and Shift with the press extends the
   selection the way shift-clicking does. The `?` sheet says so too.
 - **Comment on the preview by selecting text in it.** Let the drag go and a
-  **+** appears where your pointer came up; it opens the same comment form,
+  **Comment** button appears where your pointer came up; it opens the same comment form,
   anchored to the source lines of the blocks you selected. The selection
   stays highlighted while you write, and goes away when you click elsewhere,
   press Escape, cancel or post. It needs sbnn's own preview of a whole file:
@@ -271,6 +271,9 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   travels through `sbnn comments` as the fenced block itself, so an agent can
   apply it verbatim. A comment can carry prose, several suggestions, or both.
 - Comments can be resolved, edited and deleted, and they survive a reload.
+- **Reply** under a comment answers it in place, with the same editor. The
+  replies stay under the comment they answer, an agent's as much as yours, and
+  resolving or deleting the comment does it to the whole thread.
 - **Copy prompt** puts every open comment on the clipboard, ready for a coding
   agent.
 - Split and unified views can be switched per file; new, deleted and binary
@@ -479,6 +482,18 @@ EOF
 An entry that leaves `"line"` out is the same whole-file comment a bare path
 makes.
 
+A comment is answered where it stands with `--reply-to` and the comment's ID —
+`Comment ID` in `sbnn comments`, `id` in its JSON. The reply goes in that
+comment's thread, on its lines, so it names no path:
+
+```console
+$ sbnn comment --reply-to c3 -m "Yes: the backend drops the first connection" --author claude
+```
+
+That is how an agent answers a question it was asked: the reviewer reads the
+answer next to the line, and `sbnn comments` shows the question as answered.
+A reply to a reply joins the same thread, as on GitHub.
+
 ### Finishing a review
 
 **Submit review** in the header says "I am done looking". That is the moment
@@ -557,7 +572,13 @@ $ sbnn comments --clear                      # ... and drop the open ones as wel
 `--clear` empties the group whether or not the comments were addressed, so a
 remark nobody has answered yet goes with it. `--resolved-only` is the one to
 reach for between rounds: it removes the comments marked as resolved and
-leaves the rest for the next pass.
+leaves the rest for the next pass. Either way a comment and its replies go or
+stay together, and every count sbnn prints — open comments, `SBNN_COMMENTS`,
+the sidebar — counts such a thread once.
+
+Replies come out under the comment they answer, as `### Reply from <author>`
+in the Markdown and as entries carrying `replyTo` in the JSON, which stays one
+flat list in the order the comments were written.
 
 Neither touches the diffs, so the diff of the round you just handled stays
 beside its fixed version. Send the next round with `--replace` to drop the
@@ -806,7 +827,7 @@ to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
 | `sbnn` | Read a diff on stdin and serve it | `--title`, `--label key=value`, `--replace`, `--open` / `--no-open`, `--foreground`, `--on-review`, `--on-review-url`, `--history-file`, `--json` |
 | `sbnn` on the running server | Act on the server instead of adding a diff | `--status`, `--status --all`, `--restart`, `--shutdown`, `--clear`, `--clear --all` |
 | `sbnn comments` | Print the comments left in the browser | `--format` (`prompt`, `markdown`, `json`), `--json`, `--clear`, `--clear --resolved-only`, `--include-resolved`, `--exit-code`, `--quiet` (`-q`) |
-| `sbnn comment path[:line[-line]]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--json` |
+| `sbnn comment path[:line[-line]]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--reply-to`, `--json` |
 | `sbnn submit` | End the round, as the Submit button does | `--note` (`-m`), `--verdict` (`approved`, `commented`, `changes-requested`), `--approve`, `--request-changes`, `--exit-code`, `--quiet` |
 | `sbnn wait` | Block until the review is submitted, then print it | `--timeout`, `--format`, `--json`, `--exit-code`, `--quiet` |
 | `sbnn hook` | Run something when a review is submitted | `--on-review`, `--on-review-url`, `--clear`, `--json` |

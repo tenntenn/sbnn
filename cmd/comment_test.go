@@ -341,7 +341,7 @@ func TestReadBulkCommentsOverflowingLine(t *testing.T) {
 // defaults; commentCmd is a package-level singleton, so tests share it.
 func resetCommentFlags(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"json", "message", "suggest", "suggest-file", "author", "diff", "question"} {
+	for _, name := range []string{"json", "message", "suggest", "suggest-file", "author", "diff", "question", "reply-to", "side"} {
 		f := commentCmd.Flags().Lookup(name)
 		if f == nil {
 			t.Fatalf("comment has no --%s flag any more", name)

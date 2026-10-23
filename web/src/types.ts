@@ -101,6 +101,11 @@ export interface Comment {
   suggestions?: string[]
   /** question marks a comment that wants an answer, not a change. */
   question?: boolean
+  /** replyTo is the id of the comment opening the thread this one answers,
+   * and absent on a comment that opens a thread. A reply carries its
+   * thread's anchor and state; threads.ts has the rules. */
+  replyTo?: string
+  /** resolved is the state of the thread the comment is in. */
   resolved: boolean
   createdAt: string
   updatedAt: string

@@ -200,6 +200,10 @@ func TestPromptGoldenCoversEveryVerdict(t *testing.T) {
 		"to address",
 		"The change is approved, so none of this blocks it",
 		"Address every comment above",
+		"Comment ID:",
+		"### Reply from the reviewer",
+		"it has been answered below",
+		"is a conversation",
 	} {
 		if !strings.Contains(corpus, want) {
 			t.Errorf("no golden file contains %q, so nothing pins it", want)

@@ -49,6 +49,9 @@ type Record struct {
 // Comment is what a record keeps of a review comment: enough to see the
 // pattern, including what was said, which is where the pattern lives.
 type Comment struct {
+	// ID is what the comment was called in its review, which is what
+	// ReplyTo names. It is only unique within one record.
+	ID          string   `json:"id,omitempty"`
 	Path        string   `json:"path"`
 	Author      string   `json:"author,omitempty"`
 	Side        string   `json:"side"`
@@ -57,9 +60,29 @@ type Comment struct {
 	Body        string   `json:"body"`
 	Suggestions []string `json:"suggestions,omitempty"`
 	// Question marks a comment that wanted an answer, not a change.
-	Question  bool      `json:"question,omitempty"`
+	Question bool `json:"question,omitempty"`
+	// ReplyTo is the ID of the comment this one answers, and absent on a
+	// comment that opens a thread. A reply follows its thread in Comments.
+	ReplyTo   string    `json:"replyTo,omitempty"`
 	Resolved  bool      `json:"resolved"`
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// IsReply reports whether the comment answers another one.
+func (c Comment) IsReply() bool {
+	return c.ReplyTo != ""
+}
+
+// Threads counts the comments of a record that opened a thread, which is
+// how many things the review said, however many replies they drew.
+func (r Record) Threads() int {
+	n := 0
+	for _, c := range r.Comments {
+		if !c.IsReply() {
+			n++
+		}
+	}
+	return n
 }
 
 // Wait is how long the change waited for its review.
@@ -95,21 +118,32 @@ func FromGroup(g *model.Group) Record {
 		rec.Additions += adds
 		rec.Deletions += dels
 	}
-	for _, c := range g.Comments {
-		rec.Comments = append(rec.Comments, Comment{
-			Path:        c.Path,
-			Author:      c.Author,
-			Side:        c.Side,
-			StartLine:   c.StartLine,
-			EndLine:     c.EndLine,
-			Body:        c.Body,
-			Suggestions: model.Suggestions(c.Body),
-			Question:    c.Question,
-			Resolved:    c.Resolved,
-			CreatedAt:   c.CreatedAt,
-		})
+	// Thread by thread, so that a reply follows the comment it answers
+	// even when it was written after comments on other lines.
+	for _, t := range model.Threads(g.Comments) {
+		for _, c := range append([]*model.Comment{t.Root}, t.Replies...) {
+			rec.Comments = append(rec.Comments, commentOf(c))
+		}
 	}
 	return rec
+}
+
+// commentOf is what a record keeps of one comment.
+func commentOf(c *model.Comment) Comment {
+	return Comment{
+		ID:          c.ID,
+		Path:        c.Path,
+		Author:      c.Author,
+		Side:        c.Side,
+		StartLine:   c.StartLine,
+		EndLine:     c.EndLine,
+		Body:        c.Body,
+		Suggestions: model.Suggestions(c.Body),
+		Question:    c.Question,
+		ReplyTo:     c.ReplyTo,
+		Resolved:    c.Resolved,
+		CreatedAt:   c.CreatedAt,
+	}
 }
 
 // Append writes a record to the log, one JSON object per line so that the
@@ -347,8 +381,11 @@ type Count struct {
 
 // Stats is what a pile of reviews says when read together.
 type Stats struct {
-	Reviews     int `json:"reviews"`
+	Reviews int `json:"reviews"`
+	// Comments counts threads: a comment and the replies to it are one
+	// thing the review said. Replies counts the replies on their own.
 	Comments    int `json:"comments"`
+	Replies     int `json:"replies"`
 	Suggestions int `json:"suggestions"`
 	Resolved    int `json:"resolved"`
 	Files       int `json:"files"`
@@ -390,7 +427,7 @@ func Summarize(records []Record) Stats {
 		s.Files += rec.Files
 		s.Additions += rec.Additions
 		s.Deletions += rec.Deletions
-		if len(rec.Comments) == 0 {
+		if rec.Threads() == 0 {
 			s.Silent++
 		}
 		// A record written before the verdict was recorded has an empty
@@ -414,8 +451,15 @@ func Summarize(records []Record) Stats {
 			waits = append(waits, w)
 		}
 		for _, c := range rec.Comments {
-			s.Comments++
+			// A suggestion is one whoever wrote it, so it is counted in a
+			// reply too; the rest of the tallies are about what drew a
+			// comment, and a reply is drawn by the comment it answers.
 			s.Suggestions += len(c.Suggestions)
+			if c.IsReply() {
+				s.Replies++
+				continue
+			}
+			s.Comments++
 			if c.Resolved {
 				s.Resolved++
 			}
