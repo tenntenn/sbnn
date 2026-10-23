@@ -3,6 +3,10 @@ version: '3'
 vars:
   GO: go
   PNPM: pnpm
+  # DEV_PORT is where `task dev` runs its server. It is fixed rather than the
+  # port this repository was given, so that Vite knows where to proxy before
+  # the server is up; keep it out of the 6280 range sbnn hands out.
+  DEV_PORT: 6390
 
 tasks:
   build:
@@ -80,11 +84,13 @@ tasks:
   dev-server:
     internal: true
     cmds:
-      - "{{.GO}} run . --foreground"
+      - "{{.GO}} run . --foreground --port {{.DEV_PORT}}"
 
   dev-web:
     internal: true
     dir: web
+    env:
+      SBNN_DEV_PORT: "{{.DEV_PORT}}"
     cmds:
       - "{{.PNPM}} run dev"
 

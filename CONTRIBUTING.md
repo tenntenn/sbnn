@@ -129,21 +129,18 @@ rather than on every change. So this one is on you.
 $ task dev
 ```
 
-That runs two things side by side: `go run . --foreground`, which is the sbnn
-server, and Vite's dev server for the UI. Vite proxies everything under `/_` to
-the sbnn server on `localhost:6280`, so the page you open from Vite talks to
-your local build with hot reloading in front of it.
+That runs two things side by side: `go run . --foreground --port 6390`, which
+is the sbnn server, and Vite's dev server for the UI. Vite proxies everything
+under `/_` to that server, so the page you open from Vite talks to your local
+build with hot reloading in front of it.
 
-sbnn gives each repository a server of its own, and `go run . --foreground`
-starts the one of this checkout, on the port this repository was given. That
-is 6280 only if it was the first repository to get a server on your machine:
-`sbnn --status --all` shows which port it has, and if it is another one,
-point the `/_` proxy in `web/vite.config.ts` at it while you work.
-
-To exercise it the way a user would, pipe a diff in from another terminal:
+The port is fixed (`DEV_PORT` in `Taskfile.yml`) rather than the one sbnn gives
+this repository, so that Vite knows where to proxy before the server is up. To
+exercise it the way a user would, pipe a diff in from another terminal and
+name that port, since without `--port` sbnn picks this repository's own server:
 
 ```console
-$ git diff | sbnn --target scratch
+$ git diff | sbnn --port 6390 --target scratch
 ```
 
 ## What a good pull request looks like
