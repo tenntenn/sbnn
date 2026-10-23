@@ -328,6 +328,9 @@ const en = {
   'tour.preview.title': 'The preview',
   'tour.preview.body':
     'Markdown, notebooks, images and source files are rendered here, and follow the diff as you scroll. Select text in a Markdown preview to comment on the lines it came from.',
+  'tour.panes.title': 'Making room',
+  'tour.panes.body':
+    '< puts the diff away and > puts the preview away, giving the other the whole width; the same button brings it back. Drag the bar between them to resize, or double-click it to go back to the default widths. The < beside the file list puts the list away the same way.',
   'tour.comment.title': 'Commenting on a line',
   'tour.comment.body':
     'Click a line number to comment on that line; drag across several, or shift-click one, to cover a range. From the keyboard, Tab to a line number and press Enter.',
@@ -638,6 +641,9 @@ const ja: Record<MessageKey, string> = {
   'tour.preview.title': 'プレビュー',
   'tour.preview.body':
     'Markdown、notebook、画像、ソースファイルをここに描画し、diff のスクロールに追従します。Markdown プレビューの文章を選択すると、その元になった行にコメントできます。',
+  'tour.panes.title': '表示幅を切り替える',
+  'tour.panes.body':
+    '< で diff を、> でプレビューを隠し、もう一方を全幅で表示します。隠した側は同じ場所のボタンで戻せます。間のバーはドラッグで幅を変えられ、ダブルクリックで既定の幅に戻ります。ファイル一覧の横の < も同じように一覧を隠します。',
   'tour.comment.title': '行にコメントする',
   'tour.comment.body':
     '行番号をクリックするとその行にコメントできます。複数行をドラッグするか Shift を押しながらクリックすると範囲を指定できます。キーボードなら Tab で行番号に移動して Enter を押します。',

@@ -21,6 +21,9 @@ interface Props {
   /** One handle brings a single pane back; two, either side of a middle
    * divider, each put away the pane on their side. */
   handles?: Handle[]
+  /** tour names the handles for the first-run tour (tour.ts), which points
+   * at them rather than at the bar: the buttons are what nobody can guess. */
+  tour?: string
 }
 
 /**
@@ -32,7 +35,7 @@ interface Props {
  * the Markdown preview stops the moment the pointer crosses into its iframe,
  * because the events are delivered to the framed document instead.
  */
-export function Divider({ onDrag, onReset, onNudge, label, handles }: Props) {
+export function Divider({ onDrag, onReset, onNudge, label, handles, tour }: Props) {
   const [dragging, setDragging] = useState(false)
   const pointerID = useRef<number | null>(null)
 
@@ -91,7 +94,7 @@ export function Divider({ onDrag, onReset, onNudge, label, handles }: Props) {
       }}
     >
       {handles && handles.length > 0 && (
-        <div className="divider-handles">
+        <div className="divider-handles" data-tour={tour}>
           {handles.map((handle, i) => (
             <button
               key={i}

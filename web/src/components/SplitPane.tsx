@@ -78,6 +78,7 @@ export function SplitPane({ left, right, ratio, onRatioChange, leftRef, rightRef
       </div>
       <Divider
         label={t('divider.split')}
+        tour="panes"
         onDrag={onDrag}
         onReset={() => onRatioChange(SPLIT_DEFAULT)}
         onNudge={(direction) => onRatioChange(nudgeRatio(ratio, direction))}

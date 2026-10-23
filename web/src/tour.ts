@@ -34,6 +34,10 @@ export const TOUR_STEPS: readonly TourStep[] = [
   { id: 'files', targets: ['[data-tour="files"]'], title: 'tour.files.title', body: 'tour.files.body' },
   { id: 'diff', targets: ['[data-tour="diff"]', '.diff-pane'], title: 'tour.diff.title', body: 'tour.diff.body' },
   { id: 'preview', targets: ['[data-tour="preview"]'], title: 'tour.preview.title', body: 'tour.preview.body' },
+  // The < and > riding on the bar between the diff and the preview. They are
+  // small and unlabelled, and the drag and double click they stand in for
+  // are invisible, so they get a stop of their own.
+  { id: 'panes', targets: ['[data-tour="panes"]'], title: 'tour.panes.title', body: 'tour.panes.body' },
   {
     id: 'comment',
     // The first line number that takes a comment: the cell itself is what
