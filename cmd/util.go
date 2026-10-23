@@ -27,6 +27,11 @@ const TargetEnv = "SBNN_TARGET"
 // words in HistoryOffWords keeps no log at all.
 const HistoryEnv = "SBNN_HISTORY"
 
+// NoUpdateCheckEnv turns the start-up check for a newer release off when it
+// is set to anything at all, so that a machine with no business talking to
+// GitHub, or a user who updates by other means, never does.
+const NoUpdateCheckEnv = "SBNN_NO_UPDATE_CHECK"
+
 // HistoryOffWords are the spellings of "keep no log" accepted by
 // --history-file and $SBNN_HISTORY. They are matched case-insensitively and
 // after trimming spaces. The list is deliberately generous: someone turning

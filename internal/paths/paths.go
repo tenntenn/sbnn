@@ -80,6 +80,19 @@ func HistoryFile() (string, error) {
 	return filepath.Join(dir, "reviews.jsonl"), nil
 }
 
+// UpdateCheckFile returns where the start-up check remembers when it last
+// asked GitHub for the latest release, and what it was told. It is in the
+// state directory rather than the cache directory because clearing it only
+// costs a request, but losing it on every cache sweep would ask far more
+// often than once a day.
+func UpdateCheckFile() (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "update-check.json"), nil
+}
+
 // CacheDir returns the directory for files sbnn generates, such as the
 // Markdown reconstructed from a diff and handed to mo. It is the platform
 // cache directory: $XDG_CACHE_HOME/sbnn or ~/.cache/sbnn on Unix,
