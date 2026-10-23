@@ -19,6 +19,24 @@ jobs:
       - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
         with:
           aqua_version: v2.62.3
-      - run: tagpr
+      - id: tagpr
+        run: tagpr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    outputs:
+      # Set only on the run that merged the release pull request and pushed
+      # the tag.
+      tag: ${{ steps.tagpr.outputs.tag }}
+
+  # A tag pushed with GITHUB_TOKEN starts no workflow of its own - GitHub does
+  # not let one workflow's token trigger another - so release.yml's tag
+  # trigger never sees the tags tagpr pushes. The binaries are built from here
+  # instead, by calling it with the tag tagpr just made.
+  release:
+    needs: tagpr
+    if: needs.tagpr.outputs.tag != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tagpr.outputs.tag }}
