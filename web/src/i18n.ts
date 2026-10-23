@@ -27,6 +27,8 @@ const en = {
   'app.selectFile': 'Select a file.',
   'app.counts': '{rounds} round(s) · {comments} comment(s)',
   'app.countsOpen': ' · {count} open',
+  'app.countsTitle':
+    'A round is one diff sent into this review; the comments are counted over every round, and open is the ones nobody has resolved yet.',
   'app.exported': 'exported',
   'app.exportedTitle':
     'This page was written with `sbnn export`. The diff is frozen and comments are kept in this browser.',
@@ -173,8 +175,6 @@ const en = {
   'diff.fold': 'Fold this file away',
   'diff.commentOnFile': 'comment on file',
   'diff.commentOnFileTitle': 'Comment on this file as a whole, without pointing at a line',
-  'diff.unifiedNarrow': 'Side by side needs a wider window',
-  'diff.unifiedOneSide': 'A file without an old side is always shown unified',
   'diff.split': 'split',
   'diff.unified': 'unified',
   'diff.splitTitle': 'Old and new side by side',
@@ -300,6 +300,8 @@ const en = {
   'sidebar.label': 'Files in this review',
   'sidebar.layoutLabel': 'How the rounds are shown',
   'sidebar.readTitle': 'Files you have ticked off as read, out of every file in this review',
+  'sidebar.roundFiles.one': '{count} file',
+  'sidebar.roundFiles.other': '{count} files',
   'sidebar.roundToggle': 'Show or hide the files of this round, sent {date}',
   'sidebar.openComments': 'Open comments',
   'sidebar.additions': 'Lines added',
@@ -327,10 +329,13 @@ const en = {
     "One section per file. Its header folds it away and switches between split and unified; j and k step from file to file.",
   'tour.preview.title': 'The preview',
   'tour.preview.body':
-    'Markdown, notebooks, images and source files are rendered here, and follow the diff as you scroll. Select text in a Markdown preview to comment on the lines it came from.',
+    'Markdown, notebooks, images and source files are rendered here, and follow the diff as you scroll.',
   'tour.panes.title': 'Making room',
   'tour.panes.body':
     '< puts the diff away and > puts the preview away, giving the other the whole width; the same button brings it back. Drag the bar between them to resize, or double-click it to go back to the default widths. The < beside the file list puts the list away the same way.',
+  'tour.previewComment.title': 'Commenting on the preview',
+  'tour.previewComment.body':
+    'You can comment on the rendered Markdown too: select a passage, then press Comment beside it. The comment lands on the lines of the file the passage came from, and shows up in the diff as well.',
   'tour.comment.title': 'Commenting on a line',
   'tour.comment.body':
     'Click a line number to comment on that line; drag across several, or shift-click one, to cover a range. From the keyboard, Tab to a line number and press Enter.',
@@ -353,8 +358,10 @@ export type MessageKey = keyof typeof en
 // ones a Japanese tool would say.
 const ja: Record<MessageKey, string> = {
   'app.selectFile': 'ファイルを選んでください。',
-  'app.counts': '{rounds} ラウンド · コメント {comments} 件',
+  'app.counts': 'diff {rounds} 件 · コメント {comments} 件',
   'app.countsOpen': ' · 未解決 {count} 件',
+  'app.countsTitle':
+    'このレビューに送られた diff の数と、それらに付いたコメントの数です。未解決は、まだ解決されていないコメントです。',
   'app.exported': 'エクスポート版',
   'app.exportedTitle':
     'このページは `sbnn export` で書き出されたものです。diff は固定されていて、コメントはこのブラウザに保存されます。',
@@ -376,7 +383,7 @@ const ja: Record<MessageKey, string> = {
   'welcome.otherReviews': 'ほかのレビュー',
   'welcome.groupDiffs': 'diff {count} 件',
   'group.open': '、未解決 {count} 件',
-  'group.rounds': '{count} ラウンド',
+  'group.rounds': 'diff {count} 件',
 
   'settings.title': '設定',
   'settings.theme': 'テーマ',
@@ -414,7 +421,7 @@ const ja: Record<MessageKey, string> = {
   'review.requestChangesTitle': 'このままでは変更を進めるべきではありません',
   'review.hooks': 'sbnn サーバーで hook が {count} 件実行されます',
   'review.wait': '`sbnn wait` で待っている処理が再開します',
-  'review.submitted': 'レビューを送信しました。次のラウンドを始めるには、新しい diff を送ってください。',
+  'review.submitted': 'レビューを送信しました。続けてレビューするには、新しい diff を送ってください。',
   'review.submittedAt': 'レビューを送信しました({date})。次のラウンドを始めるには、新しい diff を送ってください。',
 
   'common.cancel': 'キャンセル',
@@ -431,7 +438,7 @@ const ja: Record<MessageKey, string> = {
   'key.nextComment': '次のコメント',
   'key.previousComment': '前のコメント',
   'key.fold': 'このファイルを折りたたむ / 展開する',
-  'key.viewMode': '分割表示と統合表示を切り替え',
+  'key.viewMode': '左右に並べる表示と 1 列の表示を切り替え',
   'key.sync': 'プレビューを diff のスクロールに追従させる',
   'key.commentLine': '行にコメント: Tab で行番号に移動してから押します。Shift を併用すると範囲を広げられます',
   'key.submit': 'レビューを送信',
@@ -454,14 +461,14 @@ const ja: Record<MessageKey, string> = {
   'sidebar.foundLines.one': '、{count} 行',
   'sidebar.foundLines.other': '、{count} 行',
   'sidebar.list': '一覧',
-  'sidebar.listTitle': 'すべてのラウンドを 1 つの一覧に並べる',
+  'sidebar.listTitle': 'すべての diff を 1 つの一覧に並べる',
   'sidebar.tabs': 'タブ',
-  'sidebar.tabsTitle': 'ラウンドを 1 つずつタブで表示する',
+  'sidebar.tabsTitle': 'diff を 1 つずつタブで表示する',
   'sidebar.read': '{total} 件中 {read} 件 既読',
   'sidebar.markAllUnread': 'すべて未読に戻す',
   'sidebar.markAllUnreadTitle': 'このレビューの既読の印をすべて外します',
-  'sidebar.removeRound': 'このラウンドを削除',
-  'sidebar.tabMatches': 'このラウンドで一致したファイル数',
+  'sidebar.removeRound': 'この diff を削除',
+  'sidebar.tabMatches': 'この diff で一致したファイル数',
   'sidebar.truncated':
     '{max} 行で行の検索を打ち切りました。パスはすべて検索済みです。残りを見るには検索語を絞り込んでください。',
   'sidebar.noMatch': '一致するものはありません。',
@@ -476,7 +483,7 @@ const ja: Record<MessageKey, string> = {
   'sidebar.imgTitle': '画像としてプレビューできます',
   'sidebar.ipynbTitle': 'Jupyter notebook としてプレビューできます',
   'sidebar.removeQuestion': '{title} を削除しますか? 元に戻せません。',
-  'sidebar.removeQuestionComments': '{title} を削除しますか? このラウンドのコメント {count} 件も削除されます。',
+  'sidebar.removeQuestionComments': '{title} を削除しますか? この diff に付いたコメント {count} 件も削除されます。',
   'sidebar.removeFailed': '{title} を削除できませんでした: {error}',
 
   'search.path': 'パス',
@@ -494,10 +501,8 @@ const ja: Record<MessageKey, string> = {
   'diff.fold': 'このファイルを折りたたむ',
   'diff.commentOnFile': 'ファイルにコメント',
   'diff.commentOnFileTitle': '行を指定せず、ファイル全体についてコメントします',
-  'diff.unifiedNarrow': '分割表示にはもっと広いウィンドウが必要です',
-  'diff.unifiedOneSide': '変更前の内容がないファイルは常に統合表示になります',
-  'diff.split': '分割',
-  'diff.unified': '統合',
+  'diff.split': '左右に並べる',
+  'diff.unified': '1 列で表示',
   'diff.splitTitle': '変更前と変更後を左右に並べて表示',
   'diff.unifiedTitle': '変更前と変更後の行を 1 列にまとめて表示',
   'diff.rangeHint': '行番号をドラッグするか、Shift を押しながらクリックすると範囲を広げられます',
@@ -510,9 +515,9 @@ const ja: Record<MessageKey, string> = {
   'diff.commentNew': '変更後の {line} 行目にコメント',
   'diff.noNewline': ' (ファイル末尾に改行なし)',
   'diff.old': ' (変更前)',
-  'diff.everyFile': 'すべてのファイル',
-  'diff.everySplitTitle': 'すべてのファイルを分割表示にします。個別に切り替えたファイルはその設定を保ちます',
-  'diff.everyUnifiedTitle': 'すべてのファイルを統合表示にします。個別に切り替えたファイルはその設定を保ちます',
+  'diff.everyFile': '差分の表示(全ファイル)',
+  'diff.everySplitTitle': 'すべてのファイルで、変更前と変更後を左右に並べて表示します。個別に切り替えたファイルはその設定を保ちます',
+  'diff.everyUnifiedTitle': 'すべてのファイルで、変更前と変更後を 1 列にまとめて表示します。個別に切り替えたファイルはその設定を保ちます',
   'diff.stepper': 'このレビューのファイル',
   'diff.previousFile': '前のファイル',
   'diff.nextFile': '次のファイル',
@@ -612,9 +617,11 @@ const ja: Record<MessageKey, string> = {
   'app.help': 'ヘルプ: キー操作と画面ツアー',
   'help.tour': '画面ツアーをもう一度見る',
   'sidebar.label': 'このレビューのファイル',
-  'sidebar.layoutLabel': 'ラウンドの表示方法',
+  'sidebar.layoutLabel': 'diff の並べ方',
   'sidebar.readTitle': 'このレビューのファイルのうち、既読の印を付けたものの数',
-  'sidebar.roundToggle': 'このラウンドのファイルを表示 / 非表示({date} に送信)',
+  'sidebar.roundFiles.one': '{count} ファイル',
+  'sidebar.roundFiles.other': '{count} ファイル',
+  'sidebar.roundToggle': 'この diff のファイルを表示 / 非表示({date} に送信)',
   'sidebar.openComments': '未解決のコメント',
   'sidebar.additions': '追加された行',
   'sidebar.deletions': '削除された行',
@@ -634,16 +641,19 @@ const ja: Record<MessageKey, string> = {
   'tour.skip': 'ツアーをスキップ',
   'tour.files.title': 'レビュー対象のファイル',
   'tour.files.body':
-    'このレビューに含まれるファイルが、ラウンドごとに並びます。/ でパスと行を検索でき、読み終えたファイルには既読の印を付けられます。クリックするとそのファイルへ移動します。',
+    'このレビューに含まれるファイルが、送られた diff ごとに並びます。/ でパスと行を検索でき、読み終えたファイルには既読の印を付けられます。クリックするとそのファイルへ移動します。',
   'tour.diff.title': 'diff',
   'tour.diff.body':
-    'ファイルごとに 1 つのセクションがあります。見出しから折りたたみや分割 / 統合表示の切り替えができ、j と k でファイル間を移動できます。',
+    'ファイルごとに 1 つのセクションがあります。見出しから、折りたたみや、左右に並べるか 1 列で表示するかの切り替えができ、j と k でファイル間を移動できます。',
   'tour.preview.title': 'プレビュー',
   'tour.preview.body':
-    'Markdown、notebook、画像、ソースファイルをここに描画し、diff のスクロールに追従します。Markdown プレビューの文章を選択すると、その元になった行にコメントできます。',
+    'Markdown、notebook、画像、ソースファイルをここに描画し、diff のスクロールに追従します。',
   'tour.panes.title': '表示幅を切り替える',
   'tour.panes.body':
     '< で diff を、> でプレビューを隠し、もう一方を全幅で表示します。隠した側は同じ場所のボタンで戻せます。間のバーはドラッグで幅を変えられ、ダブルクリックで既定の幅に戻ります。ファイル一覧の横の < も同じように一覧を隠します。',
+  'tour.previewComment.title': 'プレビューにコメントする',
+  'tour.previewComment.body':
+    '描画された Markdown にもコメントできます。文章を選択して、横に出る「コメント」を押してください。コメントは選んだ文章の元になったファイルの行に付き、diff 側にも表示されます。',
   'tour.comment.title': '行にコメントする',
   'tour.comment.body':
     '行番号をクリックするとその行にコメントできます。複数行をドラッグするか Shift を押しながらクリックすると範囲を指定できます。キーボードなら Tab で行番号に移動して Enter を押します。',

@@ -334,6 +334,18 @@ a.icon-only.button {
   padding: var(--space-xs);
 }
 
+/* glyph is a character standing in for an icon - the ? of the help button -
+ * sized like one, so the button comes out as square as its icon neighbours
+ * instead of as tall as a line of text and as narrow as the character. */
+.glyph {
+  display: inline-block;
+  width: 1em;
+  font-size: var(--text-lg);
+  line-height: 1;
+  text-align: center;
+  font-weight: 600;
+}
+
 .settings-menu {
   position: relative;
 }
@@ -775,6 +787,24 @@ body.resizing iframe {
   color: var(--fg-muted);
 }
 
+/* The header of a file is a container so that its tools can tell how much
+ * room the pane leaves them. Below that the buttons drop their words and keep
+ * their icons - the tooltip and the accessible name still say them - so the
+ * path, which is what the header is for, keeps the room instead. */
+.diff-header {
+  container-type: inline-size;
+}
+
+@container (max-width: 640px) {
+  .diff-tools .tool-label {
+    display: none;
+  }
+}
+
+.diff-title .status {
+  flex-shrink: 0;
+}
+
 .path {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -832,6 +862,17 @@ body.resizing iframe {
 
 .diff-tools {
   margin-left: auto;
+  /* The file-comment button and the layout toggle sit side by side. As
+   * inline boxes they lined up by their text baselines, which left the
+   * button lower than the toggle and shorter than it; stretched in a row they
+   * share a top, a bottom and a height. */
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-sm);
+  /* The path gives way first, down to an ellipsis; the tools keep their
+   * one row, and a pane too narrow even for them clips them (see
+   * .diff-header) rather than stacking them. */
+  flex-shrink: 0;
 }
 
 .toggle {

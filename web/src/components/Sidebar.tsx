@@ -523,7 +523,7 @@ const SidebarRound = memo(function SidebarRound({
               <Icon name={shut ? 'chevron_right' : 'expand_more'} small />
             </span>
             {diff.title}
-            <span className="hint">{files.length}</span>
+            <span className="hint">{tn('sidebar.roundFiles', files.length)}</span>
             {open > 0 && (
               <span className="badge sm warn" title={t('sidebar.openComments')}>
                 {open}
