@@ -140,6 +140,11 @@ func Build(g *model.Group, sbnnVersion string, now time.Time) *Payload {
 		// dropping it keeps the page roughly half the size.
 		frozen := *d
 		frozen.Raw = ""
+		// An exported page is handed to someone else, and the directory the
+		// diff was sent from names the exporter's account and how their disk
+		// is laid out. The page has no use for it: everything on it is named
+		// by the paths in the diff.
+		frozen.BaseDir = ""
 		// The files are copied rather than shared: the verdict on each
 		// image is written onto them below, and d belongs to the store of
 		// a server that may be serving it at the same moment.
@@ -167,7 +172,11 @@ func Build(g *model.Group, sbnnVersion string, now time.Time) *Payload {
 					Content:  got.Content,
 					Source:   string(got.Kind),
 					Complete: got.Complete,
-					Path:     got.Path,
+					// got.Path is where the file sits on the exporter's
+					// disk; the page only shows it in a tooltip, and the
+					// path in the diff says the same without the home
+					// directory in front of it.
+					Path: f.Path(),
 				}
 				if f.IsMarkdown {
 					prev.Assets = freezeAssets(d.BaseDir, f.Path(), got.Content)
