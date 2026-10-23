@@ -259,7 +259,7 @@ one-review-per-group model lined up with GitHub's one-review-per-PR model.
   line number is a stop in the tab order, and Shift with the press extends the
   selection the way shift-clicking does. The `?` sheet says so too.
 - **Comment on the preview by selecting text in it.** Let the drag go and a
-  **+** appears where your pointer came up; it opens the same comment form,
+  **Comment** button appears where your pointer came up; it opens the same comment form,
   anchored to the source lines of the blocks you selected. The selection
   stays highlighted while you write, and goes away when you click elsewhere,
   press Escape, cancel or post. It needs sbnn's own preview of a whole file:
@@ -827,7 +827,7 @@ to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
 | `sbnn` | Read a diff on stdin and serve it | `--title`, `--label key=value`, `--replace`, `--open` / `--no-open`, `--foreground`, `--on-review`, `--on-review-url`, `--history-file`, `--json` |
 | `sbnn` on the running server | Act on the server instead of adding a diff | `--status`, `--status --all`, `--restart`, `--shutdown`, `--clear`, `--clear --all` |
 | `sbnn comments` | Print the comments left in the browser | `--format` (`prompt`, `markdown`, `json`), `--json`, `--clear`, `--clear --resolved-only`, `--include-resolved`, `--exit-code`, `--quiet` (`-q`) |
-| `sbnn comment path[:line[-line]]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--json` |
+| `sbnn comment path[:line[-line]]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--reply-to`, `--json` |
 | `sbnn submit` | End the round, as the Submit button does | `--note` (`-m`), `--verdict` (`approved`, `commented`, `changes-requested`), `--approve`, `--request-changes`, `--exit-code`, `--quiet` |
 | `sbnn wait` | Block until the review is submitted, then print it | `--timeout`, `--format`, `--json`, `--exit-code`, `--quiet` |
 | `sbnn hook` | Run something when a review is submitted | `--on-review`, `--on-review-url`, `--clear`, `--json` |
