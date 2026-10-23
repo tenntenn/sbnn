@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/tenntenn/sbnn/internal/client"
 )
 
 var (
@@ -54,7 +52,7 @@ exits 1 only if a comment is left open.`,
 func init() {
 	f := commentsCmd.Flags()
 	f.StringVarP(&target, "target", "t", "", "Group name (default \"default\", or $SBNN_TARGET)")
-	f.IntVarP(&port, "port", "p", DefaultPort, "Server port")
+	f.IntVarP(&port, "port", "p", 0, portFlagHelp)
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
 	f.StringVar(&commentsFormat, "format", "prompt", "Output format: prompt, markdown or json")
 	f.BoolVar(&commentsResolved, "include-resolved", false, "Include comments marked as resolved")
@@ -76,9 +74,9 @@ func runComments(cmd *cobra.Command, _ []string) error {
 	if err := checkClearFlags(); err != nil {
 		return err
 	}
-	c := client.New(addr(), 5*time.Second)
-	if _, err := c.Status(ctx); err != nil {
-		return fmt.Errorf("no sbnn server found on %s", c.Addr)
+	c, _, err := connect(ctx, cmd, 5*time.Second)
+	if err != nil {
+		return err
 	}
 
 	if commentsClear {

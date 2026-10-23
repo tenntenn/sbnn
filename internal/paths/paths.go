@@ -58,6 +58,17 @@ func SessionFile(port int) (string, error) {
 	return filepath.Join(dir, fmt.Sprintf("session-%d.json", port)), nil
 }
 
+// ServersFile returns the map of which repository's server listens on which
+// port. Like the log of reviews it is one file for the whole machine: it is
+// what every invocation, in whatever repository, reads to find its server.
+func ServersFile() (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "servers.json"), nil
+}
+
 // HistoryFile returns the log of submitted reviews. It is one file for the
 // whole machine on purpose: the point of keeping reviews is to read them
 // together, long after the servers that recorded them are gone.

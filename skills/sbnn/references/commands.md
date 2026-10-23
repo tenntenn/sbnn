@@ -14,7 +14,8 @@ list.
 | `... \| sbnn --collapse '<glob>'` | Fold generated files away, repeatable |
 | `... \| sbnn --label <key>=<value>` | Keep a PR number or URL with the diff, repeatable |
 | `... \| sbnn --replace` | After adding the diff, drop the group's earlier diffs and their comments (next round) |
-| `sbnn --status [--json]` | Show the running server, its groups and comment counts |
+| `sbnn --status [--json]` | Show this repository's server, its groups and comment counts |
+| `sbnn --status --all [--json]` | List the server of every repository, running or not |
 | `sbnn --clear [-t <name>]` | Close a review: its diffs, comments and hooks |
 | `sbnn prune --dry-run` | List the reviews left alone for 7 days, and which of them would be kept and why |
 | `sbnn prune` | Close them, keeping those with open comments or hooks, and remove stopped servers' files |
@@ -41,6 +42,10 @@ list.
 | `... \| sbnn export <file>` | Write the review as one self-contained HTML page |
 | `... \| sbnn export --fragment <file>` | The same, body only, for embedding |
 
-`--port` (default 6280) selects the server; use it only if the user runs sbnn
-on a non-default port. Inside a review hook you do not have to ask which port
-that is: the server passes its own in `SBNN_PORT`.
+Every command talks to the server of the repository it runs in: each
+repository has its own, on its own port, and worktrees share their
+repository's. Leave `--port` out and run sbnn from inside the repository the
+review is about. `--port` picks a server by number, and a server that belongs
+to another repository is refused, so it cannot be used to reach someone else's
+review by accident. Inside a review hook the server passes its own port in
+`SBNN_PORT`; pass it on as `--port "$SBNN_PORT"`.

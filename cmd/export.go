@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tenntenn/sbnn/internal/client"
 	"github.com/tenntenn/sbnn/internal/diff"
 	"github.com/tenntenn/sbnn/internal/export"
 	"github.com/tenntenn/sbnn/internal/model"
@@ -54,7 +53,8 @@ Nothing is ever asked, so this works the same in a pipe and in CI.`,
 func init() {
 	f := exportCmd.Flags()
 	f.StringVarP(&target, "target", "t", "", "Group name (default \"default\", or $SBNN_TARGET)")
-	f.IntVarP(&port, "port", "p", DefaultPort, "Port of the sbnn server to read the group from")
+	f.IntVarP(&port, "port", "p", 0,
+		"Port of the sbnn server to read the group from (default: the port of this repository's server)")
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address of the sbnn server")
 	f.StringVar(&title, "title", "", "Title of the diff read from stdin")
 	f.StringVar(&exportTitle, "page-title", "", "Title of the generated page")
@@ -99,9 +99,9 @@ func runExport(cmd *cobra.Command, args []string) error {
 			}},
 		}
 	default:
-		c := client.New(addr(), 10*time.Second)
-		if _, err := c.Status(ctx); err != nil {
-			return fmt.Errorf("no diff on stdin and no sbnn server on %s", c.Addr)
+		c, _, err := connect(ctx, cmd, 10*time.Second)
+		if err != nil {
+			return fmt.Errorf("no diff on stdin, and %w", err)
 		}
 		g, err = c.Group(ctx, group)
 		if err != nil {

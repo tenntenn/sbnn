@@ -266,7 +266,7 @@ func (s *Store) appendRecord(rec *logRecord) error {
 // write replaces the session file with a snapshot of the current session. The
 // caller must hold the lock.
 func (s *Store) write() (err error) {
-	b, err := json.Marshal(persisted{Version: persistVersion, Seq: s.sharedSeq(), Seqs: s.seq, Groups: s.groups, Rounds: s.rounds})
+	b, err := json.Marshal(persisted{Version: persistVersion, Seq: s.sharedSeq(), Seqs: s.seq, Groups: s.groups, Rounds: s.rounds, Repository: s.repository})
 	if err != nil {
 		return fmt.Errorf("encoding the session: %w", err)
 	}

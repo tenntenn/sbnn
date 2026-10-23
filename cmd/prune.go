@@ -22,7 +22,9 @@ import (
 	"github.com/tenntenn/sbnn/internal/client"
 	"github.com/tenntenn/sbnn/internal/history"
 	"github.com/tenntenn/sbnn/internal/paths"
+	"github.com/tenntenn/sbnn/internal/repository"
 	"github.com/tenntenn/sbnn/internal/server"
+	"github.com/tenntenn/sbnn/internal/servermap"
 )
 
 // DefaultPruneAge is how long a review has to be left alone before sbnn prune
@@ -45,6 +47,8 @@ servers which are no longer running left behind.
 
 Nothing else ends a review an agent forgot to close: a group stays on the
 server until someone runs sbnn --clear. sbnn prune is the clean-up for that.
+It closes reviews on the server of the repository it runs in, or on the one
+--port names.
 
   $ sbnn prune --dry-run             # what would go, and what stays and why
   $ sbnn prune                       # close reviews left alone for 7 days
@@ -62,7 +66,9 @@ be closed, and the log of that server with it; a session file of a running
 server is never touched, and neither is the log of submitted reviews that
 sbnn reviews reads. Previews sbnn rebuilt from a diff are removed from the
 cache directory once no server and no remaining session file holds their
-review.
+review. A repository whose directory no longer exists, and whose server left
+no session file behind, is dropped from the map of which repository's server
+is on which port (servers.json), so that port can be given out again.
 
 Before closing anything it asks, listing what it is about to close; --yes, or
 a stdin that is not a terminal, skips the question.`,
@@ -73,7 +79,8 @@ a stdin that is not a terminal, skips the question.`,
 
 func init() {
 	f := pruneCmd.Flags()
-	f.IntVarP(&port, "port", "p", DefaultPort, "Port of the server whose reviews are closed")
+	f.IntVarP(&port, "port", "p", 0,
+		"Port of the server whose reviews are closed (default: the port of this repository's server)")
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
 	f.StringVar(&pruneOlderThan, "older-than", DefaultPruneAge,
 		"Close reviews with no activity for this long, or since this date: 7d, 36h, 2026-01-31")
@@ -111,7 +118,12 @@ type pruneFile struct {
 type pruneReport struct {
 	DryRun bool      `json:"dryRun"`
 	Before time.Time `json:"before"`
-	Server string    `json:"server"`
+	// Repository is the repository prune was run in, whose server it
+	// closes reviews on: its root, or "" outside any repository.
+	Repository string `json:"repository"`
+	// Server is the URL of that server, or "" when the repository has
+	// never had one.
+	Server string `json:"server"`
 	// Running is whether a server answered on Server. When none did, only
 	// files are pruned.
 	Running   bool                 `json:"running"`
@@ -119,6 +131,9 @@ type pruneReport struct {
 	Kept      []server.PrunedGroup `json:"kept"`
 	Removed   []pruneFile          `json:"removed"`
 	KeptFiles []pruneFile          `json:"keptFiles"`
+	// Forgotten are the servers dropped from the server map: their
+	// repository is gone, and so is everything they kept.
+	Forgotten []servermap.Entry `json:"forgotten"`
 }
 
 func runPrune(cmd *cobra.Command, _ []string) error {
@@ -139,25 +154,41 @@ func runPrune(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	c := client.New(addr(), 5*time.Second)
+	ref, err := resolveServer(cmd, false)
+	if err != nil {
+		return err
+	}
 	rep := pruneReport{
-		DryRun:    pruneDryRun,
-		Before:    before,
-		Server:    c.BaseURL(),
-		Closed:    []server.PrunedGroup{},
-		Kept:      []server.PrunedGroup{},
-		Removed:   []pruneFile{},
-		KeptFiles: []pruneFile{},
+		DryRun:     pruneDryRun,
+		Before:     before,
+		Repository: ref.repo,
+		Closed:     []server.PrunedGroup{},
+		Kept:       []server.PrunedGroup{},
+		Removed:    []pruneFile{},
+		KeptFiles:  []pruneFile{},
+		Forgotten:  []servermap.Entry{},
 	}
 	req := server.PruneRequest{Before: before, Force: pruneForce, DryRun: true}
 	// The plan is always worked out first, even when it is carried out at
 	// once: the files depend on which reviews the server keeps, and the
 	// question, when there is one, is built from it.
-	var plan *server.PruneResponse
-	if _, err := probe(ctx, c, 2*time.Second); err == nil {
-		rep.Running = true
-		if plan, err = c.Prune(ctx, req); err != nil {
-			return olderServer(err)
+	var (
+		c    *client.Client
+		plan *server.PruneResponse
+	)
+	if ref.port != 0 {
+		c = client.New(addr(), 5*time.Second)
+		rep.Server = c.BaseURL()
+		if st, err := probe(ctx, c, 2*time.Second); err == nil {
+			// Closing reviews is the one thing prune does to a server, and
+			// it must be this repository's reviews it closes.
+			if err := ref.check(st); err != nil {
+				return err
+			}
+			rep.Running = true
+			if plan, err = c.Prune(ctx, req); err != nil {
+				return olderServer(err)
+			}
 		}
 	}
 	files := planPruneFiles(stateDir, cacheDir, before, pruneForce, runningServers(ctx, plan))
@@ -187,6 +218,11 @@ func runPrune(cmd *cobra.Command, _ []string) error {
 		}
 		files = removePruneFiles(files, runningServers(ctx, nil))
 	}
+	forgotten, err := forgetServers(stateDir, files.remove, runningServers(ctx, nil), pruneDryRun)
+	if err != nil {
+		return err
+	}
+	rep.Forgotten = append(rep.Forgotten, forgotten...)
 	if plan != nil {
 		rep.Closed, rep.Kept = plan.Closed, plan.Kept
 	}
@@ -574,7 +610,11 @@ func printPruneReport(w io.Writer, rep pruneReport) {
 		}
 		return done
 	}
-	if !rep.Running {
+	switch {
+	case rep.Server == "":
+		fmt.Fprintf(w, "No sbnn server was ever started for %s, so only the files of stopped servers are pruned.\n",
+			repository.Describe(rep.Repository))
+	case !rep.Running:
 		fmt.Fprintf(w, "No sbnn server on %s, so only the files of stopped servers are pruned.\n", rep.Server)
 	}
 	if len(rep.Closed) > 0 {
@@ -615,9 +655,70 @@ func printPruneReport(w io.Writer, rep pruneReport) {
 			fmt.Fprintf(w, "  %-8s %s: %s\n", f.Kind, f.Path, f.Reason)
 		}
 	}
-	if len(rep.Closed) == 0 && len(old) == 0 && len(rep.Removed) == 0 {
+	if len(rep.Forgotten) > 0 {
+		fmt.Fprintf(w, "%s %d server(s) of repositories that no longer exist:\n",
+			verb("Forgot", "Would forget"), len(rep.Forgotten))
+		for _, e := range rep.Forgotten {
+			fmt.Fprintf(w, "  port %-6d %s\n", e.Port, repository.Describe(e.Repository))
+		}
+	}
+	if len(rep.Closed) == 0 && len(old) == 0 && len(rep.Removed) == 0 && len(rep.Forgotten) == 0 {
 		fmt.Fprintln(w, "Nothing to prune.")
 	}
+}
+
+// forgetServers drops from the server map the servers whose repository no
+// longer exists and that left nothing behind: no server is running on their
+// port, and their session file is gone or is one of removed. Without this
+// the map only ever grows, and every deleted checkout keeps a port nobody
+// will be given again.
+//
+// The server of the diffs from outside any repository has no directory to
+// lose, so it is never forgotten this way. With dryRun the map is left as it
+// is and the servers that would go are returned.
+func forgetServers(stateDir string, removed []pruneFile, ask portProbe, dryRun bool) ([]servermap.Entry, error) {
+	mapPath := filepath.Join(stateDir, "servers.json")
+	gone := func(e servermap.Entry) bool {
+		if e.Repository == repository.None {
+			return false
+		}
+		if _, err := os.Stat(e.Repository); !errors.Is(err, fs.ErrNotExist) {
+			return false
+		}
+		session := sessionPath(stateDir, e.Port)
+		if _, err := os.Stat(session); err == nil && !slices.ContainsFunc(removed, func(f pruneFile) bool {
+			return f.Kind == pruneSession && f.Path == session
+		}) {
+			return false
+		}
+		_, running, reason := ask(e.Port)
+		return !running && reason == ""
+	}
+	if dryRun {
+		m, err := servermap.Load(mapPath)
+		if err != nil {
+			return nil, err
+		}
+		var out []servermap.Entry
+		for _, e := range m.Servers {
+			if gone(e) {
+				out = append(out, e)
+			}
+		}
+		return out, nil
+	}
+	var out []servermap.Entry
+	err := servermap.Update(mapPath, func(m *servermap.Map) error {
+		m.Servers = slices.DeleteFunc(m.Servers, func(e servermap.Entry) bool {
+			if gone(e) {
+				out = append(out, e)
+				return true
+			}
+			return false
+		})
+		return nil
+	})
+	return out, err
 }
 
 // removedNote names the reviews a removed session file held.

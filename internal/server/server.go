@@ -78,6 +78,13 @@ type Options struct {
 	// Verbose turns on the per-request log. SBNN_LOG=info does the same for
 	// a server that was already started.
 	Verbose bool
+	// Repository is the repository the server belongs to: its root, or ""
+	// (repository.None) for the diffs sent from outside any repository. It
+	// is reported by /_/api/status, which is how an invocation tells its
+	// own server from another repository's. nil belongs to none in
+	// particular, which is what an older sbnn's server looks like and what
+	// tests that do not care get.
+	Repository *string
 }
 
 // Server is the resident sbnn server.
@@ -116,6 +123,9 @@ func New(opts Options) (*Server, error) {
 		// is worth one line wherever the human is.
 		slog.Warn("could not restore session", "error", err)
 		fmt.Fprintf(os.Stderr, "sbnn: %v\n", err)
+	}
+	if err := s.store.BindRepository(opts.Repository); err != nil {
+		return nil, err
 	}
 	// Run replaces this with a previewer that knows the frame proxy.
 	s.prev = &previewer{mo: opts.Mo, cacheDir: opts.CacheDir}
@@ -486,6 +496,11 @@ type Status struct {
 	// SessionError says why the session is not being written to disk. It is
 	// empty while the session file is up to date.
 	SessionError string `json:"sessionError,omitempty"`
+	// Repository is the repository the server belongs to: the root of its
+	// main working tree, or "" for the server of the diffs sent from
+	// outside any repository. It is absent from a server started by an
+	// sbnn that predates servers per repository.
+	Repository *string `json:"repository,omitempty"`
 }
 
 func (s *Server) status() Status {
@@ -497,6 +512,10 @@ func (s *Server) status() Status {
 		URL:      s.BaseURL(),
 		MoURL:    s.opts.Mo.BaseURL(),
 		Groups:   s.store.Summary(s.BaseURL()),
+	}
+	if r := s.opts.Repository; r != nil {
+		repo := *r
+		st.Repository = &repo
 	}
 	if s.proxy != nil {
 		st.MoProxyURL = s.proxy.baseURL

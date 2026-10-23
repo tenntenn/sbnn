@@ -122,10 +122,29 @@ $ cat change.patch | sbnn
 ```
 
 The first invocation starts the server on <http://localhost:6280>, opens a
-browser and returns the shell. Later invocations add to the running server.
+browser and returns the shell. Later invocations in the same repository add to
+the running server.
+
+Each repository gets a server of its own. sbnn works out the repository by
+walking up from the current directory to `.git` — it reads the directory, it
+does not run git — and the diffs, comments and reviews of one repository never
+show up on another's server. The first repository to start a server gets port
+6280, the next 6281, and so on; which repository has which port is kept in
+`servers.json` in the state directory, so a repository keeps its port, and its
+URLs, after the server stops and starts again. A worktree belongs to the
+repository it was added to and shares its server, with `--target` telling the
+checkouts apart; a submodule is a repository of its own, and diffs sent from
+outside any repository get a server of their own as well.
+
+Every command finds the server of the repository it runs in. `--port` (`-p`)
+still picks a server by number, but a server that belongs to another repository
+is refused rather than mixed into: `sbnn --status -p 6281`, `--shutdown` and
+`--restart` work on any server, everything else only on the one
+of the repository you are in.
 
 ```console
 $ sbnn --status          # what is being reviewed
+$ sbnn --status --all    # every repository's server, running or not
 $ sbnn --clear -t api    # close that review: its diffs, comments and hooks
 $ sbnn --clear --all     # close every review the server holds
 $ sbnn --restart         # restart, keeping the session
@@ -166,7 +185,8 @@ $ sbnn prune --older-than 30d    # close what has been left for a month
 
 An old review is still kept while it holds a comment nobody resolved or a hook
 waiting for the review, and prune says which it kept and why; `--force` closes
-those as well. Like `--clear --all`, it lists what it is about to close and
+those as well. It closes reviews on the server of the repository it runs in;
+run it in another repository, or pass `--port`, for another server. Like `--clear --all`, it lists what it is about to close and
 asks first, unless you pass `--yes` or nobody is at the terminal.
 
 Prune also clears up after servers that are no longer running. The state
@@ -174,7 +194,9 @@ directory keeps a `session-<port>.json` and a `server-<port>.log` for every
 port a server ever ran on; prune removes both for a port where no sbnn server
 answers, once every review in that session would be closed by the same rule.
 A running server's files are never touched, and neither is `reviews.jsonl`,
-the log `sbnn reviews` reads. The Markdown previews sbnn rebuilt from diffs go
+the log `sbnn reviews` reads. A repository whose directory is gone, and whose
+server left no session behind, is dropped from `servers.json`, so its port can
+be given out again. The Markdown previews sbnn rebuilt from diffs go
 once no server and no remaining session holds their review; closing a review,
 or replacing a round with `--replace`, removes its previews straight away.
 
@@ -513,8 +535,11 @@ h1  POST http://localhost:9000/reviews
 
 The command runs through the shell with the review prompt on its stdin and
 `SBNN_GROUP`, `SBNN_URL`, `SBNN_SERVER`, `SBNN_PORT`, `SBNN_COMMENTS` and
-`SBNN_REVIEW_NOTE` in its environment. Hooks belong to a group and survive a
-restart. They run a command of your own on your own machine, which is what
+`SBNN_REVIEW_NOTE` in its environment. `SBNN_SERVER` and `SBNN_PORT` name the
+server the review was submitted on; an `sbnn comments` inside the hook finds
+the same server on its own when it runs in that repository, and
+`sbnn comments -p "$SBNN_PORT"` says so explicitly. Hooks belong to a group and
+survive a restart. They run a command of your own on your own machine, which is what
 makes them useful and worth being deliberate about.
 
 ### Reading the comments back
@@ -770,13 +795,14 @@ only need the name. It is not the full list: that is in `sbnn --help` and in
 `sbnn <command> --help` for each command below.
 
 Every command that talks to the server also takes `--port` (`-p`), `--bind`
-(`-b`) and `--target` (`-t`). `--target` falls back to `$SBNN_TARGET` and then
+(`-b`) and `--target` (`-t`). `--port` defaults to the port of the current
+repository's server, and is refused when it names another repository's. `--target` falls back to `$SBNN_TARGET` and then
 to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
 
 | Command | What it does | Flags worth knowing |
 | --- | --- | --- |
 | `sbnn` | Read a diff on stdin and serve it | `--title`, `--label key=value`, `--replace`, `--open` / `--no-open`, `--foreground`, `--on-review`, `--on-review-url`, `--history-file`, `--json` |
-| `sbnn` on the running server | Act on the server instead of adding a diff | `--status`, `--restart`, `--shutdown`, `--clear`, `--clear --all` |
+| `sbnn` on the running server | Act on the server instead of adding a diff | `--status`, `--status --all`, `--restart`, `--shutdown`, `--clear`, `--clear --all` |
 | `sbnn comments` | Print the comments left in the browser | `--format` (`prompt`, `markdown`, `json`), `--json`, `--clear`, `--clear --resolved-only`, `--include-resolved`, `--exit-code`, `--quiet` (`-q`) |
 | `sbnn comment path[:line[-line]]` | Leave a comment from the command line | `--message` (`-m`), `--author`, `--question`, `--side` (`new`, `old`), `--suggest`, `--suggest-file`, `--diff`, `--json` |
 | `sbnn submit` | End the round, as the Submit button does | `--note` (`-m`), `--verdict` (`approved`, `commented`, `changes-requested`), `--approve`, `--request-changes`, `--exit-code`, `--quiet` |
@@ -824,7 +850,8 @@ embedded frontend. Once mo is on PATH, pick it in the preview header.
 
 | What | Where |
 | --- | --- |
-| sbnn server | `localhost:6280` (`--port`) |
+| sbnn server | one per repository: `localhost:6280` for the first, `6281` for the next, ... (`--port`) |
+| Which repository has which port | `<state>/servers.json` |
 | mo server | `localhost:6275` (`--mo-port`) |
 | Preview proxy | a loopback port picked at startup |
 | Session state (diffs, comments, hooks) | `<state>/session-<port>.json` |

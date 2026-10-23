@@ -41,6 +41,13 @@ these variables set: SBNN_GROUP, SBNN_URL, SBNN_SERVER, SBNN_PORT, SBNN_COMMENTS
 SBNN_REVIEW_NOTE, SBNN_VERDICT and SBNN_BLOCKING. The URL is sent the same
 thing as JSON, where the verdict is the "verdict" field.
 
+SBNN_SERVER and SBNN_PORT name the server the review was submitted on, which
+is the server of one repository. An sbnn run inside the hook finds that same
+server by itself when it runs in that repository; sbnn comments -p "$SBNN_PORT"
+names it outright. sbnn does not read SBNN_PORT on its own: a variable a hook
+was given would otherwise quietly point every sbnn the hook starts, in any
+repository, at this one server.
+
 SBNN_VERDICT is what the reviewer decided - approved, commented or
 changes-requested - and is empty when the review carried no verdict, so a
 hook that wants a default picks its own.
@@ -70,7 +77,7 @@ makes it useful and worth being deliberate about.`,
 func init() {
 	f := hookCmd.Flags()
 	f.StringVarP(&target, "target", "t", "", "Group name (default \"default\", or $SBNN_TARGET)")
-	f.IntVarP(&port, "port", "p", DefaultPort, "Server port")
+	f.IntVarP(&port, "port", "p", 0, portFlagHelp)
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
 	f.StringVar(&hookCommand, "on-review", "", "Shell command to run when a review is submitted")
 	f.StringVar(&hookURL, "on-review-url", "", "URL to POST to when a review is submitted")
@@ -143,9 +150,9 @@ func runHook(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	c := client.New(addr(), 5*time.Second)
-	if _, err := c.Status(ctx); err != nil {
-		return fmt.Errorf("no sbnn server found on %s", c.Addr)
+	c, _, err := connect(ctx, cmd, 5*time.Second)
+	if err != nil {
+		return err
 	}
 
 	switch action {

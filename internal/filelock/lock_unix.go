@@ -1,6 +1,6 @@
 //go:build !windows
 
-package history
+package filelock
 
 import (
 	"errors"
@@ -8,11 +8,11 @@ import (
 	"syscall"
 )
 
-// lockForAppend takes an exclusive advisory lock on the whole file and
-// returns the release. A flock belongs to the open file description, so
-// two servers - or two opens inside one - wait for each other the way the
-// log needs them to.
-func lockForAppend(f *os.File) (func(), error) {
+// Lock takes an exclusive advisory lock on the whole file and returns the
+// release. A flock belongs to the open file description, so two processes -
+// or two opens inside one - wait for each other the way a writer needs them
+// to.
+func Lock(f *os.File) (func(), error) {
 	fd := int(f.Fd())
 	for {
 		err := syscall.Flock(fd, syscall.LOCK_EX)
@@ -22,8 +22,8 @@ func lockForAppend(f *os.File) (func(), error) {
 		case errors.Is(err, syscall.EINTR):
 			// A signal arrived while waiting. Ask again.
 		case noLocksHere(err):
-			// Some filesystems have no locks to hand out. A record
-			// written without one beats a record refused.
+			// Some filesystems have no locks to hand out. A write
+			// made without one beats a write refused.
 			return func() {}, nil
 		default:
 			return nil, err

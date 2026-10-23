@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/tenntenn/sbnn/internal/client"
 	"github.com/tenntenn/sbnn/internal/paths"
 	"github.com/tenntenn/sbnn/internal/server"
@@ -38,8 +40,17 @@ const (
 )
 
 // runServer runs the sbnn server in the foreground. The background server is
-// this same code, started by spawnServer with --foreground.
-func runServer(ctx context.Context) error {
+// this same code, started by spawnServer with --foreground, --port and
+// --repository; started by hand, it works both out the way every other
+// invocation does.
+func runServer(ctx context.Context, cmd *cobra.Command) error {
+	ref, err := resolveServer(cmd, true)
+	if err != nil {
+		return err
+	}
+	if err := ref.checkSpawn(); err != nil {
+		return err
+	}
 	sessionFile, err := paths.SessionFile(port)
 	if err != nil {
 		return err
@@ -63,6 +74,7 @@ func runServer(ctx context.Context) error {
 		Revision:    version.Revision,
 		AllowRemote: allowRemote,
 		IdleTimeout: idleTimeout,
+		Repository:  &ref.repo,
 	})
 	if err != nil {
 		return err
@@ -85,8 +97,9 @@ func runServer(ctx context.Context) error {
 	return <-errCh
 }
 
-// spawnServer starts the server in the background and waits until it answers.
-func spawnServer(ctx context.Context, c *client.Client) (*server.Status, error) {
+// spawnServer starts the server of repo in the background and waits until it
+// answers.
+func spawnServer(ctx context.Context, c *client.Client, repo string) (*server.Status, error) {
 	// Whatever holds the address, the child is going to hit it too, and can
 	// only complain about it into its log. Ask here, where the answer can be
 	// put in front of the user at once instead of after the timeout.
@@ -103,7 +116,7 @@ func spawnServer(ctx context.Context, c *client.Client) (*server.Status, error) 
 	if err != nil {
 		return nil, err
 	}
-	args := backgroundServerArgs(history)
+	args := backgroundServerArgs(history, repo)
 
 	cmd := exec.Command(bin, args...)
 	logPath, logFile := openLog()
@@ -149,10 +162,16 @@ func spawnServer(ctx context.Context, c *client.Client) (*server.Status, error) 
 // that hurts most quietly: left off, the only server that ever outlives
 // anything runs on the zero value and stays resident forever, while every
 // test that goes through server.Options still passes.
-func backgroundServerArgs(history []string) []string {
+//
+// --repository is passed even though the server could find it again from its
+// working directory: this invocation has already decided, and a --restart
+// keeps the repository of the server it restarts whichever directory it is
+// run from.
+func backgroundServerArgs(history []string, repo string) []string {
 	args := []string{
 		"--foreground",
 		"--port", strconv.Itoa(port),
+		"--repository", repo,
 		"--bind", bind,
 		"--mo-bin", moBin,
 		"--mo-port", strconv.Itoa(moPort),

@@ -1,10 +1,14 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // The built assets are embedded into the sbnn binary (see web.go), so the
 // output has to stay in dist/. During development everything under /_ is
 // proxied to a running sbnn server (sbnn --foreground).
-export default defineConfig({
+//
+// Each repository has a server of its own on a port of its own, so the port
+// is not something this file can know: `task dev` starts the server on
+// SBNN_DEV_PORT and hands the same number to Vite here.
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
   build: {
     outDir: 'dist',
@@ -26,9 +30,9 @@ export default defineConfig({
     },
     proxy: {
       '/_': {
-        target: 'http://localhost:6280',
+        target: `http://localhost:${loadEnv(mode, '.', 'SBNN_').SBNN_DEV_PORT || '6280'}`,
         changeOrigin: false,
       },
     },
   },
-})
+}))

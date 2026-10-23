@@ -73,7 +73,8 @@ own.`,
 func init() {
 	f := reviewsCmd.Flags()
 	f.StringVarP(&target, "target", "t", "", "Only the reviews of this group")
-	f.IntVarP(&port, "port", "p", DefaultPort, "Server port (used when sbnn is running)")
+	f.IntVarP(&port, "port", "p", 0,
+		"Server port, used when sbnn is running (default: the port of this repository's server)")
 	f.StringVarP(&bind, "bind", "b", "localhost", "Bind address")
 	f.StringVar(&historyPath, "history-file", "", historyFileHelp("Where the log is kept"))
 	f.StringVar(&reviewsSince, "since", "", "Only reviews after this: 7d, 36h, 2026-01-31")
@@ -201,9 +202,17 @@ func loadReviews(cmd *cobra.Command, filter history.Filter) ([]history.Record, e
 			return records, nil
 		}
 	}
+	ref, err := resolveServer(cmd, false)
+	if err != nil || ref.port == 0 {
+		return nil, err
+	}
 	c := client.New(addr(), 5*time.Second)
-	if _, err := c.Status(cmd.Context()); err != nil {
+	st, err := c.Status(cmd.Context())
+	if err != nil {
 		return nil, nil
+	}
+	if err := ref.check(st); err != nil {
+		return nil, err
 	}
 	return c.Reviews(cmd.Context(), filter)
 }
