@@ -15,6 +15,7 @@ diff ビューアー兼レビューツールです。名前は「sabun」（差�
 ## 目次
 
 - [インストール](#インストール)
+  - [アップデート](#アップデート)
 - [使い方](#使い方)
   - [グループ](#グループ)
   - [スタックした pull request](#スタックした-pull-request)
@@ -83,6 +84,23 @@ go: github.com/tenntenn/sbnn@latest: ... requires go >= 1.27.3 (running go 1.24.
 その行が求めるバージョンまで Go を上げるか、`GOTOOLCHAIN` をデフォルトのままにしてツールチェーンを自動で取ってこさせてください。
 
 `go install` はソースからビルドするので、バイナリはインストールしたときのモジュールのバージョンを報告します。タグの付いていないコミットなら `sbnn --version` は `dev` と表示し、`@v1.2.3` ならそのリリースを表示します。リリースページのバイナリには、ビルド元のタグが埋め込まれています。
+
+### アップデート
+
+リリースページのバイナリは自分自身を更新できます。
+
+```console
+$ sbnn update --check             # 新しいリリースがあるか確かめる
+$ sbnn update                     # ダウンロードして検証し、インストールする
+$ sbnn update --version v1.2.3    # 指定したリリースをインストールする（古いものも可）
+$ sbnn --restart                  # 動いているサーバーは再起動するまで古いバイナリのまま
+```
+
+`sbnn update` は最新リリースから OS とアーキテクチャに合ったアーカイブをダウンロードし、その SHA-256 を同じリリースの `checksums.txt` と照合してから、新しいバイナリを古いバイナリの上にリネームします。一致しなければ何も置き換えません。`--version` で指定しない限り古いリリースをインストールすることはなく、sbnn が置かれたディレクトリへの書き込み権限が必要です。詳しくは [SECURITY.md](SECURITY.md#updates) を参照してください。
+
+更新があることも知らせてくれます。リリースのバイナリは、実行中のコマンドと並行して 1 日に 1 回まで GitHub に最新リリースを問い合わせ、より新しいものがあれば標準エラー出力に 1 行表示します。コマンドを遅らせたり失敗させたりすることはなく、オフライン、タイムアウト、レート制限のときは何も表示しません。標準エラー出力が端末でないとき、`--json` のとき、バックグラウンドのサーバー、ソースからのビルドでは行いません。`SBNN_NO_UPDATE_CHECK=1` を設定すると完全に止まります。`GITHUB_TOKEN` を設定すると API のレート制限が緩くなり、トークンは `api.github.com` にだけ送られます。
+
+`go install` でインストールしたバイナリは上書きしません。通知も `sbnn update` も、代わりに `go install github.com/tenntenn/sbnn@latest` を案内します。
 
 ## 使い方
 
@@ -496,6 +514,7 @@ Before showing a diff to a human, read [.agents/skills/sbnn/SKILL.md](.agents/sk
 | `sbnn reviews` | 送信されたレビューのログを読む | `--since`, `--stats`, `--top`, `--limit`, `--comments`, `--all`, `--file`, `--history-file`, `--format` (`text`, `json`, `jsonl`) |
 | `sbnn export [file]` | レビューを自己完結した 1 つの HTML ページとして書き出す | `--fragment`, `--page-title`, `--title` |
 | `sbnn skill` | エージェントスキルを出力またはインストールする | `--list`, `--install`, `--force`, `--refresh` |
+| `sbnn update` | この sbnn を最新リリースに置き換える | `--check`, `--version` |
 
 ## Markdown プレビューの仕組み
 
@@ -526,6 +545,7 @@ $ brew install k1LoW/tap/mo
 | セッションの状態（diff、コメント、hook） | `<state>/session-<port>.json` |
 | サーバーのログ | `<state>/server-<port>.log` |
 | レビューのログ | `<state>/reviews.jsonl`（`--history-file`、`$SBNN_HISTORY`） |
+| 新しいリリースを最後に確認した記録 | `<state>/update-check.json`（`$SBNN_NO_UPDATE_CHECK` で無効） |
 | 再構成したプレビュー | `<cache>/preview/…` |
 | エクスポートしたページ | `sbnn export` で指定した場所 |
 

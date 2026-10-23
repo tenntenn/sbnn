@@ -19,6 +19,7 @@ retake it.</sub>
 ## Contents
 
 - [Install](#install)
+  - [Updating](#updating)
 - [Usage](#usage)
   - [Groups](#groups)
   - [Stacked pull requests](#stacked-pull-requests)
@@ -112,6 +113,37 @@ default and let it fetch that toolchain for you.
 was installed at - `sbnn --version` says `dev` for an untagged commit and the
 release for `@v1.2.3`. A binary from the releases page is stamped with the tag
 it was built from.
+
+### Updating
+
+A binary from the releases page updates itself:
+
+```console
+$ sbnn update --check             # is there a newer release?
+$ sbnn update                     # download, verify and install it
+$ sbnn update --version v1.2.3    # install that release, older ones included
+$ sbnn --restart                  # a running server keeps the old binary until restarted
+```
+
+`sbnn update` downloads the archive for your OS and architecture from the
+latest release, checks its SHA-256 against the `checksums.txt` of the same
+release, and only then renames the new binary over the old one, so nothing is
+replaced when the two do not match. It never installs an older release unless
+`--version` names it, and it needs write access to the directory sbnn is in.
+[SECURITY.md](SECURITY.md#updates) has the details.
+
+It also tells you when there is something to update to. At most once a day, a
+release binary asks GitHub for the latest release alongside whatever command it
+is running, and prints one line on stderr when there is a newer one. It never
+delays or fails the command: offline, timed out or rate-limited, it says
+nothing. It is skipped when stderr is not a terminal, with `--json`, for the
+background server and for source builds; `SBNN_NO_UPDATE_CHECK=1` turns it off
+altogether. Setting `GITHUB_TOKEN` raises the API rate limit, and the token is
+sent to `api.github.com` only.
+
+A binary installed with `go install` is not overwritten: the notice and
+`sbnn update` both point at `go install github.com/tenntenn/sbnn@latest`
+instead.
 
 ## Usage
 
@@ -842,6 +874,7 @@ to `default`, and `--history-file` falls back to `$SBNN_HISTORY`.
 | `sbnn reviews` | Read the log of submitted reviews | `--since`, `--stats`, `--top`, `--limit`, `--comments`, `--all`, `--file`, `--history-file`, `--format` (`text`, `json`, `jsonl`) |
 | `sbnn export [file]` | Write the review as one self-contained HTML page | `--fragment`, `--page-title`, `--title` |
 | `sbnn skill` | Print or install the agent skill | `--list`, `--install`, `--force`, `--refresh` |
+| `sbnn update` | Replace this sbnn with the latest release | `--check`, `--version` |
 
 ## How the Markdown preview works
 
@@ -887,6 +920,7 @@ embedded frontend. Once mo is on PATH, pick it in the preview header.
 | Session state (diffs, comments, hooks) | `<state>/session-<port>.json` |
 | Server log | `<state>/server-<port>.log` |
 | Review log | `<state>/reviews.jsonl` (`--history-file`, `$SBNN_HISTORY`) |
+| Last check for a newer release | `<state>/update-check.json` (`$SBNN_NO_UPDATE_CHECK` turns it off) |
 | Rebuilt previews | `<cache>/preview/…` |
 | Exported pages | wherever you point `sbnn export` |
 

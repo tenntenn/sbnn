@@ -186,7 +186,21 @@ Starting and stopping:
   These act on the server of the repository sbnn runs in. Nothing else closes
   a review that was forgotten. sbnn prune keeps the ones still holding open
   comments or hooks unless told --force, and also removes what servers that
-  are no longer running left in the state and cache directories.`,
+  are no longer running left in the state and cache directories.
+
+Updating:
+  A sbnn downloaded from the releases page asks GitHub for the latest release
+  at most once a day, alongside whatever command it runs, and says so in one
+  line on stderr when there is a newer one. It never delays or fails the
+  command. Set SBNN_NO_UPDATE_CHECK=1 to turn the check off; it is also skipped
+  when stderr is not a terminal, with --json, and for source builds.
+
+  $ sbnn update --check             # is there a newer release?
+  $ sbnn update                     # download, verify and install it
+  $ sbnn --restart                  # then restart a running server
+
+  A sbnn installed with go install is updated the same way it was installed:
+  go install github.com/tenntenn/sbnn@latest.`,
 	Args:         cobra.NoArgs,
 	RunE:         run,
 	SilenceUsage: true,
@@ -197,7 +211,12 @@ Starting and stopping:
 
 // Execute runs the sbnn command.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	cleanupReplacedExecutable()
+	err := rootCmd.Execute()
+	// After the command, so the notice is never in the way of its output,
+	// and before the error, so that the error is the last thing printed.
+	printUpdateNotice(os.Stderr, updateCheck, version.GoInstalled)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "sbnn:", err)
 		os.Exit(1)
 	}
@@ -244,7 +263,11 @@ func init() {
 	f.StringVar(&historyPath, "history-file", "",
 		historyFileHelp("Where submitted reviews are written down"))
 
-	rootCmd.AddCommand(commentCmd, commentsCmd, exportCmd, hookCmd, pruneCmd, reviewsCmd, skillCmd, submitCmd, waitCmd)
+	// Every command starts the check for a newer release here, once its
+	// flags are parsed, since which of them skip it depends on the flags.
+	rootCmd.PersistentPreRun = startUpdateCheck
+
+	rootCmd.AddCommand(commentCmd, commentsCmd, exportCmd, hookCmd, pruneCmd, reviewsCmd, skillCmd, submitCmd, updateCmd, waitCmd)
 }
 
 func addr() string {

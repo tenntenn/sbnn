@@ -46,6 +46,10 @@ func runTests(m *testing.M) int {
 	}
 	os.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	os.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	// A test that runs a command through rootCmd would otherwise start the
+	// check for a newer release whenever its stderr is a terminal, and no
+	// test may reach GitHub.
+	os.Setenv(NoUpdateCheckEnv, "1")
 
 	if l, err := net.Listen("tcp", "localhost:0"); err == nil {
 		basePort = l.Addr().(*net.TCPAddr).Port

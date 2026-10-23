@@ -57,8 +57,9 @@ newer or the copy records no release. When it says it refreshed the skill,
 read the new `SKILL.md` again and follow that one. When it says the installed
 skill is **newer** than the binary, it left the skill alone on purpose, since
 overwriting it would swap newer text for older: carry on with the copy you
-have, and tell the user that `sbnn` should be upgraded
-(`go install github.com/tenntenn/sbnn@latest`). A source build (`dev`) records
+have, and tell the user that `sbnn` should be upgraded: `sbnn update` for a
+binary from the releases page, `go install github.com/tenntenn/sbnn@latest`
+for one installed with Go (`sbnn update` says which). A source build (`dev`) records
 no release and never overwrites a released skill. Skip this when the skill was
 not installed as files (it came from `sbnn skill >> AGENTS.md`, say), and when
 `sbnn skill --refresh` fails, carry on with the copy you have and say so.
