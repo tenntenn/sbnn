@@ -29,6 +29,24 @@ jobs:
           go-version-file: go.mod
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
+  # Every action is pinned to a commit SHA, so a release published upstream
+  # does not run here until someone has chosen to take it. pinact fails on a
+  # `uses:` that names a tag or a branch instead, or whose version comment
+  # does not match its SHA.
+  pinact:
+    name: pinact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
+        with:
+          aqua_version: v2.62.3
+      - run: pinact run --check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
   pnpm-audit:
     name: pnpm audit
     runs-on: ubuntu-latest

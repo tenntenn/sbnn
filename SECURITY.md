@@ -80,6 +80,29 @@ These are the tool working as designed. They are not vulnerabilities:
 - Vulnerabilities in dependencies, unless sbnn's own use of them is what
   makes them exploitable. Report those upstream.
 
+## How the repository is guarded
+
+What runs on every change, and what the repository settings turn on, so that
+a weakness in sbnn's own supply chain is caught by something other than a
+reader:
+
+- **Dependencies.** `govulncheck` and `pnpm audit` run on every pull request,
+  on `main` and weekly (`.github/workflows/security.yml`). Dependabot alerts
+  are on, and Dependabot opens a pull request for a dependency with a known
+  vulnerability; routine version updates are not its job.
+- **Code.** CodeQL's default setup scans the Go, the TypeScript and the
+  workflows. Its alerts are visible to maintainers only, like a private
+  report.
+- **Secrets.** Secret scanning is on, with push protection, so a push that
+  carries a recognised token is refused rather than published.
+- **Workflows.** Every action is pinned to a commit SHA and every tool run
+  with `go run` to a version, and the `pinact` job fails on one that is not.
+  Workflows hold `contents: read` unless a job needs more, and checkouts do
+  not keep the token.
+
+These are repository settings as much as files: if one of them is turned off,
+this section is the record of what it was for.
+
 ## Supported versions
 
 sbnn has no releases yet: `version.Version` is `dev`
