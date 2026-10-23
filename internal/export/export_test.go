@@ -172,6 +172,37 @@ func TestBuildPrefersWorktree(t *testing.T) {
 	}
 }
 
+// An exported page is handed to someone else, so nothing on it may name the
+// exporter's disk: not the directory the diff was sent from, and not where a
+// previewed file sits, even when it was read from there.
+func TestBuildLeavesOutTheExportersPaths(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docs", "new.md"), []byte("# From disk\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := export.Build(group(t, dir), "test", time.Now())
+	for _, d := range p.Diffs {
+		if d.BaseDir != "" {
+			t.Errorf("diff %s baseDir = %q, want it left out", d.ID, d.BaseDir)
+		}
+	}
+	for key, prev := range p.Previews {
+		if filepath.IsAbs(prev.Path) || strings.Contains(prev.Path, dir) {
+			t.Errorf("preview %s path = %q, want the path in the diff", key, prev.Path)
+		}
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), dir) {
+		t.Errorf("the payload names %s", dir)
+	}
+}
+
 func indexHTML(refs ...string) []byte {
 	var b strings.Builder
 	b.WriteString("<!doctype html>\n<html lang=\"en\">\n<head>\n")
