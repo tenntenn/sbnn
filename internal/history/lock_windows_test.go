@@ -9,6 +9,20 @@ import (
 	"unsafe"
 )
 
+// The calls the probe below makes, declared here because the lock itself
+// lives in internal/filelock now and the probe must not go through it.
+var (
+	kernel32         = syscall.NewLazyDLL("kernel32.dll")
+	procLockFileEx   = kernel32.NewProc("LockFileEx")
+	procUnlockFileEx = kernel32.NewProc("UnlockFileEx")
+)
+
+const (
+	lockfileExclusiveLock = 0x0002
+	allBytesLow           = uintptr(0xffffffff)
+	allBytesHigh          = uintptr(0xffffffff)
+)
+
 // LOCKFILE_FAIL_IMMEDIATELY, so that the probe is turned away rather than
 // left waiting for the lock the first handle is holding.
 const lockfileFailImmediately = 0x0001
