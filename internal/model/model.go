@@ -567,6 +567,42 @@ type HookRun struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// LastActivity returns when anything last happened to the group: a diff
+// arriving, a comment being written or edited, a review being submitted, a
+// hook being registered or running. It is the zero time for a group that
+// holds none of those.
+//
+// Every one of these times is already part of the session file, so the age
+// of a review survives a restart without a field of its own. What it leaves
+// out is deliberate: deleting a diff or a comment is clearing up, not work on
+// the review, and reading a page leaves no trace on the server at all.
+func (g *Group) LastActivity() time.Time {
+	var last time.Time
+	see := func(t time.Time) {
+		if t.After(last) {
+			last = t
+		}
+	}
+	see(g.ReviewedAt)
+	for _, d := range g.Diffs {
+		see(d.CreatedAt)
+	}
+	for _, c := range g.Comments {
+		see(c.CreatedAt)
+		see(c.UpdatedAt)
+	}
+	for _, h := range g.Hooks {
+		see(h.CreatedAt)
+		if h.LastCommandRun != nil {
+			see(h.LastCommandRun.At)
+		}
+		if h.LastPost != nil {
+			see(h.LastPost.At)
+		}
+	}
+	return last
+}
+
 // Reviewed reports whether the group was reviewed after its newest diff
 // arrived. A diff sent after the last submission starts a new round.
 func (g *Group) Reviewed() bool {

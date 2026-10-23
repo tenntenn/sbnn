@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/tenntenn/sbnn/internal/model"
 )
@@ -394,5 +395,64 @@ func TestBlockingIsOnlyHalfOfBlocks(t *testing.T) {
 	}
 	if !model.Blocks(model.VerdictCommented, open) {
 		t.Error("a review that commented and left a comment open must block")
+	}
+}
+
+func TestLastActivity(t *testing.T) {
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	at := func(days int) time.Time { return base.AddDate(0, 0, days) }
+
+	for _, tt := range []struct {
+		name  string
+		group model.Group
+		want  time.Time
+	}{
+		{"an empty group has no activity", model.Group{}, time.Time{}},
+		{
+			"the newest diff",
+			model.Group{Diffs: []*model.Diff{{CreatedAt: at(1)}, {CreatedAt: at(3)}, {CreatedAt: at(2)}}},
+			at(3),
+		},
+		{
+			"a comment written after the diff",
+			model.Group{
+				Diffs:    []*model.Diff{{CreatedAt: at(1)}},
+				Comments: []*model.Comment{{CreatedAt: at(2), UpdatedAt: at(2)}},
+			},
+			at(2),
+		},
+		{
+			"resolving an old comment is activity",
+			model.Group{
+				Diffs:    []*model.Diff{{CreatedAt: at(1)}},
+				Comments: []*model.Comment{{CreatedAt: at(1), UpdatedAt: at(5)}},
+			},
+			at(5),
+		},
+		{
+			"a submitted review",
+			model.Group{Diffs: []*model.Diff{{CreatedAt: at(1)}}, ReviewedAt: at(4)},
+			at(4),
+		},
+		{
+			"a hook registered on its own",
+			model.Group{Hooks: []*model.Hook{{CreatedAt: at(6)}}},
+			at(6),
+		},
+		{
+			"a hook that ran",
+			model.Group{Hooks: []*model.Hook{{
+				CreatedAt:      at(1),
+				LastCommandRun: &model.HookRun{At: at(7)},
+				LastPost:       &model.HookRun{At: at(8)},
+			}}},
+			at(8),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.group.LastActivity(); !got.Equal(tt.want) {
+				t.Errorf("LastActivity() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

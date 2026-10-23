@@ -385,6 +385,10 @@ type GroupSummary struct {
 	// Reviewed is false once a diff arrives after the last submission.
 	Reviewed bool `json:"reviewed"`
 	Hooks    int  `json:"hooks"`
+	// LastActivity is when anything last happened to the review, which is
+	// what sbnn prune measures its age by. It lets a reader of --status see
+	// which reviews a prune would take before running one.
+	LastActivity time.Time `json:"lastActivity,omitzero"`
 }
 
 // Summary returns a summary of every group.
@@ -394,12 +398,13 @@ func (s *Store) Summary(baseURL string) []GroupSummary {
 	out := make([]GroupSummary, 0, len(s.groups))
 	for _, g := range s.groups {
 		sum := GroupSummary{
-			Name:       g.Name,
-			URL:        GroupURL(baseURL, g.Name),
-			Diffs:      len(g.Diffs),
-			ReviewedAt: g.ReviewedAt,
-			Reviewed:   g.Reviewed(),
-			Hooks:      len(g.Hooks),
+			Name:         g.Name,
+			URL:          GroupURL(baseURL, g.Name),
+			Diffs:        len(g.Diffs),
+			ReviewedAt:   g.ReviewedAt,
+			Reviewed:     g.Reviewed(),
+			Hooks:        len(g.Hooks),
+			LastActivity: g.LastActivity(),
 		}
 		for _, d := range g.Diffs {
 			sum.Files += len(d.Files)
@@ -653,15 +658,24 @@ func (s *Store) DeleteHooks(group, id string) int {
 
 // DeleteAllGroups closes every review and returns how many went.
 func (s *Store) DeleteAllGroups() int {
+	return len(s.deleteAllGroups())
+}
+
+// deleteAllGroups closes every review and returns the names of those that
+// went, which is what the server needs to clear up after them.
+func (s *Store) deleteAllGroups() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n := len(s.groups)
+	names := make([]string, 0, len(s.groups))
+	for _, g := range s.groups {
+		names = append(names, g.Name)
+	}
 	s.groups = nil
 	s.rounds = nil
-	if n > 0 {
+	if len(names) > 0 {
 		s.persist(&logRecord{Op: opDelAll})
 	}
-	return n
+	return names
 }
 
 // FindFileByPath locates a file inside a group by its path. diffID narrows

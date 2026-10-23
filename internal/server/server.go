@@ -279,6 +279,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /_/api/groups/{group}/hooks", s.handleAddHook)
 	mux.HandleFunc("DELETE /_/api/groups/{group}/hooks", s.handleDeleteHooks)
 	mux.HandleFunc("DELETE /_/api/groups/{group}/hooks/{id}", s.handleDeleteHooks)
+	mux.HandleFunc("POST /_/api/prune", s.handlePrune)
 	mux.HandleFunc("POST /_/api/shutdown", s.handleShutdown)
 	mux.HandleFunc("GET /_/events", s.handleEvents)
 	mux.Handle("GET /", s.spaHandler())
@@ -624,9 +625,13 @@ func withoutRawDiffs(g *model.Group) *model.Group {
 
 // handleDeleteAllGroups closes every review at once.
 func (s *Server) handleDeleteAllGroups(w http.ResponseWriter, r *http.Request) {
-	removed := s.store.DeleteAllGroups()
+	removed := s.store.deleteAllGroups()
+	for _, name := range removed {
+		s.broker.forgetReviews(name)
+		s.prev.forget(name)
+	}
 	s.notify("")
-	writeJSON(w, http.StatusOK, map[string]int{"removed": removed})
+	writeJSON(w, http.StatusOK, map[string]int{"removed": len(removed)})
 }
 
 func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
@@ -638,10 +643,7 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such group", http.StatusNotFound)
 		return
 	}
-	// The stored review notice outlives the group otherwise, and would be
-	// replayed to a reconnecting browser for a group that no longer exists.
-	s.broker.forgetReviews(name)
-	s.notify(name)
+	s.forgetGroup(name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -717,10 +719,14 @@ func (s *Server) handleDeleteDiff(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.store.DeleteDiff(name, r.PathValue("diff")) {
+	id := r.PathValue("diff")
+	if !s.store.DeleteDiff(name, id) {
 		http.Error(w, "no such diff", http.StatusNotFound)
 		return
 	}
+	// --replace drops the previous round this way, so a review that runs
+	// for many rounds would otherwise leave the previews of every one behind.
+	s.prev.forget(name, id)
 	s.notify(name)
 	w.WriteHeader(http.StatusNoContent)
 }
