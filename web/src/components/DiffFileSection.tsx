@@ -7,6 +7,7 @@ import { ensureHighlightStyles, languageOf, type LanguageId } from '../highlight
 import { Code } from './Code'
 import { CommentForm, CommentThread } from './CommentThread'
 import { Icon } from './Icon'
+import { CommentIcon } from './CommentIcon'
 import { foldLabel } from '../foldLabel'
 import { t, useT, type MessageKey } from '../i18n'
 
@@ -344,39 +345,32 @@ export function DiffFileSection({
             }}
             aria-expanded={draftingFile}
             title={t('diff.commentOnFileTitle')}
+            aria-label={t('diff.commentOnFile')}
           >
-            {t('diff.commentOnFile')}
+            <CommentIcon small />
+            <span className="tool-label">{t('diff.commentOnFile')}</span>
           </button>
-          {locked ? (
-            <span
-              className="hint"
-              title={
-                narrow
-                  ? t('diff.unifiedNarrow')
-                  : t('diff.unifiedOneSide')
-              }
-            >
-              {t('diff.unified')}
-            </span>
-          ) : (
+          {!locked && (
             <div className="toggle" role="group" aria-label={t('diff.viewModeLabel')}>
               <button
                 className={mode === 'split' ? 'active' : ''}
                 aria-pressed={mode === 'split'}
                 onClick={() => onSetViewMode('split')}
+                aria-label={t('diff.split')}
                 title={t('diff.splitTitle')}
               >
                 <Icon name="view_column" small />
-                {t('diff.split')}
+                <span className="tool-label">{t('diff.split')}</span>
               </button>
               <button
                 className={mode === 'unified' ? 'active' : ''}
                 aria-pressed={mode === 'unified'}
                 onClick={() => onSetViewMode('unified')}
+                aria-label={t('diff.unified')}
                 title={t('diff.unifiedTitle')}
               >
                 <Icon name="table_rows" small />
-                {t('diff.unified')}
+                <span className="tool-label">{t('diff.unified')}</span>
               </button>
             </div>
           )}

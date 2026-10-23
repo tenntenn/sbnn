@@ -776,7 +776,7 @@ export function App() {
       <header className="topbar">
         <span className="brand">sbnn</span>
         <span className="group">{group}</span>
-        <span className="hint counts">
+        <span className="hint counts" title={t('app.countsTitle')}>
           {t('app.counts', { rounds: diffs.length, comments: comments.length })}
           {openComments > 0 ? t('app.countsOpen', { count: openComments }) : ''}
         </span>
@@ -825,7 +825,9 @@ export function App() {
           title={t('app.help')}
           onClick={() => setHelp((open) => !open)}
         >
-          ?
+          <span className="glyph" aria-hidden>
+            ?
+          </span>
         </button>
         <div className="settings-menu" ref={settingsRef}>
           <button

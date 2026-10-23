@@ -1,5 +1,7 @@
 # sbnn
 
+English | [日本語](README.ja.md)
+
 diff viewer and reviewer. The name reads "sabun" — 差分, Japanese for "diff"
 — with the vowels dropped.
 
@@ -7,7 +9,7 @@ diff viewer and reviewer. The name reads "sabun" — 差分, Japanese for "diff"
 on the left, a Markdown preview on the right, and review comments you can read
 back from the command line.
 
-![The sbnn review page: the file list, a split diff carrying an open review comment and its suggested change, and the preview pane beside it](docs/screenshot.png)
+![The sbnn review page: the file list, a split diff carrying review comments and a suggested change, and the preview beside it, where a selected passage can be commented on too](docs/screenshot.png)
 
 <sub>That picture is taken from a binary serving the committed `web/dist`, so
 it shows what a downloaded sbnn does rather than what the source is up to.

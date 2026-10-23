@@ -47,6 +47,15 @@ export const TOUR_STEPS: readonly TourStep[] = [
     body: 'tour.comment.body',
   },
   {
+    id: 'previewComment',
+    // A Markdown preview whose blocks know their lines, so a selection in it
+    // can become a comment. A review with no Markdown file has none, and the
+    // step is left out.
+    targets: ['[data-line-anchored="true"]'],
+    title: 'tour.previewComment.title',
+    body: 'tour.previewComment.body',
+  },
+  {
     id: 'review',
     targets: ['[data-tour="review"]'],
     title: 'tour.review.title',
