@@ -162,6 +162,16 @@ func (c *Client) DeleteAllGroups(ctx context.Context) (int, error) {
 	return res.Removed, nil
 }
 
+// Prune closes the reviews left alone since req.Before, or with req.DryRun
+// says which it would close.
+func (c *Client) Prune(ctx context.Context, req server.PruneRequest) (*server.PruneResponse, error) {
+	var res server.PruneResponse
+	if err := c.do(ctx, http.MethodPost, c.url("/_/api/prune"), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
 // Reviews returns the reviews the server has recorded.
 func (c *Client) Reviews(ctx context.Context, filter history.Filter) ([]history.Record, error) {
 	q := url.Values{}

@@ -90,6 +90,23 @@ Two exceptions, both of which mean "do not clear":
 - The group holds **comments the human wrote that you have not addressed**.
   Say what is in there and ask before throwing it away.
 
+When `sbnn --status` lists many reviews nobody has touched in days — other
+agents' leftovers as much as yours; `lastActivity` in the JSON says how old
+each one is — prune them instead of closing them one by one. Look first, then
+prune:
+
+```
+sbnn prune --dry-run                  # what would be closed, what is kept and why
+sbnn prune                            # close reviews left alone for 7 days
+```
+
+`sbnn prune` keeps an old review that still holds open comments or a hook
+and says so. Leave it that way: do not reach for `--force` to close reviews
+holding comments the human wrote and nobody addressed without asking them
+first. Prune also removes the session files and logs of servers that are no
+longer running, and previews nothing holds any more; it never touches a
+running server's files or the log of submitted reviews.
+
 ### 2. Send the diff
 
 Pipe the diff into `sbnn` and use `--target` to name the review, so several

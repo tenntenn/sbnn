@@ -310,7 +310,9 @@ $ curl localhost:6280/_/api/groups/api
 ### `DELETE /_/api/groups/{group}`
 
 Close one review: its diffs, comments and hooks. `204` with no body, or `404 no
-such group`.
+such group`. The previews sbnn reconstructed for it are removed from the cache
+directory; so are those of one round on `DELETE .../diffs/{diff}`, and of every
+review on `DELETE /_/api/groups`.
 
 ### `POST /_/api/groups/{group}/diffs`
 
@@ -700,6 +702,51 @@ $ curl -X DELETE localhost:6280/_/api/groups/api/hooks
 }
 ```
 
+### `POST /_/api/prune`
+
+Close the reviews nothing has happened to since `before`, which is what
+`sbnn prune` runs. The body is a [`PruneRequest`](#prunerequest), the answer a
+[`PruneResponse`](#pruneresponse): `closed` is what went — or, with `dryRun`,
+what would have gone — and `kept` is every other review with the reason it
+stayed. A review is judged and closed under one lock, so a comment arriving
+during a prune either keeps its review or finds it already closed.
+
+An old review that holds an unresolved comment (`open-comments`) or a hook
+(`hooks`) is kept unless `force` is set; a review with activity since `before`
+(`recent`) is kept whatever `force` says. `groups`, when given, limits the
+prune to those names, and any other review that would have gone is kept as
+`not-listed`. Each closed review is written to the session file and announced
+on the event stream exactly as `DELETE /_/api/groups/{group}` does, and its
+reconstructed previews are removed from the cache directory. `400` when
+`before` is missing.
+
+```console
+$ curl -X POST localhost:6280/_/api/prune -d '{"before":"2026-10-16T00:00:00Z","dryRun":true}'
+{
+  "closed": [
+    {
+      "name": "old-topic",
+      "lastActivity": "2026-09-01T10:00:00+09:00",
+      "diffs": 1,
+      "comments": 0,
+      "unresolved": 0,
+      "hooks": 0
+    }
+  ],
+  "kept": [
+    {
+      "name": "api",
+      "lastActivity": "2026-09-03T10:00:00+09:00",
+      "diffs": 2,
+      "comments": 3,
+      "unresolved": 1,
+      "hooks": 0,
+      "reason": "open-comments"
+    }
+  ]
+}
+```
+
 ### `POST /_/api/shutdown`
 
 Stop the server. It answers first and exits after.
@@ -829,6 +876,7 @@ directions.
 | `reviewedAt` | time | omitted when never reviewed |
 | `reviewed` | bool | false again once a diff arrives after the last review |
 | `hooks` | number | |
+| `lastActivity` | time | the newest diff, comment edit, review or hook run: what `sbnn prune` measures age by. Omitted for a group holding none of them |
 
 #### `Group`
 
@@ -1039,6 +1087,40 @@ omitted one is left alone.
 | --- | --- | --- |
 | `note` | string | |
 | `verdict` | string | empty means commented. Omitted when empty |
+
+#### `PruneRequest`
+
+`POST /_/api/prune`. `internal/server`.
+
+| field | type | notes |
+| --- | --- | --- |
+| `before` | time | required: a review with no activity since this is old |
+| `force` | bool | close old reviews holding open comments or hooks too. Omitted when false |
+| `dryRun` | bool | answer what would be closed and change nothing. Omitted when false |
+| `groups` | array | of strings: close only these. Omitted when empty |
+
+#### `PruneResponse`
+
+`POST /_/api/prune`. `internal/server`.
+
+| field | type | notes |
+| --- | --- | --- |
+| `closed` | array | [`PrunedGroup`](#prunedgroup): what was closed, or would be |
+| `kept` | array | [`PrunedGroup`](#prunedgroup): every other review, with its `reason` |
+
+#### `PrunedGroup`
+
+`closed` and `kept` in `PruneResponse`. `internal/server`.
+
+| field | type | notes |
+| --- | --- | --- |
+| `name` | string | |
+| `lastActivity` | time | as in [`GroupSummary`](#groupsummary). Omitted when there is none |
+| `diffs` | number | |
+| `comments` | number | |
+| `unresolved` | number | |
+| `hooks` | number | |
+| `reason` | string | why it was kept: `recent`, `open-comments`, `hooks` or `not-listed`. Omitted for a closed review |
 
 #### `PreviewResponse`
 

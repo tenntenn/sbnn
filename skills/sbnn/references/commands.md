@@ -16,6 +16,8 @@ list.
 | `... \| sbnn --replace` | After adding the diff, drop the group's earlier diffs and their comments (next round) |
 | `sbnn --status [--json]` | Show the running server, its groups and comment counts |
 | `sbnn --clear [-t <name>]` | Close a review: its diffs, comments and hooks |
+| `sbnn prune --dry-run` | List the reviews left alone for 7 days, and which of them would be kept and why |
+| `sbnn prune` | Close them, keeping those with open comments or hooks, and remove stopped servers' files |
 | `sbnn wait [-t <name>]` | Block until the review is submitted, then print it |
 | `sbnn wait --timeout <duration>` | Give up after that long; status 2 means "not reviewed yet" |
 | `sbnn wait -q` | Print nothing and answer in the exit status, for `&& git commit` |
